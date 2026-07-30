@@ -13,16 +13,32 @@ import { ingest, resolveDataDir } from './ingest.mjs';
 const N = (s) => Number(s);
 const [ZERO, ONE, TWO] = ['0', '1', '2'].map(N);
 const LAKE_ROOT = fileURLToPath(new URL('..', import.meta.url));
+const PACKAGE = JSON.parse(readFileSync(join(LAKE_ROOT, 'package.json'), 'utf8'));
+const VERSION = String(PACKAGE.version);
 const SUMMARY_FILE = 'last-ingest.json';
 const USAGE = [
-  'usage: node src/cli.mjs <command> [flags]',
+  'Transcript Lake creates a privacy-masked local event archive from coding-agent transcripts.',
   '',
-  '  ingest [--source <runtime>] [--full]  incremental scan into the lake',
+  'Usage: transcript-lake <command> [flags]',
+  '',
+  'Start safely:',
+  '  transcript-lake status                inspect configuration without ingesting',
+  '  transcript-lake ingest                incrementally ingest supported local stores',
+  '',
+  'Commands:',
+  '  ingest [--source <runtime>] [--full]  incremental scan into the Lake',
   '  status                                partition, cursor, masking report',
-  '  query "<sql>"                         run SQL over the lake views via duckdb',
-  '  compact                               write parquet copies per runtime',
+  '  query "<sql>"                         run SQL over Lake views via DuckDB',
+  '  compact                               write Parquet copies per runtime',
   '  export-oko [--full] [--reindex]       materialize every runtime for Oko',
   '  oko-refresh                           ask oko-cli to reindex transcripts',
+  '',
+  'Global flags:',
+  '  -h, --help                            show this guidance',
+  '  -V, --version                         print the canonical product version',
+  '',
+  'State: LAKE_DATA selects the mutable root; default ~/.transcript-lake.',
+  'Help:  https://github.com/wisent-ai/transcript-lake#readme',
 ].join('\n');
 
 const quoteSql = (value) => "'" + String(value).replaceAll("'", "''") + "'";
@@ -194,9 +210,17 @@ const COMMANDS = {
 
 async function main() {
   const [command, ...rest] = process.argv.slice(TWO);
+  if (!command || command === 'help' || command === '--help' || command === '-h') {
+    process.stdout.write(USAGE + '\n');
+    return;
+  }
+  if (command === '--version' || command === '-V') {
+    process.stdout.write(VERSION + '\n');
+    return;
+  }
   const handler = COMMANDS[command];
   if (!handler) {
-    process.stderr.write(USAGE + '\n');
+    process.stderr.write('error: unknown command: ' + command + '\n\n' + USAGE + '\n');
     process.exitCode = ONE;
     return;
   }
