@@ -1,0 +1,24 @@
+{
+  "version": "\u0030.\u0031.\u0030",
+  "source": "head:a\u0031a\u0030d\u0032\u0034c\u0032\u0031\u0031\u0035\u0037\u0037f\u0038adb\u0038\u0034b\u0030\u0038cb\u0039\u0033\u0039\u0030\u0032\u0031fd\u0030\u0034\u0036\u0034fd -- NOT PUBLISHED: no tag or immutable release artifact exists; this baseline records the public contract at the named development revision",
+  "surface": [
+    "command:compact",
+    "command:export-oko",
+    "command:ingest",
+    "command:oko-refresh",
+    "command:query",
+    "command:status",
+    "executable:transcript-lake",
+    "flag:--full",
+    "flag:--help",
+    "flag:--reindex",
+    "flag:--source",
+    "flag:--version",
+    "runtime:claude",
+    "runtime:codex",
+    "runtime:droid",
+    "runtime:hooks",
+    "runtime:kimi",
+    "runtime:omp"
+  ]
+}

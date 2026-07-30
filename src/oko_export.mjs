@@ -387,6 +387,12 @@ async function fullExport(partitions, outputRoot, stagingRoot, tally) {
   rmSync(stagingRoot, { recursive: true, force: true });
   mkdirSync(stagingRoot, { recursive: true });
   const sessions = await stageEvents(partitions, stagingRoot, tally);
+  if (tally.malformed > ZERO) {
+    rmSync(stagingRoot, { recursive: true, force: true });
+    throw new Error(
+      'full Oko export refused malformed Lake rows; authoritative partitions were not modified'
+    );
+  }
   const expectedFiles = new Set();
   let written = ZERO;
   let unchanged = ZERO;
@@ -421,6 +427,11 @@ export async function exportOko(opts) {
     if (sessions === null) {
       result = await fullExport(partitions, outputRoot, stagingRoot, tally);
     } else {
+      if (tally.malformed > ZERO) {
+        throw new Error(
+          'incremental Oko export refused malformed Lake rows; export cursor was not advanced'
+        );
+      }
       let records = ZERO;
       let written = ZERO;
       let unchanged = ZERO;
@@ -460,7 +471,6 @@ function runReindex() {
   const run = spawnSync(command, args, { encoding: 'utf8' });
   if (run.error) {
     const printable = command + ' ' + args.join(' ');
-    console.log('oko-cli is not runnable from PATH; ask the index owner to run: ' + printable);
     return { ran: false, command: printable, error: String(run.error.message) };
   }
   let output = '';

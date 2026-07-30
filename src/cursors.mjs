@@ -18,32 +18,43 @@ function coerce(rec) {
   const mtimeMs = Number(rec.mtimeMs);
   const size = Number(rec.size);
   const offset = Number(rec.offset);
+  if (
+    !Number.isFinite(mtimeMs)
+    || !Number.isFinite(size)
+    || !Number.isFinite(offset)
+    || size < ZERO
+    || offset < ZERO
+  ) {
+    throw new Error('cursor record contains invalid numeric state');
+  }
   return {
-    mtimeMs: Number.isFinite(mtimeMs) ? mtimeMs : ZERO,
-    size: Number.isFinite(size) ? size : ZERO,
-    offset: Number.isFinite(offset) ? offset : ZERO,
+    mtimeMs,
+    size,
+    offset,
   };
 }
 
-// Contractual degradation: any unreadable or corrupt store restarts empty,
-// with the cause reported on stderr so the operator can see it happened.
+// Cursor loss can replay already-persisted evidence, so unreadable state is a
+// hard failure. Recovery uses a separate empty LAKE_DATA root, never a silent
+// fallback that appends a second copy to existing partitions.
 function readStore(filePath) {
   if (!existsSync(filePath)) return {};
   let raw;
   try {
     raw = readFileSync(filePath, 'utf8');
   } catch (error) {
-    process.stderr.write('cursors: unreadable store, restarting empty: ' + String(error) + '\n');
-    return {};
+    throw new Error('cursor store is unreadable; preserve it and recover into an empty LAKE_DATA: ' + String(error));
   }
+  let parsed;
   try {
-    const parsed = JSON.parse(raw);
-    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return parsed;
-    process.stderr.write('cursors: store is not a JSON object, restarting empty\n');
+    parsed = JSON.parse(raw);
   } catch (error) {
-    process.stderr.write('cursors: corrupt store, restarting empty: ' + String(error) + '\n');
+    throw new Error('cursor store is corrupt; preserve it and recover into an empty LAKE_DATA: ' + String(error));
   }
-  return {};
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new Error('cursor store must be a JSON object; preserve it and recover into an empty LAKE_DATA');
+  }
+  return parsed;
 }
 function syncDirectory(path) {
   const fd = openSync(path, 'r');
@@ -98,10 +109,15 @@ function acquireLock(dataDir, lockPath) {
 
     let incumbent = null;
     try { incumbent = JSON.parse(readFileSync(join(lockPath, 'owner.json'), 'utf8')); } catch {}
-    if (!ownerIsAlive(incumbent)) {
-      try { rmSync(lockPath, { recursive: true }); } catch (error) {
-        if (!error || error.code !== 'ENOENT') throw error;
-      }
+    if (ownerIsAlive(incumbent)) {
+      throw new Error(
+        'state writer lock is held by '
+        + String(incumbent.host || 'unknown-host')
+        + ' pid ' + String(incumbent.pid || 'unknown')
+      );
+    }
+    try { rmSync(lockPath, { recursive: true }); } catch (error) {
+      if (!error || error.code !== 'ENOENT') throw error;
     }
   }
 }
@@ -112,6 +128,20 @@ function releaseLock(dataDir, lockPath, token) {
   if (!owner || owner.token !== token) return;
   rmSync(lockPath, { recursive: true });
   syncDirectory(dataDir);
+}
+
+export function openWriterLease(dataDir) {
+  mkdirSync(dataDir, { recursive: true });
+  const lockPath = join(dataDir, 'ingest.lock');
+  const token = acquireLock(dataDir, lockPath);
+  let closed = false;
+  return {
+    close() {
+      if (closed) return;
+      releaseLock(dataDir, lockPath, token);
+      closed = true;
+    },
+  };
 }
 
 export function openCursors(dataDir) {

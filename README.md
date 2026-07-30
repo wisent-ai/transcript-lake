@@ -71,7 +71,7 @@ Raw vendor text exists only on the source side of the masking boundary. Adapters
 
 `LAKE_DATA/cursors.json` is the ingestion checkpoint and the source of incremental progress. Daily NDJSON partitions are authoritative Lake evidence. Parquet files and the Oko export are rebuildable derived views. Cursor and export metadata use atomic replacement; transcript partitions are append-only.
 
-See [the data and architecture contract](docs/LAKE.md) for schemas, masking behavior, paths, and recovery semantics.
+See [the core workflow contract](docs/CORE.md) and [the data and architecture contract](docs/LAKE.md) for state transitions, schemas, masking behavior, paths, and recovery semantics.
 
 ## Quick start
 
@@ -130,7 +130,7 @@ Canonical event and adapter interfaces are machine contracts documented in [the 
 - **Credentials:** core ingestion needs none. Transcript contents may contain credentials, so masking occurs before durable Lake writes. Do not share a Lake directory as though it were anonymized data.
 - **Upgrades:** use an immutable release once available. State layout compatibility, rollback, and release channels are defined in [release policy](docs/RELEASES.md).
 - **Observability:** `ingest` emits structured counts; `status` reports partitions, cursor freshness, masking totals, and Oko freshness.
-- **Recovery:** rerun incremental ingest after interruption. Use `--full` after deliberate source replacement or when rebuilding derived state. Back up `LAKE_DATA` before destructive operator cleanup.
+- **Recovery:** rerun incremental ingest after interruption. A source truncation, same-size rewrite, or damaged cursor is rejected before replay; preserve the current Lake and run `--full` against a separate empty `LAKE_DATA` root. Back up state before replacing or deleting anything.
 - **Retention:** no automatic deletion is performed. The operator owns retention and deletion of Lake data.
 - **Integrations:** capability, dependency, failure, and removal contracts are in [integration contracts](docs/INTEGRATIONS.md).
 

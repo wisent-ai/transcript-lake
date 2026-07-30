@@ -5,11 +5,11 @@
 // runtime/date partitions, checkpoints cursors after every flushed batch.
 // No digit characters outside quoted strings and comments.
 import { createHash } from 'node:crypto';
-import { appendFileSync, createReadStream, existsSync, mkdirSync, statSync } from 'node:fs';
+import { appendFileSync, createReadStream, existsSync, mkdirSync, readdirSync, statSync } from 'node:fs';
 import { ingestClosedHookSegments, mapCanonicalHookRecord } from './hook_segments/index.mjs';
 import { homedir, hostname } from 'node:os';
 import { basename, join, resolve } from 'node:path';
-import { openCursors } from './cursors.mjs';
+import { openCursors, openWriterLease } from './cursors.mjs';
 import { createMasker } from './redact.mjs';
 
 const N = (s) => Number(s);
@@ -33,11 +33,16 @@ const clip = (text) => (text.length > TEXT_CAP ? text.slice(ZERO, TEXT_CAP) : te
 // them exactly as the adapter emitted them.
 function maskDeep(value, masker, depth) {
   if (typeof value === 'string') return clip(masker.mask(value));
-  if (Array.isArray(value)) return value.map((item) => maskDeep(item, masker, depth));
+  if (Array.isArray(value)) {
+    if (depth <= ZERO) return null;
+    return value.map((item) => maskDeep(item, masker, depth - ONE));
+  }
   if (value && typeof value === 'object') {
     if (depth <= ZERO) return null;
     const out = {};
-    for (const [key, item] of Object.entries(value)) out[key] = maskDeep(item, masker, depth - ONE);
+    for (const [key, item] of Object.entries(value)) {
+      out[key] = maskDeep(item, masker, depth - ONE);
+    }
     return out;
   }
   return value;
@@ -86,9 +91,23 @@ function writeBatch(events, runtime, partName, dataDir, machine, masker, tally, 
 async function ingestFile(job) {
   const { adapter, entry, st, cursors, masker, dataDir, machine, tally, full } = job;
   const cur = full ? null : cursors.get(entry.file);
+  if (cur && st.size < cur.size) {
+    throw new Error(
+      'source shrank after its last checkpoint; select an empty LAKE_DATA and run --full'
+    );
+  }
+  if (
+    cur
+    && st.size === cur.size
+    && cur.mtimeMs !== st.mtimeMs
+    && cur.offset >= st.size
+  ) {
+    throw new Error(
+      'source changed without an append; select an empty LAKE_DATA and run --full'
+    );
+  }
   let offset = ZERO;
-  // A truncated file (size shrank below the cursor) restarts from the top.
-  if (cur) offset = st.size < cur.size ? ZERO : Math.min(cur.offset, st.size);
+  if (cur) offset = Math.min(cur.offset, st.size);
   const parser = adapter.createParser({ file: entry.file, sessionId: entry.sessionId, project: entry.project, machine });
   const digest = createHash('sha' + '256').update(entry.file).digest('hex');
   const partName = 'part-' + digest.slice(ZERO, TWELVE) + '.ndjson';
@@ -215,7 +234,7 @@ function sumCounts(counts) {
   return total;
 }
 
-export async function ingest(opts = {}) {
+async function ingestLocked(opts = {}) {
   const started = Date.now();
   const dataDir = resolveDataDir(opts);
   const machine = hostname();
@@ -229,28 +248,36 @@ export async function ingest(opts = {}) {
   const masker = createMasker();
   const perRuntime = {};
   for (const name of selected) {
-    const tally = { files: ZERO, events: ZERO, maskedHits: ZERO, skipped: ZERO };
+    const tally = { files: ZERO, events: ZERO, maskedHits: ZERO, skipped: ZERO, failures: ZERO };
     perRuntime[name] = tally;
     const before = sumCounts(masker.counts());
     let adapter = null;
     if (name === HOOKS) {
-      adapter = hooksAdapter();
-      const segments = ingestClosedHookSegments({
-        readyDir: process.env.HOOKS_ADAPTIVE_SEGMENTS_READY
-          || join(homedir(), '.hooks-adaptive', 'telemetry-segments', 'ready'),
-        dataDir,
-        cursors,
-        warn,
-        mapRecord: (record, context) => mapCanonicalHookRecord(record, canonicalize, machine, masker, context),
-      });
-      tally.files += segments.files;
-      tally.events += segments.events;
-      tally.skipped += segments.skipped;
+      const readyDir = process.env.HOOKS_ADAPTIVE_SEGMENTS_READY
+        || join(homedir(), '.hooks-adaptive', 'telemetry-segments', 'ready');
+      if (existsSync(readyDir)) {
+        const segments = ingestClosedHookSegments({
+          readyDir,
+          dataDir,
+          cursors,
+          warn,
+          mapRecord: (record, context) => mapCanonicalHookRecord(
+            record, canonicalize, machine, masker, context
+          ),
+        });
+        tally.files += segments.files;
+        tally.events += segments.events;
+        tally.skipped += segments.skipped;
+        tally.failures += segments.invalid;
+      } else {
+        adapter = hooksAdapter();
+      }
     } else {
       try {
         adapter = await import('./adapters/' + name + '.mjs');
       } catch (error) {
         warn('adapter "' + name + '" unavailable, runtime skipped: ' + errText(error));
+        tally.failures += ONE;
       }
     }
     if (!adapter) continue;
@@ -260,6 +287,7 @@ export async function ingest(opts = {}) {
         entries = adapter.listSessions(root);
       } catch (error) {
         warn('listSessions failed under ' + root + ': ' + String(error));
+        tally.failures += ONE;
       }
       for (const entry of entries) {
         let st = null;
@@ -267,6 +295,7 @@ export async function ingest(opts = {}) {
           st = statSync(entry.file);
         } catch (error) {
           warn('stat failed for ' + entry.file + ': ' + String(error));
+          tally.failures += ONE;
         }
         if (!st) continue;
         const cur = opts.full ? null : cursors.get(entry.file);
@@ -279,11 +308,34 @@ export async function ingest(opts = {}) {
           tally.files += ONE;
         } catch (error) {
           warn(entry.file + ': ' + errText(error));
+          tally.failures += ONE;
         }
       }
     }
     tally.maskedHits = sumCounts(masker.counts()) - before;
     cursors.flush();
   }
-  return { perRuntime, maskCounts: masker.counts(), durationMs: Date.now() - started };
+  const failures = Object.values(perRuntime).reduce((sum, tally) => sum + tally.failures, ZERO);
+  return {
+    perRuntime,
+    maskCounts: masker.counts(),
+    durationMs: Date.now() - started,
+    partial: failures > ZERO,
+    failures,
+  };
+}
+
+export async function ingest(opts = {}) {
+  const dataDir = resolveDataDir(opts);
+  if (opts.full && existsSync(dataDir) && readdirSync(dataDir).length) {
+    throw new Error(
+      '--full requires an empty LAKE_DATA root so replay cannot duplicate or erase existing evidence'
+    );
+  }
+  const lease = openWriterLease(dataDir);
+  try {
+    return await ingestLocked({ ...opts, dataDir });
+  } finally {
+    lease.close();
+  }
 }

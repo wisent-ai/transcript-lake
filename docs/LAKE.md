@@ -87,16 +87,21 @@ next batch, so an interrupted run never re-emits what it already flushed.
 
 - Cursor store: one JSON file, `LAKE_DATA/cursors.json`, mapping each source
   file to `{mtimeMs, size, offset}`. Writes are atomic (temp file plus
-  rename); a corrupt store is treated as empty and simply rebuilt.
-- Truncation: when a source file shrinks below its recorded size, the offset
-  resets to zero and the file is re-read from the start.
+  rename). Unreadable or structurally invalid cursor state is a hard failure:
+  silently restarting would append duplicate evidence to existing partitions.
+- Source replacement: truncation or a same-size rewrite after a complete
+  checkpoint is rejected with recovery guidance. Supported vendor files are
+  treated as append-only between checkpoints.
 - Partition path:
   `LAKE_DATA/events/runtime=<runtime>/date=<year>-<month>-<day>/part-<hash>.ndjson`,
   append mode, where `<hash>` is the first twelve hex characters of a SHA
   digest of the source file path. One source file therefore always lands in
   the same partition file per day, keeping appends idempotent per cursor.
-- Flags: `--source <runtime>` restricts a run to one adapter; `--full`
-  ignores cursors and re-reads everything.
+- Concurrency: one ingest owns the selected `LAKE_DATA` root. A second writer
+  fails before reading sources rather than waiting or duplicating appends.
+- Flags: `--source <runtime>` restricts a run to one adapter. `--full` ignores
+  source cursors but is accepted only when `LAKE_DATA` is empty, so a replay
+  cannot duplicate or erase existing authoritative evidence.
 
 ## Masking guarantees
 
@@ -217,7 +222,7 @@ export LAKE_DATA=~/.transcript-lake        # optional; matches the built-in path
 
 node src/cli.mjs ingest                    # ingest and refresh the Oko export
 node src/cli.mjs ingest --source droid     # one runtime, then refresh export
-node src/cli.mjs ingest --full             # rebuild lake input and Oko export
+node src/cli.mjs ingest --full             # full import; LAKE_DATA must be empty
 node src/cli.mjs status                    # partitions, cursors, mask counts
 node src/cli.mjs query "FROM sessions ORDER BY last_ts DESC"
 node src/cli.mjs query "FROM blocks_by_hook"

@@ -49,6 +49,9 @@ function runBinary(name, args) {
   if (res.status === null) throw new Error(name + ' terminated by signal ' + String(res.signal));
   return res.status;
 }
+function requireNoArgs(command, rest) {
+  if (rest.length) throw new Error(command + ' accepts no arguments or flags');
+}
 
 function findOnPath(name) {
   for (const dir of String(process.env.PATH || '').split(delimiter)) {
@@ -104,9 +107,11 @@ async function cmdIngest(rest) {
   mkdirSync(dataDir, { recursive: true });
   writeFileSync(join(dataDir, SUMMARY_FILE), JSON.stringify(record, null, TWO) + '\n');
   process.stdout.write(JSON.stringify(record, null, TWO) + '\n');
+  if (summary.partial) process.exitCode = ONE;
 }
 
-async function cmdStatus() {
+async function cmdStatus(rest) {
+  requireNoArgs('status', rest);
   const dataDir = resolveDataDir({});
   process.stdout.write('data dir: ' + dataDir + '\n');
   const rows = partitionReport(dataDir);
@@ -158,7 +163,8 @@ function cmdQuery(rest) {
   process.exitCode = runBinary('duckdb', ['-c', script]);
 }
 
-function cmdCompact() {
+function cmdCompact(rest) {
+  requireNoArgs('compact', rest);
   const dataDir = resolveDataDir({});
   const rows = partitionReport(dataDir);
   if (!rows.length) throw new Error('no partitions under ' + join(dataDir, 'events') + ' (run ingest first)');
@@ -182,18 +188,33 @@ function cmdCompact() {
 }
 
 async function cmdExportOko(rest) {
+  for (const flag of rest) {
+    if (flag !== '--full' && flag !== '--reindex') {
+      throw new Error('unknown export-oko flag: ' + flag);
+    }
+  }
   const exporter = await import('./oko_export.mjs');
   const summary = await exporter.exportOko({
     full: rest.includes('--full'),
     reindex: rest.includes('--reindex'),
   });
   process.stdout.write(JSON.stringify(summary, null, TWO) + '\n');
+  if (
+    rest.includes('--reindex')
+    && (!summary.reindex || !summary.reindex.ran || summary.reindex.status !== ZERO)
+  ) {
+    process.exitCode = ONE;
+  }
 }
 
-function cmdOkoRefresh() {
-  const bin = process.env.OKO_CLI || findOnPath('oko-cli')
+function cmdOkoRefresh(rest) {
+  requireNoArgs('oko-refresh', rest);
+  const bin = process.env.OKO_CLI || findOnPath('oko-cli');
   if (!bin) {
-    process.stdout.write('oko-cli is not on PATH; run this once it is available:\n  oko-cli transcripts reindex\n');
+    process.stderr.write(
+      'oko-cli is not on PATH; install Oko or set OKO_CLI, then run: oko-cli transcripts reindex\n'
+    );
+    process.exitCode = ONE;
     return;
   }
   process.exitCode = runBinary(bin, ['transcripts', 'reindex']);

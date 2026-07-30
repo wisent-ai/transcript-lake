@@ -10,27 +10,35 @@ All user-visible changes are recorded here. Transcript Lake uses Semantic Versio
 
 ### Changed
 
-- None.
+- Ingest now uses a single-writer lease, fail-closed cursor validation, and explicit rejection of truncated or rewritten sources.
+- Oko now imports Transcript Lake's canonical per-session export for historical search instead of independently parsing the same vendor stores.
+- Oko export now covers every supported runtime, performs safe incremental tail reads, and rebuilds through staging when source partitions are replaced.
+- Tama closed segments take precedence over legacy mutable hook logs, so migration cannot double count the same decisions.
 
 ### Fixed
 
-- None.
+- Oko reindex now performs an uncapped first pass, distinguishes nanosecond mtime changes, and reparses truncated files.
+- Oko token telemetry, goals, stats, and transcript rendering now consume normalized Lake rows without discarding provider identity or token usage.
+- Explicit Oko reindex requests and partial ingest now return non-zero status instead of presenting degraded work as success.
 
 ### Removed
 
-- None.
+- Removed the specialized Droid-only Oko bridge and duplicate vendor-store indexing paths.
 
 ### Security
 
-- None.
+- Recursive metadata masking now covers nested strings and fails closed at the documented nesting bound.
+- Oko export refuses malformed Lake rows before advancing its cursor or pruning prior derived sessions.
 
 ### Configuration and data migrations
 
-- None.
+- Oko historical indexing now expects canonical session files beneath `LAKE_DATA/exports/oko`; existing vendor transcripts remain available only for live operational launch and resume.
+- Tama producers using `hooks-telemetry-segment-v1` should expose their ready directory at the default path or through `HOOKS_ADAPTIVE_SEGMENTS_READY`.
 
 ### Operator actions
 
-- None.
+- Back up the current Lake, run a full Oko export, and run `oko-cli transcripts reindex` after adopting this development revision.
+- Preserve any failed Lake and rebuild into a separate empty `LAKE_DATA` root after cursor damage or a non-append source change.
 
 ### Known limitations
 
