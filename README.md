@@ -1,5 +1,13 @@
 # Transcript Lake
 
+<!-- wisent-readme-signals:start -->
+[![Release](https://img.shields.io/github/v/release/wisent-ai/transcript-lake?display_name=tag&sort=semver)](https://github.com/wisent-ai/transcript-lake/releases)
+[![Downloads](https://img.shields.io/github/downloads/wisent-ai/transcript-lake/total)](https://github.com/wisent-ai/transcript-lake/releases)
+[![License](https://img.shields.io/github/license/wisent-ai/transcript-lake)](https://github.com/wisent-ai/transcript-lake)
+[![Discord](https://img.shields.io/badge/Discord-Join%20Wisent-5865F2?logo=discord&logoColor=white)](https://discord.gg/qRjpkthq54)
+<!-- wisent-readme-signals:end -->
+
+
 Transcript Lake turns local coding-agent conversations into one privacy-masked, incrementally updated event archive that operators can inspect with SQL and import into Oko.
 
 ## Problem and intended users
