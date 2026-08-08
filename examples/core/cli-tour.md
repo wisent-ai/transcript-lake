@@ -2,11 +2,11 @@
 
 1. **Goal:** Use the installed `transcript-lake` executable for the complete operator workflow without importing modules or addressing source-tree files.
 2. **Status:** Development `0.x`; implemented command surface, execution evidence pending.
-3. **Risk:** Starts read-only, then performs local ingest and optional derived mutations. Oko and DuckDB remain explicit optional dependencies.
+3. **Risk:** Starts read-only, then performs local ingest, operator label writes beneath `LAKE_DATA/labels`, and optional derived mutations. Oko and DuckDB remain explicit optional dependencies.
 4. **Environment:** macOS, installed Transcript Lake, operator-owned state root; DuckDB `1.5.x` for analytics/compact; Oko only for reindex/signals.
 5. **Preconditions:** No writer using the selected root; enough disk; local provider sessions optional.
 6. **Inputs:** One `LAKE` path, optional runtime filters, bounded limits, and optional Oko index.
-7. **Artifacts and side effects:** Discovery and inspection write nothing. Ingest writes authoritative masked Lake state and export. Compact/export/clean affect only rebuildable derived data. Rebuild writes a different empty root.
+7. **Artifacts and side effects:** Discovery and inspection write nothing. Ingest writes authoritative masked Lake state and export. Label writes append only beneath `LAKE_DATA/labels` and leave events, cursors, and exports untouched. Compact/export/clean affect only rebuildable derived data. Rebuild writes a different empty root.
 8. **Steps:**
 
 Discover syntax and configuration:
@@ -32,6 +32,17 @@ transcript-lake --data-dir "$LAKE" search "ssh" --limit 20
 transcript-lake --data-dir "$LAKE" stats --days 7 --json
 transcript-lake --data-dir "$LAKE" hooks --decision block
 ```
+
+Annotate sessions with operator labels (writes only `LAKE_DATA/labels`; never touches the ingest lease):
+
+```sh
+transcript-lake --data-dir "$LAKE" label add <session-id> --aspect reviewed --value yes --note "human checked"
+transcript-lake --data-dir "$LAKE" label list --aspect reviewed
+transcript-lake --data-dir "$LAKE" label aspects --json
+transcript-lake --data-dir "$LAKE" query "SELECT s.session_id, l.aspect, l.value FROM sessions s JOIN labels l USING (session_id, runtime)"
+```
+
+Re-labeling the same session and aspect appends a new record; the latest assignment wins in `label list` and `label aspects`, and the `labels` view keeps the full history.
 
 Use advanced and optional integrations:
 

@@ -25,7 +25,7 @@ These commands never create configuration, start ingestion, repair state, contac
 
 ## Workflow: query evidence
 
-`transcript-lake query "<sql>"` loads the frozen local DuckDB views over the selected Lake and executes the supplied SQL. Named read commands (`sessions`, `events`, `search`, `stats`, `hooks`, `signals`) cover bounded common reads over the same views without operator SQL; `search` treats its term as literal text, escaping LIKE wildcards before matching. The query process does not mutate NDJSON, cursors, or source stores. DuckDB is an explicit optional prerequisite; absence is an actionable dependency failure, not a fallback to another engine.
+`transcript-lake query "<sql>"` loads the frozen local DuckDB views over the selected Lake and executes the supplied SQL. Named read commands (`sessions`, `events`, `search`, `stats`, `hooks`, `signals`, `label list`, `label aspects`) cover bounded common reads over the same views without operator SQL; `search` treats its term as literal text, escaping LIKE wildcards before matching. The query process does not mutate NDJSON, cursors, or source stores. DuckDB is an explicit optional prerequisite; absence is an actionable dependency failure, not a fallback to another engine.
 
 The canonical `events` view pins column names and types and tolerates only a torn final partition line during a concurrent read. Aggregate views expose sessions, tools, tokens, and hook decisions. User SQL can itself create external files or perform DuckDB mutations; the operator owns the supplied SQL. Transcript Lake does not label arbitrary SQL as read-only.
 
@@ -46,6 +46,8 @@ The canonical `events` view pins column names and types and tolerates only a tor
 | `rebuild` | Separate empty target only | Full replay and export in the new root | Current root preserved; invalid/non-empty target is non-zero |
 | `sessions` / `events` | None | Filtered normalized evidence | Non-zero dependency or input error |
 | `search` | None | Newest-first literal substring matches over event text | Non-zero dependency or input error |
+| `label add` | `LAKE_DATA/labels` only | Appended label record; unknown or ambiguous session is rejected | Non-zero dependency or input error |
+| `label list` / `label aspects` | None | Latest-assignment labels or aspect summaries | Non-zero dependency or input error |
 | `stats` / `hooks` | None | Bounded aggregates or hook decisions | Non-zero dependency or input error |
 | `query` | User SQL may have DuckDB-defined effects | DuckDB result | Non-zero dependency or SQL error |
 | `compact` | Derived Parquet only | Filterable per-runtime size/path report | Non-zero; NDJSON preserved |
@@ -81,6 +83,7 @@ The detailed field table is frozen in [LAKE.md](LAKE.md). Provider adapters emit
 | `last-ingest.json` | Transcript Lake CLI | Current ingest | State writer lease | Diagnostic; may be regenerated |
 | `parquet/` | DuckDB compaction | State writer lease | No concurrent Lake mutation | `clean --target parquet --apply`; rebuild from NDJSON |
 | `exports/oko/` | Lake exporter | State writer lease | Atomic session/cursor writes | `clean --target oko --apply`; rebuild from NDJSON |
+| `labels/labels.ndjson` | Operator via Transcript Lake | Append-only single-line writes | No writer lease; independent of ingest | Deleting loses only labels; events and exports unaffected |
 | Oko SQLite index | Oko | Oko | External single-writer contract | Rebuild from Lake export |
 
 A writer lease fails fast when another live owner holds the root. Stale same-host claims are reclaimed only after process identity no longer matches. Shared cross-host mutation is unsupported.

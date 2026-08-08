@@ -127,3 +127,37 @@ SELECT
 FROM hook_decisions
 WHERE decision = 'block'
 GROUP BY hook_id;
+
+-- Operator label store: one row per aspect/value assignment over a session,
+-- appended by transcript-lake label add beneath <lake_data>/labels/.
+-- The store is append-only; re-labeling a session and aspect adds a row and
+-- the latest assignment wins in CLI reads, while this view exposes the full
+-- history. Same empty-store stub and torn-final-line tolerance as events.
+SET VARIABLE lake_labels_glob =
+  coalesce(getvariable('lake_data'), '.') || '/labels/*.ndjson';
+
+SET VARIABLE lake_labels_src = (
+  SELECT CASE
+           WHEN count(*) >= CAST('1' AS BIGINT) THEN getvariable('lake_labels_glob')
+           ELSE '/tmp/transcript-lake-empty-stub.ndjson'
+         END
+  FROM glob(getvariable('lake_labels_glob'))
+);
+
+CREATE OR REPLACE VIEW labels AS
+SELECT
+  ts, session_id, runtime, aspect, value, note, source, filename
+FROM read_ndjson_auto(
+  getvariable('lake_labels_src'),
+  filename = true,
+  ignore_errors = true,
+  columns = {
+    ts: 'TIMESTAMP',
+    session_id: 'VARCHAR',
+    runtime: 'VARCHAR',
+    aspect: 'VARCHAR',
+    value: 'VARCHAR',
+    note: 'VARCHAR',
+    source: 'VARCHAR'
+  }
+);

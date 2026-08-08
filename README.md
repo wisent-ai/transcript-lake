@@ -136,6 +136,7 @@ The CLI is the canonical human and automation interface.
 | Inspect | `status [--json]` | Partition, cursor, last-ingest, and Oko freshness inventory |
 | Sessions and events | `sessions`, `events` | Filtered recent normalized records |
 | Text search | `search <text> [--runtime <r>] [--session <id>] [--type <t>] [--limit <n>] [--json]` | Newest-first literal substring matches over masked event text |
+| Session labels | `label add`, `label list`, `label aspects` | Operator-owned aspect/value annotations over sessions |
 | Statistics and signals | `stats`, `hooks`, `signals` | Usage aggregates, adaptive-hook decisions, and Oko/Lake correlations |
 | Advanced SQL | `query [--json] \"<sql>\"` | DuckDB result or actionable dependency error |
 | Compact | `compact [--source <runtime>] [--json]` | Per-runtime NDJSON-to-Parquet report |

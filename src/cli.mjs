@@ -12,6 +12,9 @@ import { delimiter, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { ingest, resolveDataDir, SUPPORTED_SOURCES } from './ingest.mjs';
 import { openWriterLease } from './cursors.mjs';
+import {
+  appendLabel, labelRecord, normalizeAspect, normalizeLabelValue, normalizeNote,
+} from './labels/index.mjs';
 
 const N = (s) => Number(s);
 const [ZERO, ONE, TWO] = ['0', '1', '2'].map(N);
@@ -49,6 +52,11 @@ const USAGE = [
   '  hooks [--decision <value>] [--tool <name>] [--limit <n>] [--json]',
   '  signals [--report <frustration|overlap|daily|freshness>] [--limit <n>] [--json]',
   '  query [--json] "<sql>"                        arbitrary DuckDB SQL over Lake views',
+  '',
+  'Label and annotate:',
+  '  label add <session-id> --aspect <a> --value <v> [--note <text>] [--json]',
+  '  label list [--session <id>] [--aspect <a>] [--runtime <r>] [--limit <n>] [--json]',
+  '  label aspects [--json]                       distinct aspects with value counts',
   '',
   'Derived data and Oko:',
   '  compact [--source <runtime>] [--json]          write Parquet mirrors',
@@ -288,6 +296,17 @@ function runDuckQuery(sql, json, includeSignals = false) {
   process.exitCode = runBinary('duckdb', args);
 }
 
+function queryDuckJson(sql) {
+  const res = spawnSync('duckdb', ['-json', '-c', viewsScript(sql)], { encoding: 'utf8' });
+  if (res.error) throw new Error('duckdb failed to start: ' + res.error.message);
+  if (res.status === null) throw new Error('duckdb terminated by signal ' + String(res.signal));
+  if (res.status !== ZERO) {
+    throw new Error('duckdb exited with status ' + String(res.status) + ': ' + String(res.stderr || '').trim());
+  }
+  const out = String(res.stdout || '').trim();
+  return out ? JSON.parse(out) : [];
+}
+
 function pathSize(path) {
   if (!existsSync(path)) return ZERO;
   const stat = lstatSync(path);
@@ -331,6 +350,7 @@ const COMMAND_HELP = {
   stats: 'stats [--days <n>] [--runtime <r>] [--json]\n  Summarize events, sessions, tools, and token counters.',
   hooks: 'hooks [--decision <value>] [--tool <name>] [--limit <n>] [--json]\n  Inspect adaptive-hook decisions.',
   signals: 'signals [--report <frustration|overlap|daily|freshness>] [--limit <n>] [--json]\n  Query Oko/Lake cross-source signal views.',
+  label: 'label <add|list|aspects> ...\n  add <session-id> --aspect <name> --value <v> [--note <text>] [--json] records a manual session label.\n  list [--session <id>] [--aspect <a>] [--runtime <r>] [--limit <n>] [--json] shows the latest assignment per session and aspect, newest first.\n  aspects [--json] summarizes distinct aspects, values, and labeled sessions.',
   query: 'query [--json] "<sql>"\n  Execute operator-supplied SQL after loading canonical Lake views.',
   compact: 'compact [--source <runtime>] [--json]\n  Rebuild per-runtime Parquet mirrors; NDJSON remains authoritative.',
   'export-oko': 'export-oko [--full] [--reindex]\n  Materialize canonical sessions and optionally invoke Oko reindex.',
@@ -546,6 +566,105 @@ function cmdSearch(rest) {
   );
 }
 
+function cmdLabelAdd(rest) {
+  const parsed = parseOptions(
+    'label add', rest, ['--aspect', '--value', '--note', '--runtime'], ['--json']
+  );
+  if (parsed.positionals.length !== ONE) {
+    throw new Error(
+      'usage: transcript-lake label add <session-id> --aspect <name> --value <v> [--note <text>] [--json]'
+    );
+  }
+  const sessionId = String(parsed.positionals[ZERO]).trim();
+  if (!sessionId) throw new Error('label add requires a session id');
+  const aspect = normalizeAspect(parsed.options.aspect);
+  const value = normalizeLabelValue(parsed.options.value);
+  const note = normalizeNote(parsed.options.note);
+  const rows = queryDuckJson(
+    'SELECT DISTINCT runtime FROM sessions WHERE session_id = ' + quoteSql(sessionId)
+  );
+  if (!rows.length) {
+    throw new Error(
+      'unknown session "' + sessionId + '": not present in the selected Lake'
+      + ' (check the id or run ingest first)'
+    );
+  }
+  const runtimes = rows.map((row) => row.runtime).sort();
+  let runtime = requireRuntime(parsed.options.runtime);
+  if (runtime && !runtimes.includes(runtime)) {
+    throw new Error(
+      'session "' + sessionId + '" exists under ' + runtimes.join(', ') + ', not ' + runtime
+    );
+  }
+  if (!runtime) {
+    if (runtimes.length > ONE) {
+      throw new Error(
+        'session id "' + sessionId + '" is ambiguous across runtimes ('
+        + runtimes.join(', ') + '); repeat with --runtime'
+      );
+    }
+    runtime = runtimes[ZERO];
+  }
+  const record = appendLabel(
+    resolveDataDir({}),
+    labelRecord({ sessionId, runtime, aspect, value, note })
+  );
+  if (parsed.options.json) {
+    writeJson(record);
+    return;
+  }
+  process.stdout.write(
+    'labeled ' + record.session_id + ' (' + record.runtime + '): '
+    + record.aspect + ' = ' + record.value
+    + (record.note ? ' (note: ' + record.note + ')' : '') + '\n'
+  );
+}
+
+function latestLabelsInner(where) {
+  return 'SELECT ts, session_id, runtime, aspect, value, note, source, '
+    + 'row_number() OVER (PARTITION BY session_id, aspect ORDER BY ts DESC) AS rn FROM labels'
+    + (where.length ? ' WHERE ' + where.join(' AND ') : '');
+}
+
+function cmdLabelList(rest) {
+  const parsed = parseOptions(
+    'label list', rest, ['--session', '--aspect', '--runtime', '--limit'], ['--json']
+  );
+  if (parsed.positionals.length) throw new Error('label list accepts flags only');
+  const limit = boundedInteger(parsed.options.limit, '--limit', DEFAULT_LIMIT);
+  const where = [];
+  if (parsed.options.session) where.push('session_id = ' + quoteSql(parsed.options.session));
+  if (parsed.options.aspect) where.push('aspect = ' + quoteSql(normalizeAspect(parsed.options.aspect)));
+  const runtime = requireRuntime(parsed.options.runtime);
+  if (runtime) where.push('runtime = ' + quoteSql(runtime));
+  runDuckQuery(
+    'SELECT ts, session_id, runtime, aspect, value, note, source FROM ('
+    + latestLabelsInner(where) + ') WHERE rn = CAST(\'1\' AS BIGINT)'
+    + ' ORDER BY ts DESC LIMIT ' + String(limit),
+    Boolean(parsed.options.json)
+  );
+}
+
+function cmdLabelAspects(rest) {
+  const parsed = parseOptions('label aspects', rest, [], ['--json']);
+  if (parsed.positionals.length) throw new Error('label aspects accepts flags only');
+  runDuckQuery(
+    'SELECT aspect, count(DISTINCT value) AS values, count(*) AS labels, '
+    + 'count(DISTINCT session_id) AS sessions FROM ('
+    + latestLabelsInner([]) + ') WHERE rn = CAST(\'1\' AS BIGINT)'
+    + ' GROUP BY aspect ORDER BY labels DESC, aspect',
+    Boolean(parsed.options.json)
+  );
+}
+
+function cmdLabel(rest) {
+  const [subcommand, ...subrest] = rest;
+  if (subcommand === 'add') return cmdLabelAdd(subrest);
+  if (subcommand === 'list') return cmdLabelList(subrest);
+  if (subcommand === 'aspects') return cmdLabelAspects(subrest);
+  throw new Error('usage: transcript-lake label <add|list|aspects> (see: transcript-lake help label)');
+}
+
 function cmdStats(rest) {
   const parsed = parseOptions('stats', rest, ['--days', '--runtime'], ['--json']);
   if (parsed.positionals.length) throw new Error('stats accepts flags only');
@@ -748,6 +867,7 @@ const COMMANDS = {
   stats: cmdStats,
   hooks: cmdHooks,
   signals: cmdSignals,
+  label: cmdLabel,
   query: cmdQuery,
   compact: cmdCompact,
   'export-oko': cmdExportOko,

@@ -140,10 +140,12 @@ transcript-lake status
 transcript-lake sessions --limit 20
 transcript-lake events --type tool_call --limit 20
 transcript-lake search "refactor" --limit 20
+transcript-lake label add <session-id> --aspect reviewed --value yes
+transcript-lake label aspects
 transcript-lake stats --days 7
 ```
 
-Expected: status has a last-ingest timestamp and cursor count. When supported events existed, partition counts, recent sessions/events, and statistics are non-empty, and text search returns the newest events containing the literal term. The analytics commands require DuckDB. Add `--json` for automation.
+Expected: status has a last-ingest timestamp and cursor count. When supported events existed, partition counts, recent sessions/events, and statistics are non-empty, and text search returns the newest events containing the literal term. `label add` validates the session against the Lake and appends one operator annotation beneath `LAKE_DATA/labels`. The analytics commands require DuckDB. Add `--json` for automation.
 
 ## Safe recovery and derived cleanup
 

@@ -151,6 +151,12 @@ Views defined by `sql/views.sql`:
   with decision, hook event, infra flag, and masked reason.
 - `blocks_by_hook` — blocking pressure per hook: block count, distinct
   conversations, first and last block, and the most recent reason.
+- `labels` — operator-owned session annotations from `LAKE_DATA/labels`:
+  one row per assignment (`ts`, `session_id`, `runtime`, `aspect`, `value`,
+  `note`, `source`). The store is append-only and this view exposes the full
+  history; CLI reads apply latest-assignment-wins per session and aspect.
+  The same empty-store stub and torn-final-line tolerance as the events
+  view apply.
 
 Empty-lake bootstrap: DuckDB refuses to bind a view over a glob that matches
 no files, so `views.sql` materialises a zero-row stub file under `/tmp` and
@@ -204,6 +210,34 @@ event UUID.
   also discovers export changes in its regular indexing loop.
 - `freshness()` compares the Oko index read-only with Lake cursor recency.
 
+## Operator labels
+
+`transcript-lake label` records operator-owned annotations over sessions:
+`label add` appends one JSON record per assignment to
+`LAKE_DATA/labels/labels.ndjson` after validating the session against the
+canonical `sessions` view, `label list` shows the latest assignment per
+session and aspect (newest first), and `label aspects` aggregates the
+effective labels. A record carries `ts`, `session_id`, `runtime`
+(denormalized from the session row), `aspect` (lowercase-normalized),
+`value`, nullable `note`, and `source` (`manual` for CLI adds; the field
+leaves room for a later model-assisted labeler).
+
+- Labels are derived operator data, not masked Lake events: label text is
+  stored exactly as given and never passes through the masker, so labels
+  must not carry secrets.
+- The store is append-only. Re-labeling the same session and aspect adds
+  another record; the latest assignment wins in `label list` and
+  `label aspects`, while the `labels` DuckDB view exposes the full history
+  for joins against `sessions` and `events`.
+- Writes are single complete lines appended in one call and fsynced; a
+  crash loses at most the record being written, and readers skip a torn
+  final line, mirroring the events partitions.
+- The events writer lease is deliberately not taken: labels live outside
+  `events/` and `cursors.json`, so labeling neither blocks nor is blocked
+  by a concurrent ingest.
+- Deleting `LAKE_DATA/labels/` loses only labels; events, cursors, and
+  exports are unaffected.
+
 ## Out of scope, deliberately
 
 - **gemini and qwen** — no session stores for these runtimes exist on this
@@ -229,6 +263,8 @@ transcript-lake --data-dir "$LAKE" ingest --source droid
 transcript-lake --data-dir "$LAKE" sessions --limit 20
 transcript-lake --data-dir "$LAKE" events --type tool_call --limit 20
 transcript-lake --data-dir "$LAKE" search "ssh" --limit 20
+transcript-lake --data-dir "$LAKE" label add <session-id> --aspect reviewed --value yes
+transcript-lake --data-dir "$LAKE" label list --aspect reviewed
 transcript-lake --data-dir "$LAKE" stats --days 7
 transcript-lake --data-dir "$LAKE" hooks --decision block
 transcript-lake --data-dir "$LAKE" signals --report freshness
