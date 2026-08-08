@@ -10,6 +10,7 @@ All user-visible changes are recorded here. Transcript Lake uses Semantic Versio
 - Public CLI now covers path discovery, source discovery, health checks, safe rebuild, bounded sessions/events/statistics/hooks, Oko/Lake signals, structured output, filtered compaction, and preview-first derived cleanup.
 - `transcript-lake search <text>` runs a bounded, newest-first, case-insensitive literal substring match over masked event text, with optional runtime, session, and type filters, so common text lookup no longer requires operator SQL. LIKE wildcards in the term are escaped and always match literally.
 - `transcript-lake label add|list|aspects` records operator-owned session labels as aspect/value pairs (latest assignment per session and aspect wins in reads) in an append-only store beneath `LAKE_DATA/labels`, exposed to SQL through the canonical `labels` DuckDB view. Label writes do not take the events writer lease and never block a concurrent ingest.
+- `transcript-lake label add --source <manual|model>` records label provenance; the flag stays `manual` when absent, so model-assisted suggestions (for example from transcript-label-trainer, carrying confidence in `note`) are no longer misrecorded as manual.
 
 ### Changed
 

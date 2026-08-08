@@ -46,7 +46,7 @@ The canonical `events` view pins column names and types and tolerates only a tor
 | `rebuild` | Separate empty target only | Full replay and export in the new root | Current root preserved; invalid/non-empty target is non-zero |
 | `sessions` / `events` | None | Filtered normalized evidence | Non-zero dependency or input error |
 | `search` | None | Newest-first literal substring matches over event text | Non-zero dependency or input error |
-| `label add` | `LAKE_DATA/labels` only | Appended label record; unknown or ambiguous session is rejected | Non-zero dependency or input error |
+| `label add` | `LAKE_DATA/labels` only | Appended label record with manual/model provenance; unknown or ambiguous session is rejected | Non-zero dependency or input error |
 | `label list` / `label aspects` | None | Latest-assignment labels or aspect summaries | Non-zero dependency or input error |
 | `stats` / `hooks` | None | Bounded aggregates or hook decisions | Non-zero dependency or input error |
 | `query` | User SQL may have DuckDB-defined effects | DuckDB result | Non-zero dependency or SQL error |

@@ -13,6 +13,16 @@ import { join } from 'node:path';
 const STORE_DIR = 'labels';
 const STORE_FILE = 'labels.ndjson';
 const MANUAL = 'manual';
+const LABEL_SOURCES = [MANUAL, 'model'];
+
+export function normalizeSource(value) {
+  if (value === undefined) return MANUAL;
+  const source = String(value).trim();
+  if (!LABEL_SOURCES.includes(source)) {
+    throw new Error('--source must be ' + LABEL_SOURCES.join(' or '));
+  }
+  return source;
+}
 
 export function labelsPath(dataDir) {
   return join(dataDir, STORE_DIR, STORE_FILE);
@@ -36,7 +46,7 @@ export function normalizeNote(value) {
   return text || null;
 }
 
-export function labelRecord({ sessionId, runtime, aspect, value, note }) {
+export function labelRecord({ sessionId, runtime, aspect, value, note, source }) {
   return {
     ts: new Date().toISOString(),
     session_id: sessionId,
@@ -44,7 +54,7 @@ export function labelRecord({ sessionId, runtime, aspect, value, note }) {
     aspect,
     value,
     note,
-    source: MANUAL,
+    source: source || MANUAL,
   };
 }
 
