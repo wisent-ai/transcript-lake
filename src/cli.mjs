@@ -48,7 +48,7 @@ const USAGE = [
   '  watch [--debounce <seconds>] [--json]          online refresh when sources change',
   '',
   'Read and analyze:',
-  '  sessions [--runtime <r>] [--project <text>] [--limit <n>] [--json]',
+  '  sessions [--runtime <r>] [--project <text>] [--interrupted] [--limit <n>] [--json]',
   '  events [--runtime <r>] [--session <id>] [--type <type>] [--limit <n>] [--json]',
   '  search <text> [--runtime <r>] [--session <id>] [--type <type>] [--limit <n>] [--json]',
   '  stats [--days <n>] [--runtime <r>] [--json]   usage summary',
@@ -359,7 +359,7 @@ const COMMAND_HELP = {
   ingest: 'ingest [--source <runtime>] [--full]\n  Incremental by default. --full is allowed only for an empty selected root.',
   rebuild: 'rebuild --to <empty-path> [--source <runtime>]\n  Full replay into a different empty root; never mutates the current Lake.',
   watch: 'watch [--debounce <seconds>] [--json]\n  Watch supported source roots and run the ingest/export refresh after a quiet interval. Long-running foreground process; launchd or systemd is expected to KeepAlive it.',
-  sessions: 'sessions [--runtime <r>] [--project <text>] [--limit <n>] [--json]\n  List recent sessions through the canonical DuckDB view.',
+  sessions: 'sessions [--runtime <r>] [--project <text>] [--interrupted] [--limit <n>] [--json]\n  List recent sessions through the canonical DuckDB view.\n  --interrupted keeps only conversations whose last turn was an unanswered user message or a tool call cut off mid-run, and reports stopped_as plus the opening of that final request.',
   events: 'events [--runtime <r>] [--session <id>] [--type <type>] [--limit <n>] [--json]\n  List recent masked canonical events.',
   search: 'search <text> [--runtime <r>] [--session <id>] [--type <type>] [--limit <n>] [--json]\n  Case-insensitive literal substring match over masked event text, newest first.',
   stats: 'stats [--days <n>] [--runtime <r>] [--json]\n  Summarize events, sessions, tools, and token counters.',
@@ -610,7 +610,7 @@ async function cmdWatch(rest) {
 
 function cmdSessions(rest) {
   const parsed = parseOptions(
-    'sessions', rest, ['--runtime', '--project', '--limit'], ['--json']
+    'sessions', rest, ['--runtime', '--project', '--limit'], ['--json', '--interrupted']
   );
   if (parsed.positionals.length) throw new Error('sessions accepts flags only');
   const runtime = requireRuntime(parsed.options.runtime);
@@ -621,9 +621,14 @@ function cmdSessions(rest) {
     where.push('lower(coalesce(project, \'\')) LIKE lower(' + quoteSql('%' + parsed.options.project + '%') + ')');
   }
   const clause = where.length ? ' WHERE ' + where.join(' AND ') : '';
+  const columns = parsed.options.interrupted
+    ? 'runtime, session_id, project, stopped_as, first_ts, last_ts, user_msgs, assistant_msgs, '
+      + 'tool_calls, last_user_text'
+    : 'runtime, session_id, project, first_ts, last_ts, user_msgs, assistant_msgs, '
+      + 'tool_calls, tokens_in, tokens_out';
+  const view = parsed.options.interrupted ? 'interrupted_sessions' : 'sessions';
   runDuckQuery(
-    'SELECT runtime, session_id, project, first_ts, last_ts, user_msgs, assistant_msgs, '
-    + 'tool_calls, tokens_in, tokens_out FROM sessions' + clause
+    'SELECT ' + columns + ' FROM ' + view + clause
     + ' ORDER BY last_ts DESC LIMIT ' + String(limit),
     Boolean(parsed.options.json)
   );

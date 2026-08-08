@@ -135,7 +135,7 @@ The CLI is the canonical human and automation interface.
 | Online freshness | `watch [--debounce <seconds>] [--json]` | Long-running watcher firing the standard refresh on source changes |
 | Safe recovery | `rebuild --to <empty-path> [--source <runtime>]` | Full replay into a separate empty Lake |
 | Inspect | `status [--json]` | Partition, cursor, last-ingest, and Oko freshness inventory |
-| Sessions and events | `sessions`, `events` | Filtered recent normalized records |
+| Sessions and events | `sessions [--interrupted]`, `events` | Filtered recent normalized records; `--interrupted` keeps only conversations left without an answer |
 | Text search | `search <text> [--runtime <r>] [--session <id>] [--type <t>] [--limit <n>] [--json]` | Newest-first literal substring matches over masked event text |
 | Session labels | `label add`, `label list`, `label aspects` | Operator-owned aspect/value annotations over sessions |
 | Statistics and signals | `stats`, `hooks`, `signals` | Usage aggregates, adaptive-hook decisions, and Oko/Lake correlations |

@@ -128,6 +128,54 @@ FROM hook_decisions
 WHERE decision = 'block'
 GROUP BY hook_id;
 
+-- Conversations that stopped without an answer. The last recorded turn is
+-- either a user message the agent never replied to, or a tool call whose run
+-- was cut off before the agent spoke again. Newest first, so the top row is
+-- the conversation most recently left unfinished. last_user_text carries the
+-- masked opening of that final request, which is what identifies the thread.
+CREATE OR REPLACE VIEW interrupted_sessions AS
+WITH turns AS (
+  SELECT
+    runtime, session_id, ts, event_type, text,
+    row_number() OVER (
+      PARTITION BY runtime, session_id ORDER BY ts DESC
+    ) AS rn_session,
+    row_number() OVER (
+      PARTITION BY runtime, session_id, event_type ORDER BY ts DESC
+    ) AS rn_kind
+  FROM events
+  WHERE session_id IS NOT NULL
+    AND event_type IN ('user', 'assistant', 'tool_call')
+),
+tail AS (
+  SELECT runtime, session_id, event_type
+  FROM turns
+  WHERE rn_session = CAST('1' AS BIGINT) AND event_type <> 'assistant'
+),
+final_request AS (
+  SELECT runtime, session_id, text
+  FROM turns
+  WHERE event_type = 'user' AND rn_kind = CAST('1' AS BIGINT)
+)
+SELECT
+  s.runtime,
+  s.session_id,
+  s.project,
+  CASE t.event_type
+    WHEN 'user' THEN 'unanswered'
+    ELSE 'cut_off_mid_tool'
+  END AS stopped_as,
+  s.first_ts,
+  s.last_ts,
+  s.user_msgs,
+  s.assistant_msgs,
+  s.tool_calls,
+  substr(r.text, CAST('1' AS INTEGER), CAST('240' AS INTEGER)) AS last_user_text
+FROM tail AS t
+JOIN sessions AS s ON s.runtime = t.runtime AND s.session_id = t.session_id
+LEFT JOIN final_request AS r ON r.runtime = t.runtime AND r.session_id = t.session_id
+ORDER BY s.last_ts DESC;
+
 -- Operator label store: one row per aspect/value assignment over a session,
 -- appended by transcript-lake label add beneath <lake_data>/labels/.
 -- The store is append-only; re-labeling a session and aspect adds a row and

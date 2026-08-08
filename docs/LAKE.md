@@ -145,6 +145,13 @@ Views defined by `sql/views.sql`:
 - `sessions` — one row per runtime-native conversation identity: runtime,
   project, first and last timestamps, message and tool counts, summed usage
   counters, and `oko_session_hash`, the aggregate one-way source-stem alias.
+- `interrupted_sessions` — conversations that stopped without an answer:
+  the last recorded turn is a user message the agent never replied to
+  (`stopped_as = 'unanswered'`) or a tool call whose run was cut off before
+  the agent spoke again (`stopped_as = 'cut_off_mid_tool'`). Carries the
+  session view's identity, span, and counts plus `last_user_text`, the masked
+  opening of that final request. `transcript-lake sessions --interrupted`
+  reads it, newest first.
 - `tools_daily` — tool-call volume per day, runtime, and tool.
 - `tokens_daily` — usage counters summed per day, runtime, and model.
 - `hook_decisions` — the adaptive-hook decision stream (runtime `hooks`)
