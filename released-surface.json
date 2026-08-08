@@ -1,6 +1,6 @@
 {
   "version": "\u0030.\u0031.\u0030",
-  "source": "head:\u0036\u0036\u0036b\u0035bc\u0034e\u0032\u0034\u0033\u0035cd\u0031e\u0034\u0032d\u0030\u0033\u0038\u0032\u0031f\u0037b\u0033ede\u0035db\u0032\u0033d\u0036\u0036 parent of the carrying revision -- NOT PUBLISHED: no tag or immutable release artifact exists; this baseline records the public contract of the development revision carrying this file",
+  "source": "head:\u0033\u0036\u0035\u0039eb\u0036\u0033\u0034c\u0035edefc\u0031\u0033\u0033cd\u0034c\u0037aebfa\u0036\u0038\u0036\u0033\u0032\u0036\u0036\u0032\u0032\u0033\u0036 parent of the carrying revision -- NOT PUBLISHED: no tag or immutable release artifact exists; this baseline records the public contract of the development revision carrying this file",
   "surface": [
     "command:clean",
     "command:compact",
@@ -21,11 +21,13 @@
     "command:sources",
     "command:stats",
     "command:status",
+    "command:watch",
     "executable:transcript-lake",
     "flag:--apply",
     "flag:--aspect",
     "flag:--data-dir",
     "flag:--days",
+    "flag:--debounce",
     "flag:--decision",
     "flag:--full",
     "flag:--help",

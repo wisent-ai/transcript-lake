@@ -3,9 +3,9 @@
 // ingest, inspection, analytics, recovery, derived artifacts, and Oko.
 // DuckDB remains optional and is required only for analytics and compaction.
 // No digit characters outside quoted strings and comments.
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import {
-  existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync,
+  existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, watch, writeFileSync,
 } from 'node:fs';
 import { homedir } from 'node:os';
 import { delimiter, join, resolve } from 'node:path';
@@ -19,7 +19,9 @@ import {
 const N = (s) => Number(s);
 const [ZERO, ONE, TWO] = ['0', '1', '2'].map(N);
 const [DEFAULT_LIMIT, MAX_LIMIT, DEFAULT_DAYS] = ['20', '500', '7'].map(N);
+const [DEFAULT_DEBOUNCE, SECOND_MS] = ['60', '1000'].map(N);
 const LAKE_ROOT = fileURLToPath(new URL('..', import.meta.url));
+const CLI_ENTRY = join(LAKE_ROOT, 'src', 'cli.mjs');
 const PACKAGE = JSON.parse(readFileSync(join(LAKE_ROOT, 'package.json'), 'utf8'));
 const VERSION = String(PACKAGE.version);
 const SUMMARY_FILE = 'last-ingest.json';
@@ -43,6 +45,7 @@ const USAGE = [
   'Ingest and recover:',
   '  ingest [--source <runtime>] [--full]           incremental scan; full needs empty root',
   '  rebuild --to <empty-path> [--source <runtime>] safe full replay to a new Lake',
+  '  watch [--debounce <seconds>] [--json]          online refresh when sources change',
   '',
   'Read and analyze:',
   '  sessions [--runtime <r>] [--project <text>] [--limit <n>] [--json]',
@@ -217,27 +220,38 @@ function readLastIngest(path) {
   }
 }
 
+function hookSourceRoots() {
+  const ready = lakePaths().hookSegments;
+  const legacy = join(homedir(), '.hooks-adaptive');
+  const segmentMode = existsSync(ready);
+  return {
+    ready,
+    legacy,
+    segmentMode,
+    available: segmentMode || existsSync(legacy),
+    roots: segmentMode ? [ready] : (existsSync(legacy) ? [legacy] : []),
+  };
+}
+
 async function sourceReport() {
   const rows = [];
   for (const runtime of SUPPORTED_SOURCES) {
     if (runtime === 'hooks') {
-      const ready = lakePaths().hookSegments;
-      const legacy = join(homedir(), '.hooks-adaptive');
+      const hooks = hookSourceRoots();
       try {
-        const segmentMode = existsSync(ready);
         let files = ZERO;
-        if (segmentMode) {
-          files = readdirSync(ready, { withFileTypes: true })
+        if (hooks.segmentMode) {
+          files = readdirSync(hooks.ready, { withFileTypes: true })
             .filter((entry) => entry.isFile() && entry.name.endsWith('.jsonl')).length;
-        } else if (existsSync(legacy)) {
+        } else if (existsSync(hooks.legacy)) {
           files = ['telemetry.prev.jsonl', 'telemetry.jsonl']
-            .filter((name) => existsSync(join(legacy, name))).length;
+            .filter((name) => existsSync(join(hooks.legacy, name))).length;
         }
         rows.push({
           runtime,
-          available: segmentMode || existsSync(legacy),
-          mode: segmentMode ? 'closed-segments' : 'legacy-log',
-          roots: segmentMode ? [ready] : (existsSync(legacy) ? [legacy] : []),
+          available: hooks.available,
+          mode: hooks.segmentMode ? 'closed-segments' : 'legacy-log',
+          roots: hooks.roots,
           files,
         });
       } catch (error) {
@@ -344,6 +358,7 @@ const COMMAND_HELP = {
   status: 'status [--json]\n  Show partitions, cursor freshness, last ingest, and Oko export freshness.',
   ingest: 'ingest [--source <runtime>] [--full]\n  Incremental by default. --full is allowed only for an empty selected root.',
   rebuild: 'rebuild --to <empty-path> [--source <runtime>]\n  Full replay into a different empty root; never mutates the current Lake.',
+  watch: 'watch [--debounce <seconds>] [--json]\n  Watch supported source roots and run the ingest/export refresh after a quiet interval. Long-running foreground process; launchd or systemd is expected to KeepAlive it.',
   sessions: 'sessions [--runtime <r>] [--project <text>] [--limit <n>] [--json]\n  List recent sessions through the canonical DuckDB view.',
   events: 'events [--runtime <r>] [--session <id>] [--type <type>] [--limit <n>] [--json]\n  List recent masked canonical events.',
   search: 'search <text> [--runtime <r>] [--session <id>] [--type <type>] [--limit <n>] [--json]\n  Case-insensitive literal substring match over masked event text, newest first.',
@@ -499,6 +514,98 @@ async function cmdRebuild(rest) {
     full: true,
     dataDir: target,
   });
+}
+
+// Watch roots come from the same adapter and hooks discovery that ingest and
+// sources use, so a new runtime store is watched the moment it is supported.
+async function watchRoots() {
+  const roots = [];
+  for (const runtime of SUPPORTED_SOURCES) {
+    if (runtime === 'hooks') {
+      roots.push(...hookSourceRoots().roots);
+      continue;
+    }
+    try {
+      const adapter = await import('./adapters/' + runtime + '.mjs');
+      roots.push(...adapter.roots(homedir()));
+    } catch {
+      // An adapter that fails to load contributes no watch roots; doctor
+      // remains the place that surfaces the breakage.
+    }
+  }
+  return roots;
+}
+
+// Online freshness: recursively watch every supported source root, coalesce
+// changes over a quiet interval, then run the same refresh the external
+// timer runs (ingest, then export-oko) as child processes of this CLI. At
+// most one refresh runs and one more is queued; the writer lease inside
+// ingest remains the backstop against any other writer. This is a
+// long-running foreground process: launchd or systemd should KeepAlive it.
+async function cmdWatch(rest) {
+  const parsed = parseOptions('watch', rest, ['--debounce'], ['--json']);
+  if (parsed.positionals.length) throw new Error('watch accepts flags only');
+  const debounceSeconds = boundedInteger(parsed.options.debounce, '--debounce', DEFAULT_DEBOUNCE);
+  const json = Boolean(parsed.options.json);
+  const roots = await watchRoots();
+  if (!roots.length) throw new Error('watch found no supported source roots on this machine');
+  const log = (kind, details) => {
+    const ts = new Date().toISOString();
+    if (json) {
+      process.stdout.write(JSON.stringify({ ts, kind, ...details }) + '\n');
+      return;
+    }
+    const text = Object.entries(details).map(([key, value]) => key + '=' + String(value)).join(' ');
+    process.stdout.write(ts + ' watch ' + kind + (text ? ' ' + text : '') + '\n');
+  };
+  let pendingEvents = ZERO;
+  let timer = null;
+  let running = false;
+  let queued = false;
+  const runStep = (command) => new Promise((done) => {
+    log('run-start', { command });
+    const child = spawn(process.execPath, [CLI_ENTRY, command], { stdio: 'inherit' });
+    child.on('error', (error) => {
+      log('run-finish', { command, error: String(error && error.message ? error.message : error) });
+      done(ONE);
+    });
+    child.on('close', (status) => {
+      log('run-finish', { command, status });
+      done(status);
+    });
+  });
+  const fire = async () => {
+    timer = null;
+    const batch = pendingEvents;
+    pendingEvents = ZERO;
+    log('batch', { events: batch });
+    if (running) {
+      if (!queued) log('queued', { events: batch });
+      queued = true;
+      return;
+    }
+    running = true;
+    for (;;) {
+      const status = await runStep('ingest');
+      if (status === ZERO) await runStep('export-oko');
+      if (!queued) break;
+      queued = false;
+    }
+    running = false;
+  };
+  const schedule = () => {
+    pendingEvents += ONE;
+    if (timer) clearTimeout(timer);
+    timer = setTimeout(() => { fire(); }, debounceSeconds * SECOND_MS);
+  };
+  const watchers = roots.map((root) => watch(root, { recursive: true }, () => schedule()));
+  const stop = () => {
+    for (const watcher of watchers) watcher.close();
+    process.exit(ZERO);
+  };
+  process.on('SIGINT', stop);
+  process.on('SIGTERM', stop);
+  log('start', { roots: roots.length, debounceSeconds });
 }
 
 function cmdSessions(rest) {
@@ -863,6 +970,7 @@ const COMMANDS = {
   status: cmdStatus,
   ingest: cmdIngest,
   rebuild: cmdRebuild,
+  watch: cmdWatch,
   sessions: cmdSessions,
   events: cmdEvents,
   search: cmdSearch,

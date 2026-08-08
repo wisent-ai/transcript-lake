@@ -132,6 +132,7 @@ The CLI is the canonical human and automation interface.
 | Paths and discovery | `paths`, `sources` | Resolved state/integration paths and available runtime stores |
 | Health | `doctor [--json]` | Cursor, source, DuckDB, and Oko checks with meaningful exit status |
 | Ingest | `ingest [--source <runtime>] [--full]` | Structured run summary and durable cursors/partitions |
+| Online freshness | `watch [--debounce <seconds>] [--json]` | Long-running watcher firing the standard refresh on source changes |
 | Safe recovery | `rebuild --to <empty-path> [--source <runtime>]` | Full replay into a separate empty Lake |
 | Inspect | `status [--json]` | Partition, cursor, last-ingest, and Oko freshness inventory |
 | Sessions and events | `sessions`, `events` | Filtered recent normalized records |
