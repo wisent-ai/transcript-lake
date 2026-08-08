@@ -219,9 +219,14 @@ canonical `sessions` view, `label list` shows the latest assignment per
 session and aspect (newest first), and `label aspects` aggregates the
 effective labels. A record carries `ts`, `session_id`, `runtime`
 (denormalized from the session row), `aspect` (lowercase-normalized),
-`value`, nullable `note`, and `source` (`manual` when `--source` is absent;
-`--source model` records a model-assisted suggestion, for example from
-transcript-label-trainer, with confidence carried in `note`).
+`value`, nullable `note`, and namespaced provenance `source` matching
+`^(manual|human|model|brama)(:[A-Za-z0-9._/-]+)?$` (`manual` when `--source`
+is absent). `manual` and `human` mean a person assigned the label;
+`brama:<model-id>` means an LLM assigned it through the Brama gateway;
+`model:<artifact>` means a local fine-tuned classifier merely suggested it.
+Training ground truth is `manual`/`human`/`brama:*`; `model:*` suggestions
+await acceptance and are excluded from training runs by convention — that
+filter lives in transcript-label-trainer, not in this store.
 
 - Labels are derived operator data, not masked Lake events: label text is
   stored exactly as given and never passes through the masker, so labels

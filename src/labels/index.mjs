@@ -13,13 +13,19 @@ import { join } from 'node:path';
 const STORE_DIR = 'labels';
 const STORE_FILE = 'labels.ndjson';
 const MANUAL = 'manual';
-const LABEL_SOURCES = [MANUAL, 'model'];
+// Namespaced provenance: bare manual/human/model/brama, or with a detail
+// suffix (brama:claude-opus-4.6, model:hf-distilbert-topic). Kept as a
+// quoted pattern so the digit convention above holds.
+const SOURCE_PATTERN = '^(manual|human|model|brama)(:[A-Za-z0-9._/-]+)?$';
 
 export function normalizeSource(value) {
   if (value === undefined) return MANUAL;
   const source = String(value).trim();
-  if (!LABEL_SOURCES.includes(source)) {
-    throw new Error('--source must be ' + LABEL_SOURCES.join(' or '));
+  if (!new RegExp(SOURCE_PATTERN).test(source)) {
+    throw new Error(
+      '--source must match ' + SOURCE_PATTERN
+      + ' (manual, human, model, or brama, with an optional :detail suffix)'
+    );
   }
   return source;
 }

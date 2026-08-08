@@ -54,7 +54,7 @@ const USAGE = [
   '  query [--json] "<sql>"                        arbitrary DuckDB SQL over Lake views',
   '',
   'Label and annotate:',
-  '  label add <session-id> --aspect <a> --value <v> [--note <text>] [--source <manual|model>] [--json]',
+  '  label add <session-id> --aspect <a> --value <v> [--note <text>] [--source <name[:detail]>] [--json]',
   '  label list [--session <id>] [--aspect <a>] [--runtime <r>] [--limit <n>] [--json]',
   '  label aspects [--json]                       distinct aspects with value counts',
   '',
@@ -350,7 +350,7 @@ const COMMAND_HELP = {
   stats: 'stats [--days <n>] [--runtime <r>] [--json]\n  Summarize events, sessions, tools, and token counters.',
   hooks: 'hooks [--decision <value>] [--tool <name>] [--limit <n>] [--json]\n  Inspect adaptive-hook decisions.',
   signals: 'signals [--report <frustration|overlap|daily|freshness>] [--limit <n>] [--json]\n  Query Oko/Lake cross-source signal views.',
-  label: 'label <add|list|aspects> ...\n  add <session-id> --aspect <name> --value <v> [--note <text>] [--source <manual|model>] [--json] records a session label with provenance.\n  list [--session <id>] [--aspect <a>] [--runtime <r>] [--limit <n>] [--json] shows the latest assignment per session and aspect, newest first.\n  aspects [--json] summarizes distinct aspects, values, and labeled sessions.',
+  label: 'label <add|list|aspects> ...\n  add <session-id> --aspect <name> --value <v> [--note <text>] [--source <name[:detail]>] [--json] records a session label with provenance (manual, human, model, or brama, optional :detail).\n  list [--session <id>] [--aspect <a>] [--runtime <r>] [--limit <n>] [--json] shows the latest assignment per session and aspect, newest first.\n  aspects [--json] summarizes distinct aspects, values, and labeled sessions.',
   query: 'query [--json] "<sql>"\n  Execute operator-supplied SQL after loading canonical Lake views.',
   compact: 'compact [--source <runtime>] [--json]\n  Rebuild per-runtime Parquet mirrors; NDJSON remains authoritative.',
   'export-oko': 'export-oko [--full] [--reindex]\n  Materialize canonical sessions and optionally invoke Oko reindex.',
@@ -573,7 +573,7 @@ function cmdLabelAdd(rest) {
   if (parsed.positionals.length !== ONE) {
     throw new Error(
       'usage: transcript-lake label add <session-id> --aspect <name> --value <v>'
-      + ' [--note <text>] [--source <manual|model>] [--json]'
+      + ' [--note <text>] [--source <name[:detail]>] [--json]'
     );
   }
   const sessionId = String(parsed.positionals[ZERO]).trim();
