@@ -129,6 +129,10 @@ All four commands are read-only. `doctor` exits non-zero only for corrupt author
 transcript-lake ingest
 ```
 
+### Scheduled freshness
+
+The CLI never schedules itself; freshness comes from an external timer running `scripts/refresh-lake.sh` (incremental `ingest`, then `export-oko`). On macOS, install the packaged CLI first (`npm pack && npm install --global ./wisent-ai-transcript-lake-*.tgz`) because launchd has no TCC grant for `~/Documents`, then load a LaunchAgent with `StartInterval` that runs the installed `transcript-lake` binary from a wrapper outside the Documents tree (reference copy at `~/.local/bin/transcript-lake-refresh`, plist `com.wisent.transcript-lake-refresh`). The writer lease makes overlapping ticks fail fast, so the interval only trades freshness for load, never correctness.
+
 Expected: one JSON object containing `finishedAt`, `source`, `full`, `perRuntime`, `maskCounts`, `durationMs`, and `okoExport`. Supported stores contribute counts; absent stores are skipped. Success with no source stores creates an empty, valid run summary rather than fake events.
 
 Side effects are limited to the selected `LAKE_DATA`: cursors, masked NDJSON partitions when records exist, the last-ingest summary, and the derived Oko export. Vendor stores remain unchanged. The command makes no network request.
