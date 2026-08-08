@@ -1,6 +1,6 @@
 {
   "version": "\u0030.\u0031.\u0030",
-  "source": "head:eaea\u0031\u0030\u0032b\u0034\u0039d\u0038\u0030\u0033e\u0030\u0036\u0032d\u0037e\u0033\u0034\u0032\u0036e\u0037\u0036d\u0035a\u0039\u0034\u0033\u0030\u0035\u0038\u0032\u0035 parent of the carrying revision -- NOT PUBLISHED: no tag or immutable release artifact exists; this baseline records the public contract of the development revision carrying this file",
+  "source": "head:f\u0035\u0039\u0034\u0033\u0036\u0031ca\u0038\u0036e\u0036f\u0035\u0039\u0033\u0038c\u0034a\u0031\u0034b\u0030\u0039db\u0032\u0031f\u0036a\u0034a\u0036\u0037\u0038f\u0034 parent of the carrying revision -- NOT PUBLISHED: no tag or immutable release artifact exists; this baseline records the public contract of the development revision carrying this file",
   "surface": [
     "command:clean",
     "command:compact",
@@ -14,6 +14,7 @@
     "command:paths",
     "command:query",
     "command:rebuild",
+    "command:search",
     "command:sessions",
     "command:signals",
     "command:sources",

@@ -25,7 +25,7 @@ These commands never create configuration, start ingestion, repair state, contac
 
 ## Workflow: query evidence
 
-`transcript-lake query "<sql>"` loads the frozen local DuckDB views over the selected Lake and executes the supplied SQL. The query process does not mutate NDJSON, cursors, or source stores. DuckDB is an explicit optional prerequisite; absence is an actionable dependency failure, not a fallback to another engine.
+`transcript-lake query "<sql>"` loads the frozen local DuckDB views over the selected Lake and executes the supplied SQL. Named read commands (`sessions`, `events`, `search`, `stats`, `hooks`, `signals`) cover bounded common reads over the same views without operator SQL; `search` treats its term as literal text, escaping LIKE wildcards before matching. The query process does not mutate NDJSON, cursors, or source stores. DuckDB is an explicit optional prerequisite; absence is an actionable dependency failure, not a fallback to another engine.
 
 The canonical `events` view pins column names and types and tolerates only a torn final partition line during a concurrent read. Aggregate views expose sessions, tools, tokens, and hook decisions. User SQL can itself create external files or perform DuckDB mutations; the operator owns the supplied SQL. Transcript Lake does not label arbitrary SQL as read-only.
 
@@ -45,6 +45,7 @@ The canonical `events` view pins column names and types and tolerates only a tor
 | `ingest` | `LAKE_DATA` only | JSON summary; zero exit only when not partial | Actionable stderr, structured partial evidence when available, non-zero exit |
 | `rebuild` | Separate empty target only | Full replay and export in the new root | Current root preserved; invalid/non-empty target is non-zero |
 | `sessions` / `events` | None | Filtered normalized evidence | Non-zero dependency or input error |
+| `search` | None | Newest-first literal substring matches over event text | Non-zero dependency or input error |
 | `stats` / `hooks` | None | Bounded aggregates or hook decisions | Non-zero dependency or input error |
 | `query` | User SQL may have DuckDB-defined effects | DuckDB result | Non-zero dependency or SQL error |
 | `compact` | Derived Parquet only | Filterable per-runtime size/path report | Non-zero; NDJSON preserved |

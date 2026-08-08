@@ -28,6 +28,7 @@ Ingest and inspect normalized evidence:
 transcript-lake --data-dir "$LAKE" ingest
 transcript-lake --data-dir "$LAKE" sessions --limit 20
 transcript-lake --data-dir "$LAKE" events --type tool_call --limit 20
+transcript-lake --data-dir "$LAKE" search "ssh" --limit 20
 transcript-lake --data-dir "$LAKE" stats --days 7 --json
 transcript-lake --data-dir "$LAKE" hooks --decision block
 ```

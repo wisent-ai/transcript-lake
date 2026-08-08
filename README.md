@@ -127,6 +127,7 @@ The CLI is the canonical human and automation interface.
 | Safe recovery | `rebuild --to <empty-path> [--source <runtime>]` | Full replay into a separate empty Lake |
 | Inspect | `status [--json]` | Partition, cursor, last-ingest, and Oko freshness inventory |
 | Sessions and events | `sessions`, `events` | Filtered recent normalized records |
+| Text search | `search <text> [--runtime <r>] [--session <id>] [--type <t>] [--limit <n>] [--json]` | Newest-first literal substring matches over masked event text |
 | Statistics and signals | `stats`, `hooks`, `signals` | Usage aggregates, adaptive-hook decisions, and Oko/Lake correlations |
 | Advanced SQL | `query [--json] \"<sql>\"` | DuckDB result or actionable dependency error |
 | Compact | `compact [--source <runtime>] [--json]` | Per-runtime NDJSON-to-Parquet report |

@@ -35,7 +35,7 @@ No catalog example is billable, network-facing at runtime, or credentialed. Rele
 | Operator | Tour the complete installed command surface | CLI | Installed product; optional tools per command | Mixed, explicitly staged | [CLI tour](core/cli-tour.md) | Draft — execution pending |
 | Operator | Resume an incremental ingest | CLI | Existing valid Lake | Local mutation, provider-facing | [Incremental ingest](core/incremental-ingest.md) | Draft — execution pending |
 | Operator | Ingest only one runtime | CLI | Supported runtime store | Local mutation, provider-facing | [Select one runtime](core/select-one-runtime.md) | Draft — execution pending |
-| Analyst | Retrieve cross-runtime session evidence | CLI/DuckDB | Lake partitions; DuckDB | Read-only, external tool | [Query sessions](core/query-sessions.md) | Draft — execution pending |
+| Analyst | Retrieve cross-runtime session evidence and locate events by literal text | CLI/DuckDB | Lake partitions; DuckDB | Read-only, external tool | [Query sessions](core/query-sessions.md) | Draft — execution pending |
 | Analyst | Join Lake with Oko signal state | CLI/DuckDB | Lake, DuckDB SQLite extension, Oko index | Read-only, external tool | [Cross-source signals](integrations/duckdb/cross-source-signals.md) | Draft — execution pending |
 | Operator | Create and clean Parquet mirrors | CLI/DuckDB | Lake partitions; DuckDB | Derived mutation, external tool | [Compact to Parquet](operations/compact-to-parquet.md) | Draft — execution pending |
 | Oko operator | Materialize every supported runtime | CLI/files | Lake partitions | Derived mutation | [Export for Oko](integrations/oko/export-for-oko.md) | Draft — execution pending |

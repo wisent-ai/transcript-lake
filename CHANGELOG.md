@@ -8,6 +8,7 @@ All user-visible changes are recorded here. Transcript Lake uses Semantic Versio
 
 - Public product contract, release identity, onboarding, operational documentation, integration contracts, and canonical examples.
 - Public CLI now covers path discovery, source discovery, health checks, safe rebuild, bounded sessions/events/statistics/hooks, Oko/Lake signals, structured output, filtered compaction, and preview-first derived cleanup.
+- `transcript-lake search <text>` runs a bounded, newest-first, case-insensitive literal substring match over masked event text, with optional runtime, session, and type filters, so common text lookup no longer requires operator SQL. LIKE wildcards in the term are escaped and always match literally.
 
 ### Changed
 

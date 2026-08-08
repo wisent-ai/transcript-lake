@@ -130,8 +130,11 @@ and every string inside `extra` through one masker instance per run.
 ## Querying with DuckDB
 
 `transcript-lake query "<sql>"` runs DuckDB with the selected data root,
-loads `sql/views.sql`, then runs operator SQL. `sessions`, `events`, `stats`,
-and `hooks` expose bounded common queries without requiring SQL input.
+loads `sql/views.sql`, then runs operator SQL. `sessions`, `events`,
+`search`, `stats`, and `hooks` expose bounded common queries without
+requiring SQL input. `search` runs a case-insensitive substring match over
+the `text` column of the canonical `events` view and escapes LIKE
+wildcards in the operator's term, so the term always matches literally.
 
 Views defined by `sql/views.sql`:
 
@@ -208,8 +211,8 @@ event UUID.
   into `src/adapters/` implementing the frozen factory interface; nothing
   else changes.
 - **Semantic embeddings** — vector search over the lake waits on a local
-  embedding backend; until then the lake is lexical SQL only, and the Oko
-  index covers full-text search needs.
+  embedding backend; until then the lake offers lexical matching through
+  `search` and SQL, and the Oko index covers full-text search needs.
 - **Corpus-wide backfill** — builders never ingest the full history as part
   of development; the operator runs the first full ingest deliberately.
 
@@ -225,6 +228,7 @@ transcript-lake --data-dir "$LAKE" ingest
 transcript-lake --data-dir "$LAKE" ingest --source droid
 transcript-lake --data-dir "$LAKE" sessions --limit 20
 transcript-lake --data-dir "$LAKE" events --type tool_call --limit 20
+transcript-lake --data-dir "$LAKE" search "ssh" --limit 20
 transcript-lake --data-dir "$LAKE" stats --days 7
 transcript-lake --data-dir "$LAKE" hooks --decision block
 transcript-lake --data-dir "$LAKE" signals --report freshness

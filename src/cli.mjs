@@ -44,6 +44,7 @@ const USAGE = [
   'Read and analyze:',
   '  sessions [--runtime <r>] [--project <text>] [--limit <n>] [--json]',
   '  events [--runtime <r>] [--session <id>] [--type <type>] [--limit <n>] [--json]',
+  '  search <text> [--runtime <r>] [--session <id>] [--type <type>] [--limit <n>] [--json]',
   '  stats [--days <n>] [--runtime <r>] [--json]   usage summary',
   '  hooks [--decision <value>] [--tool <name>] [--limit <n>] [--json]',
   '  signals [--report <frustration|overlap|daily|freshness>] [--limit <n>] [--json]',
@@ -326,6 +327,7 @@ const COMMAND_HELP = {
   rebuild: 'rebuild --to <empty-path> [--source <runtime>]\n  Full replay into a different empty root; never mutates the current Lake.',
   sessions: 'sessions [--runtime <r>] [--project <text>] [--limit <n>] [--json]\n  List recent sessions through the canonical DuckDB view.',
   events: 'events [--runtime <r>] [--session <id>] [--type <type>] [--limit <n>] [--json]\n  List recent masked canonical events.',
+  search: 'search <text> [--runtime <r>] [--session <id>] [--type <type>] [--limit <n>] [--json]\n  Case-insensitive literal substring match over masked event text, newest first.',
   stats: 'stats [--days <n>] [--runtime <r>] [--json]\n  Summarize events, sessions, tools, and token counters.',
   hooks: 'hooks [--decision <value>] [--tool <name>] [--limit <n>] [--json]\n  Inspect adaptive-hook decisions.',
   signals: 'signals [--report <frustration|overlap|daily|freshness>] [--limit <n>] [--json]\n  Query Oko/Lake cross-source signal views.',
@@ -516,6 +518,30 @@ function cmdEvents(rest) {
     'SELECT ts, runtime, session_id, project, event_type, tool_name, model, tokens_in, tokens_out, '
     + 'substr(text, CAST(\'1\' AS INTEGER), CAST(\'240\' AS INTEGER)) AS text FROM events'
     + clause + ' ORDER BY ts DESC LIMIT ' + String(limit),
+    Boolean(parsed.options.json)
+  );
+}
+
+function cmdSearch(rest) {
+  const parsed = parseOptions(
+    'search', rest, ['--runtime', '--session', '--type', '--limit'], ['--json']
+  );
+  const term = parsed.positionals.join(' ').trim();
+  if (!term) throw new Error('usage: transcript-lake search [--json] <text>');
+  const runtime = requireRuntime(parsed.options.runtime);
+  const limit = boundedInteger(parsed.options.limit, '--limit', DEFAULT_LIMIT);
+  const literal = String(term)
+    .replaceAll('!', '!!')
+    .replaceAll('%', '!%')
+    .replaceAll('_', '!_');
+  const where = ['lower(text) LIKE lower(' + quoteSql('%' + literal + '%') + ") ESCAPE '!'"];
+  if (runtime) where.push('runtime = ' + quoteSql(runtime));
+  if (parsed.options.session) where.push('session_id = ' + quoteSql(parsed.options.session));
+  if (parsed.options.type) where.push('event_type = ' + quoteSql(parsed.options.type));
+  runDuckQuery(
+    'SELECT ts, runtime, session_id, event_type, '
+    + 'substr(text, CAST(\'1\' AS INTEGER), CAST(\'240\' AS INTEGER)) AS text FROM events WHERE '
+    + where.join(' AND ') + ' ORDER BY ts DESC LIMIT ' + String(limit),
     Boolean(parsed.options.json)
   );
 }
@@ -718,6 +744,7 @@ const COMMANDS = {
   rebuild: cmdRebuild,
   sessions: cmdSessions,
   events: cmdEvents,
+  search: cmdSearch,
   stats: cmdStats,
   hooks: cmdHooks,
   signals: cmdSignals,
