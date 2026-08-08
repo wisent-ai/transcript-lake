@@ -43,6 +43,7 @@ const MINUTES_PER_HOUR = N('60');
 const HOURS_PER_DAY = N('24');
 const CURSOR_WALK_DEPTH = N('4');
 const NEWLINE = '\n'.charCodeAt(ZERO);
+const PAD = N('26');
 const CONVERSATION_EVENTS = new Set([
   'user',
   'assistant',
