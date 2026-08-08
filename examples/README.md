@@ -32,17 +32,18 @@ No catalog example is billable, network-facing at runtime, or credentialed. Rele
 |---|---|---|---|---|---|---|
 | New operator | Install and create first observable archive | CLI | Clean supported host; local sessions optional | Local mutation, provider-facing | [First local archive](getting-started/first-local-archive.md) | Draft — execution pending |
 | Operator | Read safe zero-state guidance and product identity | CLI | Installed product | Read-only | [Inspect zero state](core/inspect-zero-state.md) | Draft — execution pending |
+| Operator | Tour the complete installed command surface | CLI | Installed product; optional tools per command | Mixed, explicitly staged | [CLI tour](core/cli-tour.md) | Draft — execution pending |
 | Operator | Resume an incremental ingest | CLI | Existing valid Lake | Local mutation, provider-facing | [Incremental ingest](core/incremental-ingest.md) | Draft — execution pending |
 | Operator | Ingest only one runtime | CLI | Supported runtime store | Local mutation, provider-facing | [Select one runtime](core/select-one-runtime.md) | Draft — execution pending |
 | Analyst | Retrieve cross-runtime session evidence | CLI/DuckDB | Lake partitions; DuckDB | Read-only, external tool | [Query sessions](core/query-sessions.md) | Draft — execution pending |
-| Analyst | Join Lake with Oko signal state | SQL/DuckDB | Lake, DuckDB SQLite extension, Oko index | Read-only, external tool | [Cross-source signals](integrations/duckdb/cross-source-signals.md) | Draft — execution pending |
-| Operator | Create Parquet mirrors | CLI/DuckDB | Lake partitions; DuckDB | Derived mutation, external tool | [Compact to Parquet](operations/compact-to-parquet.md) | Draft — execution pending |
+| Analyst | Join Lake with Oko signal state | CLI/DuckDB | Lake, DuckDB SQLite extension, Oko index | Read-only, external tool | [Cross-source signals](integrations/duckdb/cross-source-signals.md) | Draft — execution pending |
+| Operator | Create and clean Parquet mirrors | CLI/DuckDB | Lake partitions; DuckDB | Derived mutation, external tool | [Compact to Parquet](operations/compact-to-parquet.md) | Draft — execution pending |
 | Oko operator | Materialize every supported runtime | CLI/files | Lake partitions | Derived mutation | [Export for Oko](integrations/oko/export-for-oko.md) | Draft — execution pending |
 | Oko operator | Reindex Oko after export | CLI/process | Compatible `oko-cli` | Derived mutation, external tool | [Reindex Oko](integrations/oko/reindex-oko.md) | Draft — execution pending |
 | Hook maintainer | Ingest validated Tama segments without legacy duplication | CLI/files | Tama ready directory | Local mutation, provider-facing | [Import hook decisions](integrations/tama/import-hook-decisions.md) | Draft — execution pending |
-| Operator | Rebuild after source rewrite or cursor damage | CLI/files | Preserved old Lake; empty replacement root | Destructive/recovery | [Rebuild into an empty root](recovery/rebuild-into-empty-root.md) | Draft — execution pending |
-| Operator | Upgrade or roll back exact artifacts | npm/GitHub release | Immutable archive, checksum, backup | Destructive/recovery, network install | [Upgrade and rollback](operations/upgrade-and-rollback.md) | Draft — release pending |
-| Operator | Reset local state and uninstall | CLI/npm/files | Stopped schedulers | Destructive/recovery | [Reset and uninstall](operations/reset-and-uninstall.md) | Draft — execution pending |
+| Operator | Rebuild after source rewrite or cursor damage | CLI | Preserved old Lake; empty replacement root | Destructive/recovery | [Rebuild into an empty root](recovery/rebuild-into-empty-root.md) | Draft — execution pending |
+| Operator | Upgrade or roll back exact artifacts | CLI/npm/GitHub release | Immutable archive, checksum, backup | Destructive/recovery, network install | [Upgrade and rollback](operations/upgrade-and-rollback.md) | Draft — release pending |
+| Operator | Clean derived state and uninstall | CLI/npm | Stopped writers | Destructive/recovery | [Reset and uninstall](operations/reset-and-uninstall.md) | Draft — execution pending |
 | Release owner | Build attributable immutable release assets | Release script | Clean exact tag; qualification approval | Local mutation, publication preparation | [Build release assets](operations/build-release-assets.md) | Draft — release pending |
 | Operator | Diagnose invalid input, dependency outage, partial ingest, and writer conflict | CLI | Scenario-specific | Read-only or isolated local mutation | [Representative failures](failures/representative-failures.md) | Draft — execution pending |
 | User | Ingest Gemini or Qwen | — | — | — | Not supported; see [product boundaries](../README.md#explicit-non-goals) | Not supported |
@@ -53,8 +54,8 @@ No catalog example is billable, network-facing at runtime, or credentialed. Rele
 
 1. Choose one row matching the desired outcome.
 2. Read its status, risk, environment, preconditions, inputs, side effects, and failure path before copying commands.
-3. Use an isolated `LAKE_DATA` for local mutation, recovery, or failure work.
-4. Run only the stated public commands.
+3. Pass an isolated root with global `--data-dir` for local mutation, recovery, or failure work.
+4. Run the stated installed `transcript-lake` commands; source-tree scripts appear only in the release-maintainer example.
 5. Compare the observable result with the expected shape; do not interpret exit zero alone as success.
 6. Follow the explicit cleanup or retention decision.
 

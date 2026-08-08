@@ -12,8 +12,8 @@
 **Invalid runtime, no mutation**
 
 ```sh
-export LAKE_DATA="$(mktemp -d)/must-remain-absent"
-transcript-lake ingest --source unsupported-runtime
+LAKE="$(mktemp -d)/must-remain-absent"
+transcript-lake --data-dir "$LAKE" ingest --source unsupported-runtime
 ```
 
 Expected: supported identifiers are named, exit is non-zero, and the selected root remains absent.
@@ -21,7 +21,7 @@ Expected: supported identifiers are named, exit is non-zero, and the selected ro
 **Missing DuckDB, no mutation**
 
 ```sh
-PATH="/usr/bin:/bin" transcript-lake query "SELECT * FROM sessions"
+PATH="/usr/bin:/bin" /absolute/path/to/transcript-lake --data-dir "$LAKE" sessions
 ```
 
 Expected: a named DuckDB dependency error and non-zero exit. Use this only when `transcript-lake` itself is addressed by an absolute path or remains on that restricted `PATH`.
@@ -31,7 +31,7 @@ Expected: a named DuckDB dependency error and non-zero exit. Use this only when 
 Run ordinary incremental ingest and inspect its real result; do not corrupt a source to manufacture evidence:
 
 ```sh
-transcript-lake ingest
+transcript-lake --data-dir "$LAKE" ingest
 ```
 
 Expected on an organic source/parser failure: parseable summary with `partial: true`, non-zero aggregate failures, affected per-runtime failures, and non-zero exit. Previously flushed checkpoints remain.
@@ -39,6 +39,15 @@ Expected on an organic source/parser failure: parseable summary with `partial: t
 **Writer contention**
 
 If an ingest is already legitimately running, a second ordinary ingest against the same root should report the live lock owner and exit non-zero. Do not create or edit lock files manually.
+
+**Health classification**
+
+```sh
+transcript-lake --data-dir "$LAKE" doctor --json
+transcript-lake --data-dir "$LAKE" status --json
+```
+
+Expected: optional dependency absence is a warning; corrupt cursors or summaries are non-zero errors without automatic repair.
 
 9. **Verification:** A failure is verified by its classified message, non-zero exit, and bounded state effect—not by matching an implementation stack trace. Secret-bearing transcript payloads never appear in diagnostics.
 10. **Recovery:** Correct invalid input; install pinned DuckDB; retain and diagnose partial source failures; let a live writer finish. Remove a stale lock only through product recovery behavior, never manual deletion while ownership is uncertain.

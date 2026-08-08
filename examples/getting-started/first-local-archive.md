@@ -13,14 +13,17 @@
 git clone https://github.com/wisent-ai/transcript-lake.git
 cd transcript-lake
 npm install --global .
-export LAKE_DATA="$(mktemp -d)/lake"
+LAKE="$(mktemp -d)/lake"
 transcript-lake
-transcript-lake status
-transcript-lake ingest
-transcript-lake status
+transcript-lake --data-dir "$LAKE" paths
+transcript-lake --data-dir "$LAKE" sources
+transcript-lake --data-dir "$LAKE" doctor
+transcript-lake --data-dir "$LAKE" ingest
+transcript-lake --data-dir "$LAKE" sessions --limit 10
+transcript-lake --data-dir "$LAKE" stats --days 7
 ```
 
-9. **Verification:** The first invocation prints purpose and safe next commands without creating `LAKE_DATA`. The first status reports no partitions. Ingest prints one JSON object with `partial: false` and `failures: 0` when every discovered source succeeded. Final status reports a last-ingest timestamp and cursors; partition counts are non-zero only when supported records existed.
+9. **Verification:** The first invocation prints purpose and safe next commands without creating the selected root. Paths, sources, and doctor expose configuration and availability without mutation. Ingest prints one JSON object with `partial: false` and `failures: 0` when every discovered source succeeded. Sessions and stats expose normalized evidence only when supported records existed.
 10. **Failure path:** If `partial` is true or exit is non-zero, retain the root and read stderr plus per-runtime failure counts. Use [representative failures](../failures/representative-failures.md); do not delete evidence or rerun full mode into this root.
 11. **Cleanup or off-switch:** Stop future invocations, retain the printed temporary parent for inspection, then remove it only after deciding the evidence is unnecessary. `npm uninstall --global @wisent-ai/transcript-lake` removes the executable but not Lake data.
 12. **Next:** Continue with [incremental ingest](../core/incremental-ingest.md) or [query sessions](../core/query-sessions.md).

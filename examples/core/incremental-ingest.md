@@ -10,10 +10,11 @@
 8. **Steps:**
 
 ```sh
-export LAKE_DATA="/absolute/operator-owned/lake"
-transcript-lake status
-transcript-lake ingest
-transcript-lake status
+LAKE="/absolute/operator-owned/lake"
+transcript-lake --data-dir "$LAKE" doctor
+transcript-lake --data-dir "$LAKE" ingest
+transcript-lake --data-dir "$LAKE" status --json
+transcript-lake --data-dir "$LAKE" events --limit 20
 ```
 
 9. **Verification:** Ingest emits a single JSON summary. `partial` is false and `failures` is zero for a complete run. `events` counts only newly accepted events; an unchanged rerun reports no new events. Final cursor freshness and last-ingest time advance while unchanged partitions remain append-only.

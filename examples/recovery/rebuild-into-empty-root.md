@@ -10,11 +10,12 @@
 8. **Steps:**
 
 ```sh
-export OLD_LAKE_DATA="/absolute/operator-owned/lake-failed"
-LAKE_DATA="$OLD_LAKE_DATA" transcript-lake status
-export LAKE_DATA="/absolute/operator-owned/lake-rebuild"
-transcript-lake ingest --full
-transcript-lake status
+OLD="/absolute/operator-owned/lake-failed"
+NEW="/absolute/operator-owned/lake-rebuild"
+transcript-lake --data-dir "$OLD" doctor --json
+transcript-lake --data-dir "$OLD" rebuild --to "$NEW"
+transcript-lake --data-dir "$NEW" doctor
+transcript-lake --data-dir "$NEW" status
 ```
 
 9. **Verification:** The replacement root did not exist before the command. Full ingest emits `full: true`, `partial: false`, and zero failures for a complete rebuild. Status shows fresh cursors and partition inventory. Compare only aggregate inventories and intended date/runtime coverage; do not expose raw transcript text in evidence.

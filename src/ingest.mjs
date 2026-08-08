@@ -18,6 +18,7 @@ const [TEXT_CAP, BATCH_EVENTS, EXTRA_DEPTH] = ['65536', '512', '4'].map(N);
 const NEWLINE = '\n'.charCodeAt(ZERO);
 const ADAPTER_NAMES = ['claude', 'codex', 'omp', 'droid', 'kimi'];
 const HOOKS = 'hooks';
+export const SUPPORTED_SOURCES = Object.freeze([...ADAPTER_NAMES, HOOKS]);
 const DATE_SHAPE = new RegExp('^[' + '0-9' + ']{' + '4' + '}-[' + '0-9' + ']{' + '2' + '}-[' + '0-9' + ']{' + '2' + '}');
 
 export function resolveDataDir(opts = {}) {
@@ -238,7 +239,7 @@ async function ingestLocked(opts = {}) {
   const started = Date.now();
   const dataDir = resolveDataDir(opts);
   const machine = hostname();
-  const known = [...ADAPTER_NAMES, HOOKS];
+  const known = SUPPORTED_SOURCES;
   const requested = opts.source ? String(opts.source) : null;
   if (requested && !known.includes(requested)) {
     throw new Error('unknown source "' + requested + '" (expected one of: ' + known.join(', ') + ')');

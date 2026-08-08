@@ -87,24 +87,32 @@ There is not yet a supported immutable release. The current **development channe
 ```sh
 git clone https://github.com/wisent-ai/transcript-lake.git
 cd transcript-lake
-node src/cli.mjs
+npm install --global .
+transcript-lake
 ```
 
-With no command, the CLI prints its purpose, supported starting command, and help. It must not create Lake state.
+With no command, the CLI prints its purpose and safe starting commands without creating Lake state. Inspect the environment before mutation:
+
+```sh
+transcript-lake paths
+transcript-lake sources
+transcript-lake doctor
+transcript-lake --data-dir "$HOME/.transcript-lake" status
+```
 
 To produce the first local result:
 
 ```sh
-export LAKE_DATA="$HOME/.transcript-lake"
-node src/cli.mjs ingest
-node src/cli.mjs status
+transcript-lake --data-dir "$HOME/.transcript-lake" ingest
+transcript-lake --data-dir "$HOME/.transcript-lake" sessions --limit 10
+transcript-lake --data-dir "$HOME/.transcript-lake" stats --days 7
 ```
 
-Expected result: `ingest` prints a JSON summary containing per-runtime counts, masking counts, duration, and Oko-export status. `status` prints the data directory, partition inventory, cursor freshness, last-ingest summary, and Oko freshness. If no supported source store exists, the result is an empty but valid Lake rather than fabricated data.
+Expected result: `ingest` prints a JSON summary containing per-runtime counts, masking counts, duration, and Oko-export status. `sessions` lists recent normalized conversations and `stats` aggregates local evidence through DuckDB. If no supported source store exists, ingest produces an empty but valid Lake rather than fabricated data.
 
-This workflow reads local transcripts and creates or updates `LAKE_DATA`. Remove only that operator-selected directory to reset the local Lake; vendor transcripts are never changed.
+This workflow reads local transcripts and creates or updates only the selected data root. Vendor transcripts are never changed. `clean` previews removal of rebuildable derived data; authoritative partitions require an explicit operator retention decision outside the CLI.
 
-Continue with the [full onboarding guide](docs/ONBOARDING.md) and the [canonical examples catalog](examples/README.md).
+Continue with the [CLI tour](examples/core/cli-tour.md), [full onboarding guide](docs/ONBOARDING.md), and [canonical examples catalog](examples/README.md).
 
 ## Primary interfaces
 
@@ -112,26 +120,30 @@ The CLI is the canonical human and automation interface.
 
 | Operation | Interface | Observable result |
 |---|---|---|
-| Guidance | `transcript-lake`, `transcript-lake help`, `transcript-lake --help` | Human-readable safe starting instructions |
-| Identity | `transcript-lake --version` | Canonical product version |
-| Ingest | `transcript-lake ingest [--source <runtime>] [--full]` | Structured run summary and durable cursors/partitions |
-| Inspect | `transcript-lake status` | Human-readable inventory and freshness |
-| Query | `transcript-lake query "<sql>"` | DuckDB result or actionable dependency error |
-| Compact | `transcript-lake compact` | Per-runtime NDJSON-to-Parquet report |
-| Export | `transcript-lake export-oko [--full] [--reindex]` | Structured export summary; optional Oko reindex result |
-| Refresh Oko | `transcript-lake oko-refresh` | Oko reindex status or corrective installation guidance |
+| Guidance and identity | `transcript-lake help [command]`, `--version` | Exact syntax, safety guidance, or canonical version |
+| Paths and discovery | `paths`, `sources` | Resolved state/integration paths and available runtime stores |
+| Health | `doctor [--json]` | Cursor, source, DuckDB, and Oko checks with meaningful exit status |
+| Ingest | `ingest [--source <runtime>] [--full]` | Structured run summary and durable cursors/partitions |
+| Safe recovery | `rebuild --to <empty-path> [--source <runtime>]` | Full replay into a separate empty Lake |
+| Inspect | `status [--json]` | Partition, cursor, last-ingest, and Oko freshness inventory |
+| Sessions and events | `sessions`, `events` | Filtered recent normalized records |
+| Statistics and signals | `stats`, `hooks`, `signals` | Usage aggregates, adaptive-hook decisions, and Oko/Lake correlations |
+| Advanced SQL | `query [--json] \"<sql>\"` | DuckDB result or actionable dependency error |
+| Compact | `compact [--source <runtime>] [--json]` | Per-runtime NDJSON-to-Parquet report |
+| Export and refresh Oko | `export-oko [--full] [--reindex]`, `oko-refresh` | Export summary and optional Oko reindex |
+| Derived cleanup | `clean [--target <parquet|oko|all>] [--apply]` | Dry-run by default; removes rebuildable data only with `--apply` |
 
 Canonical event and adapter interfaces are machine contracts documented in [the architecture contract](docs/LAKE.md). Every supported operation maps to [one canonical example](examples/README.md).
 
 ## Operational model
 
-- **Configuration:** `LAKE_DATA` selects the only mutable state root. `OKO_CLI` optionally selects the Oko executable. Unset values use documented local defaults; there are no credential fallbacks.
+- **Configuration:** global `--data-dir <path>` selects the state root for one invocation; `LAKE_DATA` remains the automation default. `OKO_CLI` optionally selects the Oko executable. Unset values use documented local defaults; there are no credential fallbacks.
 - **State ownership:** vendor runtimes own source transcripts; Transcript Lake alone owns `LAKE_DATA`; Oko owns its SQLite index and imports a derived Lake export read-only.
 - **Credentials:** core ingestion needs none. Transcript contents may contain credentials, so masking occurs before durable Lake writes. Do not share a Lake directory as though it were anonymized data.
 - **Upgrades:** use an immutable release once available. State layout compatibility, rollback, and release channels are defined in [release policy](docs/RELEASES.md).
-- **Observability:** `ingest` emits structured counts; `status` reports partitions, cursor freshness, masking totals, and Oko freshness.
-- **Recovery:** rerun incremental ingest after interruption. A source truncation, same-size rewrite, or damaged cursor is rejected before replay; preserve the current Lake and run `--full` against a separate empty `LAKE_DATA` root. Back up state before replacing or deleting anything.
-- **Retention:** no automatic deletion is performed. The operator owns retention and deletion of Lake data.
+- **Observability:** `paths`, `sources`, `doctor`, `status --json`, and structured mutation summaries expose configuration, availability, freshness, counts, and failures.
+- **Recovery:** rerun incremental ingest after interruption. A source truncation, same-size rewrite, or damaged cursor is rejected before replay; preserve the current Lake and use `rebuild --to <empty-path>` for a separate full reconstruction.
+- **Retention:** no automatic authoritative deletion is performed. `clean` handles only rebuildable Parquet and Oko artifacts, previews by default, and requires `--apply`.
 - **Integrations:** capability, dependency, failure, and removal contracts are in [integration contracts](docs/INTEGRATIONS.md).
 
 ## Project status and support

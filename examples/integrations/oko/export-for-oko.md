@@ -10,13 +10,14 @@
 8. **Steps:**
 
 ```sh
-export LAKE_DATA="/absolute/operator-owned/lake"
-transcript-lake export-oko
-transcript-lake export-oko
-transcript-lake export-oko --full
+LAKE="/absolute/operator-owned/lake"
+transcript-lake --data-dir "$LAKE" export-oko
+transcript-lake --data-dir "$LAKE" export-oko
+transcript-lake --data-dir "$LAKE" export-oko --full
+transcript-lake --data-dir "$LAKE" paths
 ```
 
 9. **Verification:** Each command emits one JSON summary. The first reports incremental writes for changed sessions. The unchanged second run reports no rewritten session files. Full mode reports `mode: full`, all materialized session/record counts, and pruned derived files. Rows declare `lake_schema: oko-import-v1` and deterministic event UUIDs.
 10. **Failure path:** A malformed Lake row aborts before advancing export cursors; full mode removes its staging tree and does not prune the prior export. Source partition replacement forces full mode rather than unsafe tail import. Preserve authoritative NDJSON and diagnostic output.
-11. **Cleanup or off-switch:** Stop exporting. After disconnecting Oko and other readers, delete only `LAKE_DATA/exports/oko`; rerunning full export rebuilds it.
+11. **Cleanup or off-switch:** Stop exporting. After disconnecting Oko and other readers, run `clean --target oko` to preview the export and staging paths, then add `--apply` only when removal is intended.
 12. **Next:** [Reindex Oko](reindex-oko.md) or inspect files through Oko's configured peer root.

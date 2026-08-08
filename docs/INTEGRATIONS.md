@@ -80,16 +80,18 @@ No credential or network service is required. Removing the integration means sto
 
 ## DuckDB integration
 
-DuckDB extends two stable core capabilities:
+DuckDB extends stable optional capabilities:
 
-- execute operator SQL over pinned local views;
-- create additive per-runtime Parquet mirrors.
+- bounded `sessions`, `events`, `stats`, and `hooks` commands;
+- named Oko/Lake `signals` reports;
+- arbitrary operator SQL over pinned local views;
+- additive, runtime-filterable Parquet mirrors.
 
 Configuration is executable discovery through `PATH`; there is no endpoint, credential, retry, or silent alternate engine. Supported compatibility is DuckDB CLI `1.5.x`. Missing binary, SQL error, extension error, or output conflict returns non-zero and preserves authoritative NDJSON.
 
-Core views require no network. `sql/signals.sql` optionally installs and loads DuckDB's SQLite extension and may therefore require extension availability or network access in a fresh DuckDB installation. It attaches the local Oko index read-only. Operators must review arbitrary SQL because DuckDB itself can write files or attach mutable databases beyond Transcript Lake's core guarantees.
+Core views require no network. `signals` loads `sql/signals.sql`, which may install DuckDB's SQLite extension and therefore may need network access on a fresh installation. It attaches the local Oko index read-only and selects one named report. Arbitrary `query` SQL is not sandboxed and may have DuckDB-defined write effects.
 
-Removal is simply omission of query/compact workflows and deletion of derived Parquet after readers stop. Ingest, masking, cursors, status, and Oko export remain usable.
+Removal is omission of analytics/compaction workflows and, after readers stop, `clean --target parquet --apply`. Ingest, masking, cursors, discovery, health, status, and Oko export remain usable without DuckDB.
 
 ## Oko integration
 

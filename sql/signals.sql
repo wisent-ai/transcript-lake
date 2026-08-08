@@ -2,8 +2,8 @@
 -- Cross-source signal queries: lake views joined to the Oko transcript index.
 -- Load sql/views.sql first (after SET VARIABLE lake_data): the queries below
 -- reference the lake views (sessions, hook_decisions, events).
--- Every statement is standalone: run the INSTALL / LOAD / ATTACH preamble,
--- then any single query on its own.
+-- The preamble and named view definitions load as one installed command asset;
+-- `transcript-lake signals --report <name>` selects one view afterward.
 --
 -- REQUIRES-OKO: statements tagged like this read the attached Oko index and
 -- fail gracefully when the sqlite database is absent on this machine; the
@@ -23,6 +23,7 @@ ATTACH IF NOT EXISTS
 -- session (word, group, severity, count); weight them by severity and join
 -- back to the lake view for runtime / project / span / message volume.
 -- Oko cwd fills in when the lake has not ingested that conversation yet.
+CREATE OR REPLACE VIEW oko_frustration AS
 SELECT
   f.sessionId AS session_id,
   sum(f."count" * CASE f.severity
@@ -49,6 +50,7 @@ LIMIT CAST('25' AS INTEGER);
 -- were blocked by an adaptive hook, how many show frustration terms in the
 -- Oko index, and how many are both. A large overlap suggests blocking
 -- pressure and user frustration travel together.
+CREATE OR REPLACE VIEW hook_frustration_overlap AS
 WITH hook_blocked AS (
   SELECT DISTINCT session_id
   FROM hook_decisions
@@ -68,6 +70,7 @@ SELECT
 -- REQUIRES-OKO: the same correlation as a per-day series. Frustration days
 -- come from the term tally last_seen clock (epoch seconds); block days come
 -- from lake hook telemetry. FULL JOIN keeps days present on only one side.
+CREATE OR REPLACE VIEW hook_frustration_daily AS
 WITH blocks_daily AS (
   SELECT
     CAST(ts AS DATE) AS day,
@@ -102,6 +105,7 @@ LIMIT CAST('30' AS INTEGER);
 -- runtime, so drift between the two pipelines is visible at a glance.
 -- items = indexed conversation count on the Oko row, distinct ingested
 -- conversation count on each lake row.
+CREATE OR REPLACE VIEW oko_lake_freshness AS
 SELECT
   'oko-index' AS source,
   CAST(to_timestamp(max(mtime)) AS TIMESTAMP) AS newest_activity,

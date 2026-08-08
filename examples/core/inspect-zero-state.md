@@ -11,11 +11,15 @@
 
 ```sh
 PARENT="$(mktemp -d)"
-export LAKE_DATA="$PARENT/not-created"
+LAKE="$PARENT/not-created"
 transcript-lake
 transcript-lake --help
+transcript-lake help doctor
 transcript-lake --version
-transcript-lake status
+transcript-lake --data-dir "$LAKE" paths
+transcript-lake --data-dir "$LAKE" sources
+transcript-lake --data-dir "$LAKE" doctor --json
+transcript-lake --data-dir "$LAKE" status --json
 ```
 
 9. **Verification:** Help states the product purpose, safe starting commands, supported operations, state default, and help URL. Version is a Semantic Versioning value matching the installed package. Status names the selected path and reports no partitions, cursors, or last ingest. The `not-created` directory remains absent.

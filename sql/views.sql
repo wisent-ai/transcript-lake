@@ -57,8 +57,8 @@ FROM read_ndjson_auto(
 -- One row per session: identity, span, message mix, summed usage counters.
 CREATE OR REPLACE VIEW sessions AS
 SELECT
+  runtime,
   session_id,
-  min(runtime)  AS runtime,
   max(project)  AS project,
   min(ts)       AS first_ts,
   max(ts)       AS last_ts,
@@ -72,7 +72,7 @@ SELECT
   max(extra ->> '$.source_stem_hash') AS oko_session_hash
 FROM events
 WHERE session_id IS NOT NULL
-GROUP BY session_id;
+GROUP BY runtime, session_id;
 
 -- Tool usage per day / runtime / tool.
 CREATE OR REPLACE VIEW tools_daily AS

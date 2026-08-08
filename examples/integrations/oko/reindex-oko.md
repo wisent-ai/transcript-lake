@@ -10,13 +10,14 @@
 8. **Steps:**
 
 ```sh
-export LAKE_DATA="/absolute/operator-owned/lake"
-export OKO_CLI="$(command -v oko-cli)"
-transcript-lake export-oko --reindex
-transcript-lake oko-refresh
+LAKE="/absolute/operator-owned/lake"
+transcript-lake --data-dir "$LAKE" doctor
+transcript-lake --data-dir "$LAKE" export-oko --reindex
+transcript-lake --data-dir "$LAKE" oko-refresh
+transcript-lake --data-dir "$LAKE" signals --report freshness
 ```
 
 9. **Verification:** Export stdout remains one parseable JSON object and includes reindex `{ ran: true, status: 0 }`. Both commands exit zero only when Oko reindex succeeds. Oko search or its transcript index inventory then exposes current Lake-export sessions.
 10. **Failure path:** If `oko-cli` is absent, `oko-refresh` names the dependency and exits non-zero. If explicit reindex cannot start or Oko exits non-zero, `export-oko --reindex` preserves its export summary, records reindex failure, and exits non-zero. Exported files remain available for a later retry.
-11. **Cleanup or off-switch:** Stop invoking reindex or unset `OKO_CLI`. Disconnect the export in Oko before deleting derived files. Oko owns its index cleanup.
+11. **Cleanup or off-switch:** Stop invoking reindex. Disconnect the export in Oko, then use `clean --target oko` to preview derived cleanup. Oko owns its index cleanup.
 12. **Next:** Use Oko search or [cross-source signals](../duckdb/cross-source-signals.md).

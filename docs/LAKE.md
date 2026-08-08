@@ -129,8 +129,9 @@ and every string inside `extra` through one masker instance per run.
 
 ## Querying with DuckDB
 
-`node src/cli.mjs query "<sql>"` runs DuckDB with `SET VARIABLE lake_data`
-pointing at the data directory, sources `sql/views.sql`, then runs your SQL.
+`transcript-lake query "<sql>"` runs DuckDB with the selected data root,
+loads `sql/views.sql`, then runs operator SQL. `sessions`, `events`, `stats`,
+and `hooks` expose bounded common queries without requiring SQL input.
 
 Views defined by `sql/views.sql`:
 
@@ -138,9 +139,9 @@ Views defined by `sql/views.sql`:
   row came from). The reader pins the frozen column list explicitly, so
   schema inference can never drift, and skips a torn final line while an
   ingest is appending.
-- `sessions` — one row per conversation: runtime, project, first and last
-  timestamps, message and tool counts, summed usage counters, and
-  `oko_session_hash`, the aggregate one-way source-stem alias.
+- `sessions` — one row per runtime-native conversation identity: runtime,
+  project, first and last timestamps, message and tool counts, summed usage
+  counters, and `oko_session_hash`, the aggregate one-way source-stem alias.
 - `tools_daily` — tool-call volume per day, runtime, and tool.
 - `tokens_daily` — usage counters summed per day, runtime, and model.
 - `hook_decisions` — the adaptive-hook decision stream (runtime `hooks`)
@@ -154,18 +155,15 @@ points the reader at it only while the lake has no partitions at all. As soon
 as one partition exists, the views read the live glob directly, and partition
 files created later are visible to every subsequent query without reloading.
 
-`sql/signals.sql` layers cross-source queries on top: it installs and loads
-the sqlite extension, attaches the Oko transcript index read-only, and ships
-a severity-weighted frustration leaderboard joined to lake sessions, a
-hook-block versus frustration overlap summary with a per-day series, and a
-freshness comparison between the Oko index and each lake runtime. The join
-tries the native session id, then compares the source-stem digest with a
-digest of Oko's session key; plaintext aliases are never persisted. Remote
-rollout rows absent from this lake are identified as Codex by Oko's naming
-convention, while their lake-backed span and message fields remain null.
-Statements touching the `oko` schema are tagged `REQUIRES-OKO` in comments
-and are the only ones that fail when the index database is absent;
-everything else keeps working.
+`sql/signals.sql` installs and loads DuckDB's SQLite extension, attaches the
+Oko transcript index read-only, and creates named cross-source views:
+`oko_frustration`, `hook_frustration_overlap`, `hook_frustration_daily`, and
+`oko_lake_freshness`. `transcript-lake signals --report <name>` selects those
+views through the installed CLI, so examples never depend on source-tree SQL.
+The join tries native session identity, then compares the source-stem digest
+with a digest of Oko's session key; plaintext aliases are never persisted.
+Statements touching the `oko` schema are tagged `REQUIRES-OKO` and fail when
+the index is absent without affecting Lake-only commands.
 
 `compact` converts each runtime partition directory to Parquet under
 `LAKE_DATA/parquet/runtime=<r>/` and reports both sizes. The NDJSON originals
@@ -217,27 +215,29 @@ event UUID.
 
 ## Operating instructions
 
-```
-export LAKE_DATA=~/.transcript-lake        # optional; matches the built-in path
+```sh
+LAKE="$HOME/.transcript-lake"
 
-node src/cli.mjs ingest                    # ingest and refresh the Oko export
-node src/cli.mjs ingest --source droid     # one runtime, then refresh export
-node src/cli.mjs ingest --full             # full import; LAKE_DATA must be empty
-node src/cli.mjs status                    # partitions, cursors, mask counts
-node src/cli.mjs query "FROM sessions ORDER BY last_ts DESC"
-node src/cli.mjs query "FROM blocks_by_hook"
-node src/cli.mjs compact                   # Parquet mirror per runtime
-node src/cli.mjs export-oko                # incremental export without ingest
-node src/cli.mjs export-oko --full         # rebuild the complete Oko import
-node src/cli.mjs export-oko --reindex      # export and trigger Oko indexing
-node src/cli.mjs oko-refresh               # reindex only
+transcript-lake --data-dir "$LAKE" paths
+transcript-lake --data-dir "$LAKE" sources
+transcript-lake --data-dir "$LAKE" doctor
+transcript-lake --data-dir "$LAKE" ingest
+transcript-lake --data-dir "$LAKE" ingest --source droid
+transcript-lake --data-dir "$LAKE" sessions --limit 20
+transcript-lake --data-dir "$LAKE" events --type tool_call --limit 20
+transcript-lake --data-dir "$LAKE" stats --days 7
+transcript-lake --data-dir "$LAKE" hooks --decision block
+transcript-lake --data-dir "$LAKE" signals --report freshness
+transcript-lake --data-dir "$LAKE" query "FROM tokens_daily ORDER BY day DESC"
+transcript-lake --data-dir "$LAKE" compact --source droid
+transcript-lake --data-dir "$LAKE" export-oko --reindex
+transcript-lake --data-dir "$LAKE" clean --target all
 ```
 
-Signals need the views loaded first; from a raw DuckDB shell:
-
-```
-duckdb -c "SET VARIABLE lake_data='$HOME/.transcript-lake'; $(cat sql/views.sql) $(cat sql/signals.sql)"
-```
+For recovery, preserve the current root and use
+`transcript-lake --data-dir "$LAKE" rebuild --to <empty-path>`. Applied
+`clean` removes only rebuildable Parquet/Oko data and shares the state writer
+lease with ingest, export, and compaction.
 
 Ingest is safe to re-run at any time: cursors make it incremental, masking is
 idempotent, and partitions are append-only per source file and day.

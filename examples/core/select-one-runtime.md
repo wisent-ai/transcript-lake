@@ -10,9 +10,10 @@
 8. **Steps:**
 
 ```sh
-export LAKE_DATA="/absolute/operator-owned/lake"
-transcript-lake ingest --source codex
-transcript-lake status
+LAKE="/absolute/operator-owned/lake"
+transcript-lake --data-dir "$LAKE" sources
+transcript-lake --data-dir "$LAKE" ingest --source codex
+transcript-lake --data-dir "$LAKE" sessions --runtime codex --limit 20
 ```
 
 9. **Verification:** The structured ingest summary contains only the `codex` entry under per-runtime results. No other runtime cursor advances. A valid empty Codex store is a successful zero-event result, not a fabricated session.

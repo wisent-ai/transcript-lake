@@ -28,6 +28,7 @@ import {
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { createInterface } from 'node:readline';
+import { openWriterLease } from './cursors.mjs';
 
 const N = (s) => Number(s);
 const ZERO = N('0');
@@ -51,10 +52,10 @@ const CONVERSATION_EVENTS = new Set([
   'meta',
 ]);
 
-function lakeDataDir() {
-  const fromEnv = process.env.LAKE_DATA;
-  if (fromEnv) return fromEnv;
-  return join(homedir(), '.transcript-lake');
+function lakeDataDir(options = {}) {
+  return options.dataDir
+    || process.env.LAKE_DATA
+    || join(homedir(), '.transcript-lake');
 }
 
 function okoSupportDir() {
@@ -409,10 +410,10 @@ async function fullExport(partitions, outputRoot, stagingRoot, tally) {
   return { sessions: sessions.size, records, written, unchanged, pruned, mode: 'full' };
 }
 
-export async function exportOko(opts) {
+async function exportOkoLocked(opts) {
   const options = opts && typeof opts === 'object' ? opts : {};
   const startedAt = Date.now();
-  const dataDir = lakeDataDir();
+  const dataDir = lakeDataDir(options);
   const outputRoot = options.outputRoot || join(dataDir, 'exports', 'oko');
   const stagingRoot = join(dataDir, 'staging', 'oko-export');
   const cursorFile = join(outputRoot, 'export-cursors.json');
@@ -461,6 +462,17 @@ export async function exportOko(opts) {
   if (tally.lastError) summary.lastError = tally.lastError;
   if (options.reindex) summary.reindex = runReindex();
   return summary;
+}
+
+export async function exportOko(opts) {
+  const options = opts && typeof opts === 'object' ? opts : {};
+  const dataDir = lakeDataDir(options);
+  const lease = openWriterLease(dataDir);
+  try {
+    return await exportOkoLocked({ ...options, dataDir });
+  } finally {
+    lease.close();
+  }
 }
 
 // A flagless reindex discovers the Lake export root and remains incremental:

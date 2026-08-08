@@ -10,13 +10,14 @@
 8. **Steps:**
 
 ```sh
-export LAKE_DATA="/absolute/operator-owned/lake"
-transcript-lake status
-transcript-lake compact
-transcript-lake status
+LAKE="/absolute/operator-owned/lake"
+transcript-lake --data-dir "$LAKE" status
+transcript-lake --data-dir "$LAKE" compact --source codex --json
+transcript-lake --data-dir "$LAKE" paths
+transcript-lake --data-dir "$LAKE" clean --target parquet
 ```
 
 9. **Verification:** The compact report lists each runtime that had source partitions, output path, source bytes, and Parquet bytes. Status continues to report the same authoritative partitions and now reports derived Parquet inventory. Queries over NDJSON remain available.
 10. **Failure path:** Missing DuckDB, insufficient disk, malformed source rows, or output write failure exits non-zero. Preserve NDJSON. Remove only incomplete derived output after confirming no reader is using it, then correct the dependency or capacity issue.
-11. **Cleanup or off-switch:** Stop compact invocations. Parquet is rebuildable and may be deleted after downstream readers stop; do not delete `events` or `cursors.json` as cleanup.
+11. **Cleanup or off-switch:** `clean --target parquet` previews path and bytes. After downstream readers stop, add `--apply` to remove only derived Parquet. Authoritative `events` and `cursors.json` remain.
 12. **Next:** Use DuckDB directly against the derived files or [query canonical views](../core/query-sessions.md).

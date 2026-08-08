@@ -91,13 +91,13 @@ Expected: purpose, safe starting commands, global flags, default state path, and
 
 ## Minimum configuration
 
-Transcript Lake has one core storage decision:
+Transcript Lake defaults to `~/.transcript-lake`. Select another root for one invocation without editing shell configuration:
 
 ```sh
-export LAKE_DATA="$HOME/.transcript-lake"
+transcript-lake --data-dir "$HOME/.transcript-lake" paths
 ```
 
-If unset, the same path is selected automatically. Use a different absolute local path when isolation, removable storage, or separate environments require it. The process must be able to create the selected directory. Transcript Lake does not edit shell profiles; persist this variable yourself only after choosing the location.
+Automation may instead set `LAKE_DATA`. Global `--data-dir` wins for that process. Use an operator-owned local path; Transcript Lake does not edit shell profiles.
 
 There are no core credentials. `OKO_CLI` is optional and needed only when asking Transcript Lake to invoke Oko.
 
@@ -113,19 +113,15 @@ There are no core credentials. `OKO_CLI` is optional and needed only when asking
 ### Inspect without mutation
 
 ```sh
+transcript-lake paths
+transcript-lake sources
+transcript-lake doctor
 transcript-lake status
 ```
 
-Expected on a clean setup:
+Expected on a clean setup: resolved paths, zero or more discovered runtime stores, optional-dependency warnings rather than core failure, an absent healthy zero-state, no partitions, no cursors, and no last ingest. The Oko freshness line may report that no index or export exists.
 
-```text
-data dir: <selected path>
-partitions: none (run ingest first)
-cursors: none
-last ingest: none recorded
-```
-
-The Oko freshness line may report that no index or export exists. Status is read-only.
+All four commands are read-only. `doctor` exits non-zero only for corrupt authoritative metadata or a broken installed adapter; missing DuckDB/Oko and absent source stores are warnings.
 
 ### Ingest
 
@@ -137,13 +133,35 @@ Expected: one JSON object containing `finishedAt`, `source`, `full`, `perRuntime
 
 Side effects are limited to the selected `LAKE_DATA`: cursors, masked NDJSON partitions when records exist, the last-ingest summary, and the derived Oko export. Vendor stores remain unchanged. The command makes no network request.
 
-### Observe the result
+### Observe and use the result
 
 ```sh
 transcript-lake status
+transcript-lake sessions --limit 20
+transcript-lake events --type tool_call --limit 20
+transcript-lake stats --days 7
 ```
 
-Expected: a last-ingest timestamp and cursor count. When supported events existed, runtime partition counts and bytes are non-zero. The promised result is the masked archive and its observable inventory, not merely exit status.
+Expected: status has a last-ingest timestamp and cursor count. When supported events existed, partition counts, recent sessions/events, and statistics are non-empty. The analytics commands require DuckDB. Add `--json` for automation.
+
+## Safe recovery and derived cleanup
+
+For damaged cursors or a confirmed non-append source change, preserve the current root and rebuild elsewhere:
+
+```sh
+transcript-lake rebuild --to "$HOME/.transcript-lake-rebuild"
+transcript-lake --data-dir "$HOME/.transcript-lake-rebuild" doctor
+transcript-lake --data-dir "$HOME/.transcript-lake-rebuild" status
+```
+
+Preview and optionally remove only rebuildable derived data:
+
+```sh
+transcript-lake clean --target all
+transcript-lake clean --target all --apply
+```
+
+`clean` never removes authoritative NDJSON, cursors, last-ingest evidence, or vendor transcripts.
 
 ## Safe reset and uninstall
 
@@ -175,11 +193,11 @@ Uninstallation leaves `LAKE_DATA` intact. Remove or retain that state as a separ
 | `duckdb failed to start` | Optional SQL dependency is absent | Install compatible DuckDB; ingest and status remain available |
 | `oko-cli is not on PATH` | Optional Oko integration is unavailable | Install Oko or set `OKO_CLI`; core Lake state remains valid |
 | Empty partition inventory after ingest | No supported records were discovered | Confirm the agent has local sessions and that its path matches the supported adapter contract |
-| Cursor store is unreadable | Cursor JSON was damaged | Preserve the current Lake, select a separate empty `LAKE_DATA`, and run `--full`; never edit cursors or replay into existing partitions |
-| Source shrank or changed without append | The append-only source contract was violated | Preserve both source and Lake, then rebuild into a separate empty `LAKE_DATA` root |
-| Another writer holds the state lock | One ingest already owns this root | Let that writer finish or diagnose its process; do not delete a live lock |
-| Interrupted ingest | Process stopped after some atomic checkpoints | Rerun the same incremental command; flushed batches remain checkpointed and retry is safe |
-| Full ingest needs too much space | Entire local history was selected | Stop safely, retain current evidence, and choose an empty root with sufficient space or select one runtime |
+| Cursor store is unreadable | Cursor JSON was damaged | Preserve the current Lake and run `rebuild --to <empty-path>`; never edit cursors or replay into existing partitions |
+| Source shrank or changed without append | The append-only source contract was violated | Preserve both source and Lake, then use `rebuild --to <empty-path>` |
+| Another writer holds the state lock | A mutation already owns this root | Let that writer finish or diagnose its process; do not delete a live lock |
+| Interrupted ingest | Process stopped after atomic checkpoints | Rerun the same incremental command; flushed batches remain checkpointed |
+| Full replay needs too much space | Entire local history was selected | Retain current evidence and rebuild to a larger empty root or select one runtime |
 
 Errors should name the failed dependency or path and exit non-zero. Retrying incremental ingest is safe; retrying a full ingest may repeat substantial local work but must not alter vendor stores.
 
@@ -188,12 +206,13 @@ Errors should name the failed dependency or path and exit non-zero. Retrying inc
 Automation should:
 
 1. install an exact archive and verify its SHA-256 digest;
-2. set an explicit absolute `LAKE_DATA`;
-3. invoke `transcript-lake ingest` and parse its JSON stdout only after a zero exit;
-4. treat stderr and non-zero exit as failure rather than partial success;
-5. serialize writers per `LAKE_DATA` root;
-6. invoke status for operator diagnostics, not as a stable JSON API;
-7. retain the selected version, source commit, archive digest, ingest summary, and cleanup ownership.
+2. pass an explicit absolute `--data-dir` or set `LAKE_DATA`;
+3. invoke `transcript-lake doctor --json` before mutation;
+4. invoke `transcript-lake ingest` and parse JSON stdout only after a zero exit;
+5. treat stderr and non-zero exit as failure rather than partial success;
+6. serialize mutations per state root;
+7. use `status --json`, `sources --json`, and bounded analytics commands for machine diagnostics;
+8. retain selected version, source commit, archive digest, ingest summary, and cleanup ownership.
 
 No hidden service is required. Scheduling, retention, backups, and access control for the data directory remain operator-managed.
 

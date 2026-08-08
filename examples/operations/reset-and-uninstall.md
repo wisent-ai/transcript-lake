@@ -10,17 +10,17 @@
 8. **Steps:**
 
 ```sh
-transcript-lake status
+LAKE="/absolute/operator-owned/lake"
+transcript-lake --data-dir "$LAKE" paths
+transcript-lake --data-dir "$LAKE" doctor
+transcript-lake --data-dir "$LAKE" clean --target all
+transcript-lake --data-dir "$LAKE" clean --target all --apply
 npm uninstall --global @wisent-ai/transcript-lake
 ```
 
-Retain or archive `LAKE_DATA` by default. Only after an explicit deletion decision:
+The CLI deliberately removes only rebuildable derived artifacts. Retain or archive authoritative Lake state by default. Removing partitions and cursors remains a separate explicit filesystem decision after uninstall.
 
-```sh
-rm -rf -- "$LAKE_DATA"
-```
-
-9. **Verification:** `command -v transcript-lake` finds no executable after uninstall. Retained Lake paths still exist unless the separate removal command was deliberately run. No file under Claude, Codex, OMP, Droid, Kimi, Oko, or Tama vendor roots is removed.
-10. **Failure path:** If the state path is empty, relative, unexpected, shared, or still in use, do not run removal. Reinstalling the executable does not recover deleted data; restore only from an operator-owned archive.
+9. **Verification:** `clean` first previews and then removes only Parquet, Oko export, and Oko staging paths. Uninstall removes the executable. Authoritative Lake state and every vendor store remain.
+10. **Failure path:** An active writer blocks applied cleanup. If the state path is unexpected, stop after `paths` and do not apply cleanup or uninstall.
 11. **Cleanup or off-switch:** Remove scheduler entries and environment configuration that invoke Transcript Lake. Remove backups only under the operator's retention policy.
 12. **Next:** For a non-destructive restart, keep the old root and follow [rebuild into an empty root](../recovery/rebuild-into-empty-root.md).

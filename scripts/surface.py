@@ -34,18 +34,26 @@ def main() -> None:
     if not isinstance(bins, dict) or bins.get("transcript-lake") != "src/cli.mjs":
         refuse("package bin must map transcript-lake to src/cli.mjs")
 
-    usage = re.search(r"const USAGE = \[(?P<body>.*?)\]\.join", source, re.DOTALL)
+    help_block = re.search(
+        r"const COMMAND_HELP = \{(?P<body>.*?)^\};",
+        source,
+        re.DOTALL | re.MULTILINE,
+    )
     commands_block = re.search(
         r"const COMMANDS = \{(?P<body>.*?)^\};",
         source,
         re.DOTALL | re.MULTILINE,
     )
-    if usage is None or commands_block is None:
-        refuse("CLI help or command registry did not parse")
+    if help_block is None or commands_block is None:
+        refuse("CLI command help or command registry did not parse")
 
-    advertised = set(
-        re.findall(r"^\s*'  ([a-z][a-z-]*)(?:\s|\[|\")", usage.group("body"), re.MULTILINE)
-    )
+    advertised = set()
+    for quoted, bare in re.findall(
+        r"^\s*(?:'([^']+)'|([a-z][a-z-]*))\s*:",
+        help_block.group("body"),
+        re.MULTILINE,
+    ):
+        advertised.add(quoted or bare)
     registered = set()
     for quoted, bare in re.findall(
         r"^\s*(?:'([^']+)'|([a-z][a-z-]*))\s*:",
@@ -59,7 +67,8 @@ def main() -> None:
             + " differ from registered commands " + repr(sorted(registered))
         )
 
-    flags = set(re.findall(r"--[a-z][a-z-]*", usage.group("body")))
+    flags = set(re.findall(r"--[a-z][a-z-]*", help_block.group("body")))
+    flags.update(re.findall(r"--[a-z][a-z-]*", source[source.index("const USAGE = ["):source.index("].join('\\n');")]))
     if not flags:
         refuse("CLI help advertises no flags")
 

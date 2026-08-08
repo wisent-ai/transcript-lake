@@ -7,6 +7,7 @@ All user-visible changes are recorded here. Transcript Lake uses Semantic Versio
 ### Added
 
 - Public product contract, release identity, onboarding, operational documentation, integration contracts, and canonical examples.
+- Public CLI now covers path discovery, source discovery, health checks, safe rebuild, bounded sessions/events/statistics/hooks, Oko/Lake signals, structured output, filtered compaction, and preview-first derived cleanup.
 
 ### Changed
 
@@ -14,6 +15,8 @@ All user-visible changes are recorded here. Transcript Lake uses Semantic Versio
 - Oko now imports Transcript Lake's canonical per-session export for historical search instead of independently parsing the same vendor stores.
 - Oko export now covers every supported runtime, performs safe incremental tail reads, and rebuilds through staging when source partitions are replaced.
 - Tama closed segments take precedence over legacy mutable hook logs, so migration cannot double count the same decisions.
+- Ingest, Oko export, Parquet compaction, and applied derived cleanup now share the state writer lease.
+- Common analytics use named CLI commands while arbitrary SQL remains available through `query`.
 
 ### Fixed
 
@@ -34,6 +37,7 @@ All user-visible changes are recorded here. Transcript Lake uses Semantic Versio
 
 - Oko historical indexing now expects canonical session files beneath `LAKE_DATA/exports/oko`; existing vendor transcripts remain available only for live operational launch and resume.
 - Tama producers using `hooks-telemetry-segment-v1` should expose their ready directory at the default path or through `HOOKS_ADAPTIVE_SEGMENTS_READY`.
+- Global `--data-dir <path>` selects a state root for one invocation and takes precedence over `LAKE_DATA`.
 
 ### Operator actions
 

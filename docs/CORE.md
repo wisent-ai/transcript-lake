@@ -17,11 +17,11 @@ This document defines the smallest provider-neutral system that fulfills Transcr
 
 Full mode is not an in-place destructive repair. It is a complete source replay allowed only when `LAKE_DATA` is empty. This turns replacement into an explicit operator-controlled cutover: build a new Lake, inspect it, stop writers, then choose which root to retain.
 
-## Workflow: inspect state
+## Workflow: discover and inspect state
 
-`transcript-lake status` is read-only. It reports selected state root, runtime partition counts and bytes, cursor inventory and freshness, last-ingest masking summary, and Oko freshness when available.
+`transcript-lake paths`, `sources`, `doctor`, and `status` are read-only. Together they report resolved state and integration paths, discovered provider roots and file counts, cursor integrity, optional dependency presence, runtime partition counts and bytes, last-ingest evidence, and Oko freshness. `--json` exposes stable structured command results for automation.
 
-Status never creates configuration, starts ingestion, repairs state, contacts providers, or claims that a missing optional integration invalidates core partitions. Human formatting is not a stable machine schema.
+These commands never create configuration, start ingestion, repair state, contact providers, or claim that a missing optional integration invalidates core partitions. Corrupt authoritative metadata makes `doctor` and `status` exit non-zero. Missing optional DuckDB or Oko is a warning until the corresponding capability is invoked.
 
 ## Workflow: query evidence
 
@@ -37,16 +37,22 @@ The canonical `events` view pins column names and types and tolerates only a tor
 
 | Command | Mutation | Success | Failure |
 |---|---|---|---|
-| no command / `help` / `--help` | None | Actionable guidance on stdout | None |
+| no command / `help [command]` / `--help` | None | General or command-specific guidance | Unknown topic is non-zero |
 | `--version` | None | Canonical `package.json` version | Invalid installation fails before a false version is printed |
+| `paths` / `sources` | None | Resolved paths and discovered supported stores | Permission or adapter error is explicit |
+| `doctor` | None | Health report; missing optional tools are warnings | Corrupt authoritative state or broken adapter is non-zero |
+| `status` | None | Human or JSON inventory and freshness | Corrupt cursor/summary state is non-zero without repair |
 | `ingest` | `LAKE_DATA` only | JSON summary; zero exit only when not partial | Actionable stderr, structured partial evidence when available, non-zero exit |
-| `status` | None | Human inventory and freshness | Dependency-specific diagnostic without repair |
+| `rebuild` | Separate empty target only | Full replay and export in the new root | Current root preserved; invalid/non-empty target is non-zero |
+| `sessions` / `events` | None | Filtered normalized evidence | Non-zero dependency or input error |
+| `stats` / `hooks` | None | Bounded aggregates or hook decisions | Non-zero dependency or input error |
 | `query` | User SQL may have DuckDB-defined effects | DuckDB result | Non-zero dependency or SQL error |
-| `compact` | Derived Parquet only | Per-runtime size and path report | Non-zero; NDJSON preserved |
+| `compact` | Derived Parquet only | Filterable per-runtime size/path report | Non-zero; NDJSON preserved |
 | `export-oko` | Derived Oko export only | JSON export summary | Non-zero; partitions and cursors preserved |
 | `oko-refresh` | Oko-owned index through `oko-cli` | Child-process success | Non-zero or actionable missing-CLI guidance |
+| `clean` | Derived Parquet/Oko only with `--apply` | Dry-run by default; explicit removal report | Active writer or filesystem failure is non-zero |
 
-Unknown commands, flags, and contradictory input are rejected before mutation. `--source` accepts only the declared runtime set.
+Global `--data-dir <path>` selects the root for one invocation and may appear before or after the command. Unknown commands, flags, duplicate flags, contradictory input, and out-of-range limits are rejected before mutation. `--source` accepts only the declared runtime set.
 
 ## Canonical event contract
 
@@ -69,11 +75,11 @@ The detailed field table is frozen in [LAKE.md](LAKE.md). Provider adapters emit
 |---|---|---|---|---|
 | Vendor transcripts | Vendor runtime | Vendor runtime | External | Never changed by Lake |
 | Closed hook segments | Tama hook runtime until handed off | Tama then Lake handoff | Segment protocol | Preserve segment evidence on failure |
-| `events/` NDJSON | Transcript Lake | One ingest lease per root | Append-only | Backup or rebuild into a separate root |
-| `cursors.json` | Transcript Lake | One locked read-modify-write transaction | Atomic merge under lock | Hard-fail on corruption; never silently reset |
-| `last-ingest.json` | Transcript Lake CLI | Current ingest | Atomicity limited to one writer lease | Diagnostic; may be regenerated |
-| `parquet/` | DuckDB compaction | Operator invocation | No concurrent compaction contract | Delete and rebuild from NDJSON |
-| `exports/oko/` | Lake exporter | Export invocation | Atomic session/cursor writes | Delete and rebuild from NDJSON |
+| `events/` NDJSON | Transcript Lake | State writer lease | Append-only | Backup or rebuild into a separate root |
+| `cursors.json` | Transcript Lake | Locked read-modify-write transaction | Atomic merge under state lease | Hard-fail on corruption; never silently reset |
+| `last-ingest.json` | Transcript Lake CLI | Current ingest | State writer lease | Diagnostic; may be regenerated |
+| `parquet/` | DuckDB compaction | State writer lease | No concurrent Lake mutation | `clean --target parquet --apply`; rebuild from NDJSON |
+| `exports/oko/` | Lake exporter | State writer lease | Atomic session/cursor writes | `clean --target oko --apply`; rebuild from NDJSON |
 | Oko SQLite index | Oko | Oko | External single-writer contract | Rebuild from Lake export |
 
 A writer lease fails fast when another live owner holds the root. Stale same-host claims are reclaimed only after process identity no longer matches. Shared cross-host mutation is unsupported.
@@ -94,11 +100,12 @@ There is no hidden retry loop. Operators or external schedulers choose when to r
 
 ## Configuration
 
-- `LAKE_DATA`: startup configuration selecting one absolute or relative state root; resolved to an absolute path. Default `~/.transcript-lake`.
+- `--data-dir <path>`: global per-invocation state-root selection, resolved to an absolute path.
+- `LAKE_DATA`: automation default when `--data-dir` is absent. Default `~/.transcript-lake`.
 - `OKO_CLI`: optional integration executable override. Default path discovery searches `PATH` only when the integration is invoked.
-- `HOOKS_ADAPTIVE_SEGMENTS_READY`: optional Tama handoff location used only by the hook integration.
+- `HOOKS_ADAPTIVE_SEGMENTS_READY`: optional Tama handoff location used only by hook discovery and ingestion.
 
-Unknown CLI flags are rejected. Environment variables not documented here are not part of the public product contract. Resolved paths appear in status without exposing transcript contents or credentials.
+Unknown CLI flags are rejected. Environment variables not documented here are not part of the public product contract. `paths` exposes resolved locations without transcript contents or credentials.
 
 ## Security and privacy boundary
 
