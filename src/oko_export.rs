@@ -37,6 +37,13 @@ fn oko_support_dir() -> PathBuf {
     home_dir().join("Library").join("Application Support").join("Oko")
 }
 
+/// The Oko transcript index this machine would read. Shared with the DuckDB
+/// bridge, which has to substitute it into the signal views because ATTACH
+/// takes a literal path and does not expand a tilde.
+pub fn oko_index_path() -> PathBuf {
+    oko_support_dir().join("transcript-index.sqlite")
+}
+
 /// Directory entries, treating a missing or non-directory path as empty.
 /// Sorted by name: `readdirSync` returns strcmp order, and the export walk is
 /// observable in the file Oko reads, so the order is part of the contract.

@@ -40,8 +40,15 @@ fn script(name: &str, embedded: &'static str) -> Result<String> {
 pub fn views_script(sql: &str, include_signals: bool) -> Result<String> {
     let mut setup = script("views.sql", VIEWS_SQL)?;
     if include_signals {
+        // ATTACH takes a literal path and DuckDB does not expand a tilde, so
+        // the placeholder in signals.sql is resolved here, against the same
+        // location the Oko export probes for freshness.
+        let oko_db = crate::oko_export::oko_index_path();
         setup.push('\n');
-        setup.push_str(&script("signals.sql", SIGNALS_SQL)?);
+        setup.push_str(
+            &script("signals.sql", SIGNALS_SQL)?
+                .replace("'__OKO_DB__'", &quote_sql(oko_db.to_string_lossy())),
+        );
     }
     let data_dir = resolve_data_dir(None);
     Ok(format!(

@@ -15,8 +15,12 @@ LOAD sqlite;
 -- REQUIRES-OKO: attach the Oko transcript index read-only. When the database
 -- file is missing this ATTACH is the statement that fails; nothing is
 -- created or modified either way.
+--
+-- ATTACH takes a string literal, not getvariable(), and DuckDB does not
+-- expand a leading tilde, so the CLI substitutes __OKO_DB__ with the resolved
+-- absolute path before handing this script to DuckDB.
 ATTACH IF NOT EXISTS
-  '~/Library/Application Support/Oko/transcript-index.sqlite'
+  '__OKO_DB__'
   AS oko (TYPE sqlite, READ_ONLY);
 
 -- REQUIRES-OKO: frustration leaderboard. Oko tallies frustration terms per
