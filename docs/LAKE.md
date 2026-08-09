@@ -9,7 +9,8 @@ conversations on this machine, queryable with plain SQL through DuckDB.
   Partitions, cursors, and run summaries all live there; nothing is written
   into the repo.
 - The DuckDB CLI (version one dot five) must be on `PATH` as `duckdb`.
-- Everything is Node built-ins and ESM modules; there are no npm dependencies.
+- The CLI is one Rust binary. It carries its own view definitions and needs no
+  language runtime, package manager, or interpreter on the host.
 
 ## Canonical event
 
@@ -41,13 +42,13 @@ bridges indexes that name a conversation by file to the runtime-native
 
 ## Adapters
 
-Each runtime has one module in `src/adapters/` exposing the frozen factory
-interface: a `runtime` constant, `roots(homeDir)` returning the existing scan
-directories, `listSessions(root)` deriving file, identity, and project from
-names alone, and `createParser(ctx)` returning `{ onLine, end }`. Parsers are
-per-file stateful, swallow malformed lines without failing the run, never
-perform IO inside `onLine`, and emit UNMASKED text: masking is the driver's
-job, so adapters stay pure and testable.
+Each runtime has one module in `src/adapters/` implementing the frozen
+`Adapter` trait: `runtime()` returning the stable identifier, `roots(home)`
+returning the existing scan directories, `list_sessions(root)` deriving file,
+identity, and project from names alone, and `parser(ctx)` returning a `Parser`
+with `on_line` and `end`. Parsers are per-file stateful, swallow malformed
+lines without failing the run, never perform IO inside `on_line`, and emit
+UNMASKED text: masking is the driver's job, so adapters stay pure.
 
 Source formats, as verified on this machine:
 
@@ -79,7 +80,7 @@ Source formats, as verified on this machine:
 
 ## Ingest, cursors, partitions
 
-`src/ingest.mjs` drives everything: adapter roots are scanned, each source
+`src/ingest.rs` drives everything: adapter roots are scanned, each source
 file is stat-compared against its cursor, unchanged files are skipped, and
 changed files are streamed from the last newline-aligned offset. Batches of
 parsed events are masked, appended to partitions, and checkpointed before the
@@ -105,8 +106,8 @@ next batch, so an interrupted run never re-emits what it already flushed.
 
 ## Masking guarantees
 
-`src/redact.mjs` exposes `createMasker()`; the driver pushes every text field
-and every string inside `extra` through one masker instance per run.
+`src/redact.rs` exposes `Masker`; the driver pushes every text field and every
+string inside `extra` through one masker instance per run.
 
 - Each hit is replaced ENTIRELY by a marker of the form
   `[masked:<class>:<length>:<fingerprint>]`. No plaintext prefix or suffix of
@@ -130,13 +131,21 @@ and every string inside `extra` through one masker instance per run.
 ## Querying with DuckDB
 
 `transcript-lake query "<sql>"` runs DuckDB with the selected data root,
-loads `sql/views.sql`, then runs operator SQL. `sessions`, `events`,
+loads the canonical views, then runs operator SQL. `sessions`, `events`,
 `search`, `stats`, and `hooks` expose bounded common queries without
 requiring SQL input. `search` runs a case-insensitive substring match over
 the `text` column of the canonical `events` view and escapes LIKE
 wildcards in the operator's term, so the term always matches literally.
 
-Views defined by `sql/views.sql`:
+The view definitions live in `sql/views.sql` and `sql/signals.sql` in this
+repository and are compiled into the binary at build time, so a moved or
+partially copied installation can never present a Lake without its views.
+`TRANSCRIPT_LAKE_SQL` names a directory of replacement scripts for iterating
+on view definitions against an installed binary; a directory that is set but
+missing the requested script is an error rather than a silent fall back to the
+compiled copy.
+
+Views defined by `views.sql`:
 
 - `events` — every canonical column plus `filename` (the partition file the
   row came from). The reader pins the frozen column list explicitly, so
@@ -171,7 +180,7 @@ points the reader at it only while the lake has no partitions at all. As soon
 as one partition exists, the views read the live glob directly, and partition
 files created later are visible to every subsequent query without reloading.
 
-`sql/signals.sql` installs and loads DuckDB's SQLite extension, attaches the
+`signals.sql` installs and loads DuckDB's SQLite extension, attaches the
 Oko transcript index read-only, and creates named cross-source views:
 `oko_frustration`, `hook_frustration_overlap`, `hook_frustration_daily`, and
 `oko_lake_freshness`. `transcript-lake signals --report <name>` selects those
@@ -188,7 +197,7 @@ are never deleted; Parquet is an additive, faster-scan mirror.
 ### Oko import path
 
 Transcript Lake is the only component that parses local vendor transcript
-stores for Oko's historical catalog. After every ingest, `src/oko_export.mjs`
+stores for Oko's historical catalog. After every ingest, `src/oko_export.rs`
 materialises the masked canonical events as one JSONL file per conversation
 under:
 
@@ -255,7 +264,7 @@ filter lives in transcript-label-trainer, not in this store.
 
 - **gemini and qwen** — no session stores for these runtimes exist on this
   machine, so no adapters ship. Adding one later means dropping a module
-  into `src/adapters/` implementing the frozen factory interface; nothing
+  into `src/adapters/` implementing the frozen `Adapter` trait; nothing
   else changes.
 - **Semantic embeddings** — vector search over the lake waits on a local
   embedding backend; until then the lake offers lexical matching through

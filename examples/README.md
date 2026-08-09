@@ -6,7 +6,7 @@ No example in this catalog has been executed in a controlled clean environment d
 
 ## Shared prerequisites
 
-- macOS and Node.js version twenty or newer.
+- macOS. Building the CLI needs a Rust toolchain at version `1.85` or newer; running the installed binary needs nothing else.
 - Installed Transcript Lake development build or exact release archive.
 - An operator-owned `LAKE_DATA` root.
 - DuckDB `1.5.x` only for query, signal, and compact examples.
@@ -43,8 +43,8 @@ No catalog example is billable, network-facing at runtime, or credentialed. Rele
 | Oko operator | Reindex Oko after export | CLI/process | Compatible `oko-cli` | Derived mutation, external tool | [Reindex Oko](integrations/oko/reindex-oko.md) | Draft — execution pending |
 | Hook maintainer | Ingest validated Tama segments without legacy duplication | CLI/files | Tama ready directory | Local mutation, provider-facing | [Import hook decisions](integrations/tama/import-hook-decisions.md) | Draft — execution pending |
 | Operator | Rebuild after source rewrite or cursor damage | CLI | Preserved old Lake; empty replacement root | Destructive/recovery | [Rebuild into an empty root](recovery/rebuild-into-empty-root.md) | Draft — execution pending |
-| Operator | Upgrade or roll back exact artifacts | CLI/npm/GitHub release | Immutable archive, checksum, backup | Destructive/recovery, network install | [Upgrade and rollback](operations/upgrade-and-rollback.md) | Draft — release pending |
-| Operator | Clean derived state and uninstall | CLI/npm | Stopped writers | Destructive/recovery | [Reset and uninstall](operations/reset-and-uninstall.md) | Draft — execution pending |
+| Operator | Upgrade or roll back exact artifacts | CLI/GitHub release | Immutable archive, checksum, backup | Destructive/recovery, network install | [Upgrade and rollback](operations/upgrade-and-rollback.md) | Draft — release pending |
+| Operator | Clean derived state and uninstall | CLI | Stopped writers | Destructive/recovery | [Reset and uninstall](operations/reset-and-uninstall.md) | Draft — execution pending |
 | Release owner | Build attributable immutable release assets | Release script | Clean exact tag; qualification approval | Local mutation, publication preparation | [Build release assets](operations/build-release-assets.md) | Draft — release pending |
 | Operator | Diagnose invalid input, dependency outage, partial ingest, and writer conflict | CLI | Scenario-specific | Read-only or isolated local mutation | [Representative failures](failures/representative-failures.md) | Draft — execution pending |
 | User | Ingest Gemini or Qwen | — | — | — | Not supported; see [product boundaries](../README.md#explicit-non-goals) | Not supported |

@@ -25,7 +25,7 @@ These commands never create configuration, start ingestion, repair state, contac
 
 ## Workflow: query evidence
 
-`transcript-lake query "<sql>"` loads the frozen local DuckDB views over the selected Lake and executes the supplied SQL. Named read commands (`sessions`, `events`, `search`, `show`, `stats`, `hooks`, `signals`, `label list`, `label aspects`) cover bounded common reads over the same views without operator SQL; `search` treats its term as literal text, escaping LIKE wildcards before matching, and `show` reconstructs one whole conversation in chronological order without per-event truncation. The query process does not mutate NDJSON, cursors, or source stores. DuckDB is an explicit optional prerequisite; absence is an actionable dependency failure, not a fallback to another engine.
+`transcript-lake query "<sql>"` loads the frozen DuckDB views compiled into the binary over the selected Lake and executes the supplied SQL, so an installed CLI is never separable from its views. Named read commands (`sessions`, `events`, `search`, `show`, `stats`, `hooks`, `signals`, `label list`, `label aspects`) cover bounded common reads over the same views without operator SQL; `search` treats its term as literal text, escaping LIKE wildcards before matching, and `show` reconstructs one whole conversation in chronological order without per-event truncation. The query process does not mutate NDJSON, cursors, or source stores. DuckDB is an explicit optional prerequisite; absence is an actionable dependency failure, not a fallback to another engine.
 
 The canonical `events` view pins column names and types and tolerates only a torn final partition line during a concurrent read. Aggregate views expose sessions, tools, tokens, and hook decisions. User SQL can itself create external files or perform DuckDB mutations; the operator owns the supplied SQL. Transcript Lake does not label arbitrary SQL as read-only.
 
@@ -38,7 +38,7 @@ The canonical `events` view pins column names and types and tolerates only a tor
 | Command | Mutation | Success | Failure |
 |---|---|---|---|
 | no command / `help [command]` / `--help` | None | General or command-specific guidance | Unknown topic is non-zero |
-| `--version` | None | Canonical `package.json` version | Invalid installation fails before a false version is printed |
+| `--version` | None | Canonical product version, compiled in from `Cargo.toml` | The version travels inside the binary, so an artifact cannot report a version it was not built from |
 | `paths` / `sources` | None | Resolved paths and discovered supported stores | Permission or adapter error is explicit |
 | `doctor` | None | Health report; missing optional tools are warnings | Corrupt authoritative state or broken adapter is non-zero |
 | `status` | None | Human or JSON inventory and freshness | Corrupt cursor/summary state is non-zero without repair |
@@ -109,6 +109,7 @@ There is no hidden retry loop. Operators or external schedulers choose when to r
 - `LAKE_DATA`: automation default when `--data-dir` is absent. Default `~/.transcript-lake`.
 - `OKO_CLI`: optional integration executable override. Default path discovery searches `PATH` only when the integration is invoked.
 - `HOOKS_ADAPTIVE_SEGMENTS_READY`: optional Tama handoff location used only by hook discovery and ingestion.
+- `TRANSCRIPT_LAKE_SQL`: optional directory of view definitions replacing the ones compiled into the binary. Used to iterate on views against an installed CLI. A directory that is set but does not contain the requested script is an error, never a silent fall back to the compiled copy.
 
 Unknown CLI flags are rejected. Environment variables not documented here are not part of the public product contract. `paths` exposes resolved locations without transcript contents or credentials.
 

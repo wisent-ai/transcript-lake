@@ -26,6 +26,16 @@ PATH="/usr/bin:/bin" /absolute/path/to/transcript-lake --data-dir "$LAKE" sessio
 
 Expected: a named DuckDB dependency error and non-zero exit. Use this only when `transcript-lake` itself is addressed by an absolute path or remains on that restricted `PATH`.
 
+**Incomplete SQL override, no mutation**
+
+The canonical views are compiled into the binary, so an installation can never present a Lake without them and there is no missing-view failure to provoke. `TRANSCRIPT_LAKE_SQL` deliberately replaces them, and an override that is set but incomplete is rejected rather than silently falling back to the compiled-in copy:
+
+```sh
+TRANSCRIPT_LAKE_SQL="$(mktemp -d)" transcript-lake --data-dir "$LAKE" sessions
+```
+
+Expected: `error: missing <that directory>/views.sql (TRANSCRIPT_LAKE_SQL is set but incomplete)` and a non-zero exit, with no Lake state created. Unset the variable to use the compiled-in views deliberately rather than by accident.
+
 **Partial ingest**
 
 Run ordinary incremental ingest and inspect its real result; do not corrupt a source to manufacture evidence:

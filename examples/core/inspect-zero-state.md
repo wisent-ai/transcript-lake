@@ -22,7 +22,7 @@ transcript-lake --data-dir "$LAKE" doctor --json
 transcript-lake --data-dir "$LAKE" status --json
 ```
 
-9. **Verification:** Help states the product purpose, safe starting commands, supported operations, state default, and help URL. Version is a Semantic Versioning value matching the installed package. Status names the selected path and reports no partitions, cursors, or last ingest. The `not-created` directory remains absent.
-10. **Failure path:** An unknown command must print `error: unknown command`, guidance, and exit non-zero without creating state. A missing `package.json` indicates a broken installation; reinstall the exact artifact instead of inventing a version.
+9. **Verification:** Help states the product purpose, safe starting commands, supported operations, state default, and help URL. Version is a Semantic Versioning value matching the installed binary. Status names the selected path and reports no partitions, cursors, or last ingest. The `not-created` directory remains absent.
+10. **Failure path:** An unknown command must print `error: unknown command`, guidance, and exit non-zero without creating state. The version is compiled into the binary, so a version that does not match the artifact you installed means you are running a different `transcript-lake` on `PATH`; resolve which one before continuing.
 11. **Cleanup or off-switch:** Remove only the empty temporary parent created by this example.
 12. **Next:** Create the [first local archive](../getting-started/first-local-archive.md).

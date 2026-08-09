@@ -2,7 +2,7 @@
 
 ## Product and public contract
 
-The distribution coordinate is `@wisent-ai/transcript-lake`. `package.json` is the single canonical source of the product version. The installed `transcript-lake --version` command reads that exact file; no independent version literal is maintained.
+The distribution coordinate is the `transcript-lake` crate in this repository. `Cargo.toml` is the single canonical source of the product version; the build compiles it into the binary, so the installed `transcript-lake --version` command cannot disagree with the artifact it came from. No independent version literal is maintained.
 
 Transcript Lake follows Semantic Versioning. Its public contract includes:
 
@@ -10,7 +10,7 @@ Transcript Lake follows Semantic Versioning. Its public contract includes:
 - human output explicitly documented for operators and structured JSON output documented for automation;
 - `LAKE_DATA` and `OKO_CLI` configuration semantics;
 - canonical event, cursor, partition, Oko-export, and provenance formats;
-- adapter factory interface and supported runtime identifiers;
+- adapter trait and supported runtime identifiers;
 - documented masking, idempotency, retention, compatibility, and failure behavior.
 
 While the major version is zero, an incompatible contract change advances the minor version and resets the patch version. Additive and corrective changes advance the patch version and are distinguished in `CHANGELOG.md`. Advancing to major version one is a deliberate declaration of stability.
@@ -29,8 +29,8 @@ There is no automatic upgrade channel. Promotion reuses the exact qualified arch
 
 A release publishes:
 
-- `transcript-lake-<version>.tgz`, produced by `npm pack` from the tagged tree;
-- `transcript-lake-<version>.tgz.sha256`;
+- `transcript-lake-<version>-<target-triple>.tar.gz`, one per supported macOS architecture, produced by `scripts/build-release.sh` from the tagged tree and containing the release binary alongside `LICENSE`, `README.md`, `CHANGELOG.md`, `sql/`, `docs/`, and `examples/`;
+- `transcript-lake-<version>-<target-triple>.tar.gz.sha256`;
 - `provenance.json` containing product name, version, full source commit, tag, build timestamp, supported platform, architecture class, archive name, and SHA-256 digest;
 - release notes derived from the matching `CHANGELOG.md` section;
 - the examples from the same source revision inside the package archive.
@@ -43,11 +43,11 @@ The release owner is the Transcript Lake maintainer for `wisent-ai/transcript-la
 
 1. Select a clean source revision on `main`.
 2. Review README promises, public surface, configuration, persisted formats, examples, and compatibility impact.
-3. Use the shared Wisent AutoVersion rule against `released-surface.json`; do not copy the versioning rule into this repository.
-4. Update the canonical version in `package.json` and move reviewed `Unreleased` notes into that version's changelog section.
+3. Use the shared Wisent AutoVersion rule against `released-surface.json`; do not copy the versioning rule into this repository. `scripts/surface.sh` prints the current surface for that comparison.
+4. Update the canonical version in `Cargo.toml`, refresh `Cargo.lock`, and move reviewed `Unreleased` notes into that version's changelog section.
 5. Complete local release qualification, including safe examples and every approved test group. Credentialed or destructive qualification remains separately controlled.
 6. Create an annotated `v<version>` tag on the qualified commit.
-7. From that exact tag, run `node scripts/build-release.mjs`. The script refuses a dirty tree, a mismatched tag, or an existing output archive.
+7. From that exact tag, run `sh scripts/build-release.sh`. The script refuses a dirty tree, a mismatched tag, a non-Darwin host, and an existing output archive, then builds `--locked` against the committed `Cargo.lock` and refuses a binary whose `--version` disagrees with the manifest.
 8. Verify the archive digest and inspect `provenance.json`.
 9. Create a GitHub release from the immutable tag and attach the archive, checksum, and provenance files without rebuilding them.
 10. Install the attached archive in a clean supported environment, confirm `transcript-lake --version`, and execute the release-qualified onboarding workflow.

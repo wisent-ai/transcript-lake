@@ -46,7 +46,7 @@ Its value is a single ingestion and masking boundary: every downstream consumer 
 ### Environment and constraints
 
 - Current source formats and paths are supported on macOS. Other operating systems are not qualified.
-- Node.js is required for every workflow. The implementation uses only Node built-ins.
+- The CLI is a single self-contained binary built from Rust. Running it requires no language runtime; building it requires a Rust toolchain.
 - DuckDB CLI `1.5.x` is required only for SQL queries and Parquet compaction.
 - Oko and Tama are optional integrations. Core ingestion remains usable without them.
 - Data remains local under `LAKE_DATA`, defaulting to `~/.transcript-lake`.
@@ -88,14 +88,14 @@ There is not yet a supported immutable release. The current **development channe
 ### Prerequisites
 
 - macOS with at least one supported coding-agent transcript store;
-- Node.js available as `node`;
+- a Rust toolchain (`cargo`) at version `1.85` or newer, to build the binary;
 - DuckDB `1.5.x` on `PATH` only if you will query or compact data;
 - enough local storage for the masked copy of the selected history.
 
 ```sh
 git clone https://github.com/wisent-ai/transcript-lake.git
 cd transcript-lake
-npm install --global .
+cargo install --path .
 transcript-lake
 ```
 
@@ -161,7 +161,7 @@ Canonical event and adapter interfaces are machine contracts documented in [the 
 ## Project status and support
 
 - **Maturity:** development (`0.x` contract; no supported immutable release yet).
-- **Current compatibility:** macOS; Node.js; DuckDB `1.5.x` for SQL/compaction; locally observed formats for Claude Code, Codex, OMP, Droid, Kimi, and Tama hook telemetry.
+- **Current compatibility:** macOS; a self-contained binary built with Rust `1.85` or newer; DuckDB `1.5.x` for SQL/compaction; locally observed formats for Claude Code, Codex, OMP, Droid, Kimi, and Tama hook telemetry.
 - **Support and defects:** [GitHub Issues](https://github.com/wisent-ai/transcript-lake/issues).
 - **Security reports:** use a private [GitHub security advisory](https://github.com/wisent-ai/transcript-lake/security/advisories/new); do not disclose transcript data or credentials in a public issue.
 - **License:** MIT; see [LICENSE](LICENSE).

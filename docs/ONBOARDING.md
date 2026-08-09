@@ -14,7 +14,7 @@ Do not treat a `main` archive as an immutable release.
 ### Required for every installation
 
 - macOS.
-- Node.js version twenty or newer.
+- A Rust toolchain (`cargo` and `rustc`) at version `1.85` or newer, to build the CLI. Running the built binary needs nothing else.
 - Local read permission for at least one supported transcript store if you expect non-empty ingestion.
 - Writable local storage for `LAKE_DATA`.
 
@@ -22,11 +22,11 @@ Check:
 
 ```sh
 uname -s
-node --version
+cargo --version
 printf '%s\n' "${LAKE_DATA:-$HOME/.transcript-lake}"
 ```
 
-Expected: `Darwin`, a Node version beginning with `v20` or newer, and the intended local state path.
+Expected: `Darwin`, a cargo version of `1.85` or newer, and the intended local state path.
 
 ### Required only for SQL and compaction
 
@@ -54,15 +54,20 @@ This is the normal-user installation path after a preview or stable release exis
 
 ```sh
 VERSION='<exact-version>'
+ASSET='<exact-asset-name>'
 BASE="https://github.com/wisent-ai/transcript-lake/releases/download/v$VERSION"
-curl --fail --location --remote-name "$BASE/transcript-lake-$VERSION.tgz"
-curl --fail --location --remote-name "$BASE/transcript-lake-$VERSION.tgz.sha256"
-shasum --algorithm 256 --check "transcript-lake-$VERSION.tgz.sha256"
-npm install --global "./transcript-lake-$VERSION.tgz"
+curl --fail --location --remote-name "$BASE/$ASSET"
+curl --fail --location --remote-name "$BASE/$ASSET.sha256"
+shasum --algorithm 256 --check "$ASSET.sha256"
+tar -xzf "$ASSET"
+mkdir -p "$HOME/.local/bin"
+install -m 755 "${ASSET%.tar.gz}/transcript-lake" "$HOME/.local/bin/transcript-lake"
 transcript-lake --version
 ```
 
-Expected: checksum verification reports `OK`; the final command prints exactly `VERSION`. Installation does not create `LAKE_DATA`, contact coding-agent services, or request elevated privileges unless the operator's npm prefix itself requires them.
+`ASSET` is the archive on the release page whose architecture matches `uname -m`; the release publishes one binary archive per supported macOS architecture.
+
+Expected: checksum verification reports `OK`; the final command prints exactly `VERSION`. Installation does not create `LAKE_DATA`, contact coding-agent services, or request elevated privileges unless the selected install directory itself requires them.
 
 No immutable release currently exists, so these commands intentionally require an operator-selected real release version rather than inventing one.
 
@@ -73,9 +78,11 @@ Maintainers may install from the public source tree:
 ```sh
 git clone https://github.com/wisent-ai/transcript-lake.git
 cd transcript-lake
-npm install --global .
+cargo install --path .
 transcript-lake --version
 ```
+
+`cargo install` places the binary in `~/.cargo/bin`, which must be on `PATH`. To build without installing, run `cargo build --release` and invoke `target/release/transcript-lake` directly.
 
 This selects mutable development source and is not a production release coordinate.
 
@@ -131,7 +138,7 @@ transcript-lake ingest
 
 ### Scheduled freshness
 
-The CLI never schedules itself; freshness comes from an external timer running `scripts/refresh-lake.sh` (incremental `ingest`, then `export-oko`). On macOS, install the packaged CLI first (`npm pack && npm install --global ./wisent-ai-transcript-lake-*.tgz`) because launchd has no TCC grant for `~/Documents`, then load a LaunchAgent with `StartInterval` that runs the installed `transcript-lake` binary from a wrapper outside the Documents tree (reference copy at `~/.local/bin/transcript-lake-refresh`, plist `com.wisent.transcript-lake-refresh`). The writer lease makes overlapping ticks fail fast, so the interval only trades freshness for load, never correctness.
+The CLI never schedules itself; freshness comes from an external timer running `scripts/refresh-lake.sh` (incremental `ingest`, then `export-oko`). On macOS, install the CLI first (`cargo install --path .`, which places the binary in `~/.cargo/bin`) because launchd has no TCC grant for `~/Documents`, then load a LaunchAgent with `StartInterval` that runs the installed `transcript-lake` binary from a wrapper outside the Documents tree (reference copy at `~/.local/bin/transcript-lake-refresh`, plist `com.wisent.transcript-lake-refresh`, with `~/.cargo/bin` on the agent's `PATH`). The writer lease makes overlapping ticks fail fast, so the interval only trades freshness for load, never correctness.
 
 For near-real-time freshness, `transcript-lake watch [--debounce <seconds>] [--json]` is the online variant and the timer is the backstop. `watch` is a long-running foreground process that recursively watches every supported source root and, after a quiet interval (sixty seconds unless `--debounce` says otherwise), runs the same `ingest` then `export-oko` refresh as the timer. At most one refresh is in flight with exactly one more queued, and the writer lease stays the backstop against any other writer, so watcher and timer coexist safely. launchd or systemd is expected to KeepAlive the process (a LaunchAgent with `KeepAlive` rather than `StartInterval`, same packaging constraints as above). One log line per change batch and per run start/finish goes to stdout, which the supervisor captures; `--json` emits JSON lines.
 
@@ -187,8 +194,10 @@ A later ingest starts from zero. Delete the retained directory only after confir
 Uninstall the global development or release package:
 
 ```sh
-npm uninstall --global @wisent-ai/transcript-lake
+cargo uninstall transcript-lake
 ```
+
+A release archive installed by hand is removed the same way it was placed: `rm "$HOME/.local/bin/transcript-lake"`.
 
 Uninstallation leaves `LAKE_DATA` intact. Remove or retain that state as a separate operator decision.
 
@@ -196,7 +205,7 @@ Uninstallation leaves `LAKE_DATA` intact. Remove or retain that state as a separ
 
 | Symptom | Meaning | Corrective action |
 |---|---|---|
-| `node: command not found` | Required runtime is absent | Install supported Node.js, then rerun `transcript-lake --version` |
+| `transcript-lake: command not found` | The installed binary is not on `PATH` | Add the install directory (`~/.cargo/bin` after `cargo install`) to `PATH`, then rerun `transcript-lake --version` |
 | `unknown command` or `unknown ... flag` | Input is outside the public CLI contract | Run `transcript-lake --help` and correct the command before retrying |
 | Permission error reading a vendor path | Current user cannot read that source | Correct ownership or omit that runtime with `--source`; do not elevate the whole ingest unnecessarily |
 | Permission error beneath `LAKE_DATA` | State root is not writable | Select an owned local path and retry; no partial cursor should be trusted until status succeeds |

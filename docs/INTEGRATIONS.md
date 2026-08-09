@@ -22,14 +22,14 @@ Unsupported runtime selection fails before state mutation. The absence of one ad
 
 ## Runtime adapter boundary
 
-Every `src/adapters/<runtime>.mjs` module exposes:
+Every `src/adapters/<runtime>.rs` module implements the `Adapter` trait:
 
-- `runtime`: stable runtime identifier;
-- `roots(homeDir)`: existing local roots only;
-- `listSessions(root)`: source file, runtime-native session identity, and project hint;
-- `createParser(context)`: per-file `{ onLine, end }` parser.
+- `runtime()`: stable runtime identifier;
+- `roots(home)`: existing local roots only;
+- `list_sessions(root)`: source file, runtime-native session identity, and project hint;
+- `parser(context)`: per-file `Parser` with `on_line` and `end`.
 
-Adapters translate external records into canonical product intent. They do not write Lake state, perform network requests, fetch referenced tool-result files, or mask text themselves. `onLine` performs no I/O. The core driver applies bounds, recursive masking, partition ownership, cursors, and failure reporting.
+Adapters translate external records into canonical product intent. They do not write Lake state, perform network requests, fetch referenced tool-result files, or mask text themselves. `on_line` performs no I/O. The core driver applies bounds, recursive masking, partition ownership, cursors, and failure reporting.
 
 Provider-specific record types, IDs, and usage fields remain inside adapter modules and bounded `extra` metadata. Shared core code dispatches at one adapter registry boundary rather than branching throughout workflows.
 
@@ -89,7 +89,7 @@ DuckDB extends stable optional capabilities:
 
 Configuration is executable discovery through `PATH`; there is no endpoint, credential, retry, or silent alternate engine. Supported compatibility is DuckDB CLI `1.5.x`. Missing binary, SQL error, extension error, or output conflict returns non-zero and preserves authoritative NDJSON.
 
-Core views require no network. `signals` loads `sql/signals.sql`, which may install DuckDB's SQLite extension and therefore may need network access on a fresh installation. It attaches the local Oko index read-only and selects one named report. Arbitrary `query` SQL is not sandboxed and may have DuckDB-defined write effects.
+Core views require no network. `signals` loads the compiled-in `signals.sql`, which may install DuckDB's SQLite extension and therefore may need network access on a fresh installation. It attaches the local Oko index read-only and selects one named report. Arbitrary `query` SQL is not sandboxed and may have DuckDB-defined write effects.
 
 Removal is omission of analytics/compaction workflows and, after readers stop, `clean --target parquet --apply`. Ingest, masking, cursors, discovery, health, status, and Oko export remain usable without DuckDB.
 

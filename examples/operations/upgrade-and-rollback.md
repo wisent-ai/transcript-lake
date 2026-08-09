@@ -3,16 +3,17 @@
 1. **Goal:** Replace one immutable Transcript Lake release with another while retaining a reversible state boundary.
 2. **Status:** Release process defined; no immutable release is currently published, so commands are templates pending a real release.
 3. **Risk:** Network installation and destructive/recovery state switch. Never run against the only unbacked-up Lake.
-4. **Environment:** Supported macOS host, npm, published GitHub release assets, operator-controlled backup location.
+4. **Environment:** Supported macOS host, published GitHub release assets, operator-controlled backup location.
 5. **Preconditions:** Exact target and prior versions, verified archive checksums and provenance, reviewed release notes and state compatibility, stopped schedulers, successful backup.
 6. **Inputs:** Replace `<target-version>`, `<prior-version>`, archive paths, and checksum values only with values from one immutable GitHub release.
-7. **Artifacts and side effects:** npm replaces the global executable. Backup copies local Lake state. No provider transcript is modified.
+7. **Artifacts and side effects:** The extracted binary replaces the installed executable. Backup copies local Lake state. No provider transcript is modified.
 8. **Steps:**
 
 ```sh
-shasum -a 256 -c transcript-lake-<target-version>.sha256
+shasum -a 256 -c transcript-lake-<target-version>-<triple>.tar.gz.sha256
 cp -a "$LAKE_DATA" "$LAKE_DATA.backup-<prior-version>"
-npm install --global ./transcript-lake-<target-version>.tgz
+tar -xzf transcript-lake-<target-version>-<triple>.tar.gz
+install -m 755 transcript-lake-<target-version>-<triple>/transcript-lake "$HOME/.local/bin/transcript-lake"
 transcript-lake --version
 transcript-lake status
 ```
@@ -20,7 +21,8 @@ transcript-lake status
 If rollback is required and the release notes declare state compatibility:
 
 ```sh
-npm install --global ./transcript-lake-<prior-version>.tgz
+tar -xzf transcript-lake-<prior-version>-<triple>.tar.gz
+install -m 755 transcript-lake-<prior-version>-<triple>/transcript-lake "$HOME/.local/bin/transcript-lake"
 transcript-lake --version
 ```
 

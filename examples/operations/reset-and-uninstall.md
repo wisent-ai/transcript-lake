@@ -5,7 +5,7 @@
 3. **Risk:** Destructive and irreversible for deleted local data.
 4. **Environment:** macOS terminal and known installed package/state paths.
 5. **Preconditions:** Stop schedulers and writers; identify the exact `LAKE_DATA`; inspect status; decide whether to archive, retain, or delete; disconnect Oko and Parquet readers.
-6. **Inputs:** Installed npm package and operator-owned Lake root.
+6. **Inputs:** Installed `transcript-lake` executable and operator-owned Lake root.
 7. **Artifacts and side effects:** Uninstall removes only the global executable. Optional manual removal deletes partitions, cursors, summaries, Parquet, and Oko export under the selected root. Vendor transcript stores are outside scope.
 8. **Steps:**
 
@@ -15,7 +15,7 @@ transcript-lake --data-dir "$LAKE" paths
 transcript-lake --data-dir "$LAKE" doctor
 transcript-lake --data-dir "$LAKE" clean --target all
 transcript-lake --data-dir "$LAKE" clean --target all --apply
-npm uninstall --global @wisent-ai/transcript-lake
+cargo uninstall transcript-lake
 ```
 
 The CLI deliberately removes only rebuildable derived artifacts. Retain or archive authoritative Lake state by default. Removing partitions and cursors remains a separate explicit filesystem decision after uninstall.
