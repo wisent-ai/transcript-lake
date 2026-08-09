@@ -19,7 +19,10 @@ import {
 const N = (s) => Number(s);
 const [ZERO, ONE, TWO] = ['0', '1', '2'].map(N);
 const [DEFAULT_LIMIT, MAX_LIMIT, DEFAULT_DAYS] = ['20', '500', '7'].map(N);
+const [SHOW_LIMIT, SHOW_MAX_LIMIT] = ['2000', '50000'].map(N);
 const [DEFAULT_DEBOUNCE, SECOND_MS] = ['60', '1000'].map(N);
+const SHOW_TYPES = ['user', 'assistant', 'thinking', 'tool_call', 'tool_result', 'meta', 'hook_decision'];
+const SHOW_DEFAULT_TYPES = ['user', 'assistant'];
 const LAKE_ROOT = fileURLToPath(new URL('..', import.meta.url));
 const CLI_ENTRY = join(LAKE_ROOT, 'src', 'cli.mjs');
 const PACKAGE = JSON.parse(readFileSync(join(LAKE_ROOT, 'package.json'), 'utf8'));
@@ -51,6 +54,7 @@ const USAGE = [
   '  sessions [--runtime <r>] [--project <text>] [--interrupted] [--limit <n>] [--json]',
   '  events [--runtime <r>] [--session <id>] [--type <type>] [--limit <n>] [--json]',
   '  search <text> [--runtime <r>] [--session <id>] [--type <type>] [--limit <n>] [--json]',
+  '  show <session-id> [--include <types>] [--limit <n>] [--json]',
   '  stats [--days <n>] [--runtime <r>] [--json]   usage summary',
   '  hooks [--decision <value>] [--tool <name>] [--limit <n>] [--json]',
   '  signals [--report <frustration|overlap|daily|freshness>] [--limit <n>] [--json]',
@@ -362,6 +366,7 @@ const COMMAND_HELP = {
   sessions: 'sessions [--runtime <r>] [--project <text>] [--interrupted] [--limit <n>] [--json]\n  List recent sessions through the canonical DuckDB view.\n  --interrupted keeps only conversations whose last turn was an unanswered user message or a tool call cut off mid-run, and reports stopped_as plus the opening of that final request.',
   events: 'events [--runtime <r>] [--session <id>] [--type <type>] [--limit <n>] [--json]\n  List recent masked canonical events.',
   search: 'search <text> [--runtime <r>] [--session <id>] [--type <type>] [--limit <n>] [--json]\n  Case-insensitive literal substring match over masked event text, newest first.',
+  show: 'show <session-id> [--include <types>] [--limit <n>] [--json]\n  Reconstruct one conversation in full: masked event text, oldest turn first, no per-event truncation.\n  --include takes a comma-separated list of event types (user, assistant, thinking, tool_call, tool_result, meta, hook_decision) or "all"; the default is user,assistant.\n  The footer reports rendered and matched counts, so a --limit cut is always visible.',
   stats: 'stats [--days <n>] [--runtime <r>] [--json]\n  Summarize events, sessions, tools, and token counters.',
   hooks: 'hooks [--decision <value>] [--tool <name>] [--limit <n>] [--json]\n  Inspect adaptive-hook decisions.',
   signals: 'signals [--report <frustration|overlap|daily|freshness>] [--limit <n>] [--json]\n  Query Oko/Lake cross-source signal views.',
@@ -678,6 +683,85 @@ function cmdSearch(rest) {
   );
 }
 
+function includeTypes(raw) {
+  if (raw === undefined) return SHOW_DEFAULT_TYPES;
+  const wanted = String(raw).split(',').map((part) => part.trim().toLowerCase()).filter(Boolean);
+  if (!wanted.length) throw new Error('--include needs at least one event type or "all"');
+  if (wanted.includes('all')) return SHOW_TYPES;
+  for (const type of wanted) {
+    if (!SHOW_TYPES.includes(type)) {
+      throw new Error(
+        'unknown event type "' + type + '" (expected one of: ' + SHOW_TYPES.join(', ') + ', all)'
+      );
+    }
+  }
+  return [...new Set(wanted)];
+}
+
+function cmdShow(rest) {
+  const parsed = parseOptions('show', rest, ['--include', '--limit'], ['--json']);
+  if (parsed.positionals.length !== ONE) {
+    throw new Error(
+      'usage: transcript-lake show <session-id> [--include <types>] [--limit <n>] [--json]'
+    );
+  }
+  const sessionId = String(parsed.positionals[ZERO]).trim();
+  if (!sessionId) throw new Error('show requires a session id');
+  const types = includeTypes(parsed.options.include);
+  const limit = boundedInteger(parsed.options.limit, '--limit', SHOW_LIMIT, SHOW_MAX_LIMIT);
+  const identity = queryDuckJson(
+    'SELECT runtime, project, first_ts, last_ts, user_msgs, assistant_msgs, tool_calls'
+    + ' FROM sessions WHERE session_id = ' + quoteSql(sessionId)
+  );
+  if (!identity.length) {
+    throw new Error(
+      'unknown session "' + sessionId + '": not present in the selected Lake'
+      + ' (check the id or run ingest first)'
+    );
+  }
+  const head = identity[ZERO];
+  const typeFilter = ' AND event_type IN (' + types.map((type) => quoteSql(type)).join(', ') + ')';
+  const counted = queryDuckJson(
+    'SELECT count(*) AS matched FROM events WHERE session_id = ' + quoteSql(sessionId) + typeFilter
+  );
+  const matched = Number(counted[ZERO].matched);
+  const events = queryDuckJson(
+    'SELECT ts, event_type, tool_name, model, coalesce(text, \'\') AS text FROM events'
+    + ' WHERE session_id = ' + quoteSql(sessionId) + typeFilter
+    + ' ORDER BY ts LIMIT ' + String(limit)
+  );
+  if (parsed.options.json) {
+    writeJson({
+      session_id: sessionId,
+      runtime: head.runtime,
+      project: head.project,
+      first_ts: head.first_ts,
+      last_ts: head.last_ts,
+      include: types,
+      matched,
+      rendered: events.length,
+      events,
+    });
+    return;
+  }
+  process.stdout.write(
+    'session ' + sessionId + ' (' + String(head.runtime) + ')\n'
+    + 'project: ' + String(head.project ?? 'unknown') + '\n'
+    + 'span: ' + String(head.first_ts) + ' .. ' + String(head.last_ts) + '\n'
+    + 'turns: ' + String(head.user_msgs) + ' user, ' + String(head.assistant_msgs) + ' assistant, '
+    + String(head.tool_calls) + ' tool calls\n'
+    + 'include: ' + types.join(',') + '\n'
+  );
+  for (const event of events) {
+    const label = event.tool_name ? event.event_type + ' ' + event.tool_name : event.event_type;
+    process.stdout.write('\n[' + String(event.ts) + '] ' + label + '\n' + String(event.text) + '\n');
+  }
+  process.stdout.write(
+    '\nrendered ' + String(events.length) + ' of ' + String(matched) + ' matching events'
+    + (events.length < matched ? ' (raise --limit for the rest)' : '') + '\n'
+  );
+}
+
 function cmdLabelAdd(rest) {
   const parsed = parseOptions(
     'label add', rest, ['--aspect', '--value', '--note', '--runtime', '--source'], ['--json']
@@ -979,6 +1063,7 @@ const COMMANDS = {
   sessions: cmdSessions,
   events: cmdEvents,
   search: cmdSearch,
+  show: cmdShow,
   stats: cmdStats,
   hooks: cmdHooks,
   signals: cmdSignals,

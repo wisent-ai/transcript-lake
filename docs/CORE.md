@@ -25,7 +25,7 @@ These commands never create configuration, start ingestion, repair state, contac
 
 ## Workflow: query evidence
 
-`transcript-lake query "<sql>"` loads the frozen local DuckDB views over the selected Lake and executes the supplied SQL. Named read commands (`sessions`, `events`, `search`, `stats`, `hooks`, `signals`, `label list`, `label aspects`) cover bounded common reads over the same views without operator SQL; `search` treats its term as literal text, escaping LIKE wildcards before matching. The query process does not mutate NDJSON, cursors, or source stores. DuckDB is an explicit optional prerequisite; absence is an actionable dependency failure, not a fallback to another engine.
+`transcript-lake query "<sql>"` loads the frozen local DuckDB views over the selected Lake and executes the supplied SQL. Named read commands (`sessions`, `events`, `search`, `show`, `stats`, `hooks`, `signals`, `label list`, `label aspects`) cover bounded common reads over the same views without operator SQL; `search` treats its term as literal text, escaping LIKE wildcards before matching, and `show` reconstructs one whole conversation in chronological order without per-event truncation. The query process does not mutate NDJSON, cursors, or source stores. DuckDB is an explicit optional prerequisite; absence is an actionable dependency failure, not a fallback to another engine.
 
 The canonical `events` view pins column names and types and tolerates only a torn final partition line during a concurrent read. Aggregate views expose sessions, tools, tokens, and hook decisions. User SQL can itself create external files or perform DuckDB mutations; the operator owns the supplied SQL. Transcript Lake does not label arbitrary SQL as read-only.
 
@@ -46,6 +46,7 @@ The canonical `events` view pins column names and types and tolerates only a tor
 | `rebuild` | Separate empty target only | Full replay and export in the new root | Current root preserved; invalid/non-empty target is non-zero |
 | `sessions` / `events` | None | Filtered normalized evidence | Non-zero dependency or input error |
 | `search` | None | Newest-first literal substring matches over event text | Non-zero dependency or input error |
+| `show` | None | One conversation, oldest turn first, untruncated masked text, with a rendered/matched footer | Unknown session, unknown event type, or dependency error is non-zero |
 | `label add` | `LAKE_DATA/labels` only | Appended label record with namespaced provenance (`manual`/`human`/`brama:<model>`/`model:<artifact>`); unknown or ambiguous session is rejected | Non-zero dependency or input error |
 | `label list` / `label aspects` | None | Latest-assignment labels or aspect summaries | Non-zero dependency or input error |
 | `stats` / `hooks` | None | Bounded aggregates or hook decisions | Non-zero dependency or input error |

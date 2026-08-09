@@ -137,6 +137,7 @@ The CLI is the canonical human and automation interface.
 | Inspect | `status [--json]` | Partition, cursor, last-ingest, and Oko freshness inventory |
 | Sessions and events | `sessions [--interrupted]`, `events` | Filtered recent normalized records; `--interrupted` keeps only conversations left without an answer |
 | Text search | `search <text> [--runtime <r>] [--session <id>] [--type <t>] [--limit <n>] [--json]` | Newest-first literal substring matches over masked event text |
+| Conversation restore | `show <session-id> [--include <types>] [--limit <n>] [--json]` | One conversation reconstructed oldest turn first, full masked text, with a rendered/matched footer |
 | Session labels | `label add`, `label list`, `label aspects` | Operator-owned aspect/value annotations over sessions |
 | Statistics and signals | `stats`, `hooks`, `signals` | Usage aggregates, adaptive-hook decisions, and Oko/Lake correlations |
 | Advanced SQL | `query [--json] \"<sql>\"` | DuckDB result or actionable dependency error |
