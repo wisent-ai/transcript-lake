@@ -1,5 +1,6 @@
 {
   "schema_version": 1,
+  "product": "transcript-lake",
   "releases": false,
   "reason": "The README states there is not yet a supported immutable release and that the development channel is installed from a source checkout."
 }
