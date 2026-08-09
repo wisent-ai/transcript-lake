@@ -81,44 +81,6 @@ fn source_roots() -> Vec<PathBuf> {
     roots
 }
 
-/// Every source file that may have advanced while the service was stopped.
-/// This is a single startup catch-up, not a polling path: filesystem
-/// notifications remain the only source of work after startup.
-fn source_files() -> Vec<PathBuf> {
-    let home = home_dir();
-    let mut files = Vec::new();
-    for adapter in crate::adapters::all() {
-        for root in adapter.roots(&home) {
-            files.extend(
-                adapter
-                    .list_sessions(&root)
-                    .into_iter()
-                    .map(|entry| entry.file),
-            );
-        }
-    }
-
-    let hooks = hook_source_roots();
-    if hooks.segment_mode {
-        if let Ok(entries) = fs::read_dir(&hooks.ready) {
-            files.extend(entries.flatten().map(|entry| entry.path()));
-        }
-    } else if hooks.available {
-        let adapter = crate::hook_segments::hooks_adapter();
-        for root in adapter.roots(&home) {
-            files.extend(
-                adapter
-                    .list_sessions(&root)
-                    .into_iter()
-                    .map(|entry| entry.file),
-            );
-        }
-    }
-    files.sort();
-    files.dedup();
-    files
-}
-
 /// One structured stream line: JSON when requested, otherwise timestamped
 /// key=value text for service logs.
 fn log(json: bool, kind: &str, details: &[(&str, Value)]) {
@@ -286,19 +248,46 @@ pub fn stream(rest: &[String]) -> Result<i32> {
     let started_at = now_iso();
     write_stream_state(
         &data_dir,
-        &json!({"state": "running", "startedAt": started_at, "roots": roots.len()}),
+        &json!({"state": "catching-up", "startedAt": started_at, "roots": roots.len()}),
     )?;
     log(json_output, "start", &[("roots", Value::from(roots.len()))]);
 
     // Watch first, then close any cursor gap left by downtime. Notifications
     // arriving during this pass stay queued and become cheap cursor no-ops.
-    let initial = source_files();
+    let summary = crate::stream::catch_up(&data_dir)?;
+    let discovered = summary
+        .get("filesDiscovered")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let streamed = summary
+        .get("filesStreamed")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let failures = summary.get("failures").and_then(Value::as_u64).unwrap_or(0);
+    let duration = summary.get("durationMs").cloned().unwrap_or(Value::Null);
     log(
         json_output,
         "catch-up",
-        &[("paths", Value::from(initial.len()))],
+        &[
+            ("files", Value::from(discovered)),
+            ("streamed", Value::from(streamed)),
+            ("failures", Value::from(failures)),
+            ("ms", duration.clone()),
+        ],
     );
-    process_paths(json_output, &data_dir, &initial);
+    write_stream_state(
+        &data_dir,
+        &json!({
+            "state": if failures == 0 { "running" } else { "degraded" },
+            "startedAt": started_at,
+            "updatedAt": now_iso(),
+            "roots": roots.len(),
+            "filesDiscovered": discovered,
+            "filesStreamed": streamed,
+            "failures": failures,
+            "durationMs": duration,
+        }),
+    )?;
 
     while !STOP.load(Ordering::SeqCst) {
         let first = match receiver.recv_timeout(TICK) {
