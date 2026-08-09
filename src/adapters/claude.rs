@@ -37,20 +37,29 @@ impl Adapter for Claude {
                 continue;
             }
             let project_dir = root.join(&entry.0);
-            let project = decode_project_dir(&entry.0);
             for child in read_dirents(&project_dir) {
-                if !child.1.is_file() || !child.0.ends_with(".jsonl") {
+                if !child.1.is_file() {
                     continue;
                 }
-                let session_id = child.0.strip_suffix(".jsonl").unwrap_or(&child.0).to_string();
-                sessions.push(SessionEntry {
-                    file: project_dir.join(&child.0),
-                    session_id: Some(session_id),
-                    project: project.clone(),
-                });
+                if let Some(session) = project_entry(&project_dir, &child.0) {
+                    sessions.push(session);
+                }
             }
         }
         sessions
+    }
+
+    fn entry_for(&self, path: &Path) -> Option<SessionEntry> {
+        let name = path.file_name()?.to_string_lossy();
+        let project_dir = path.parent()?;
+        let home = crate::util::home_dir();
+        if !self.roots(&home).iter().any(|root| project_dir.parent() == Some(root.as_path())) {
+            return None;
+        }
+        if !dirent_type(project_dir)?.is_dir() || !dirent_type(path)?.is_file() {
+            return None;
+        }
+        project_entry(project_dir, &name)
     }
 
     fn parser(&self, ctx: ParserCtx) -> Box<dyn Parser> {
@@ -90,6 +99,13 @@ fn read_dirents(dir: &Path) -> Vec<(String, fs::FileType)> {
     out
 }
 
+/// The type `read_dirents` would have reported for a path the caller already knows,
+/// taken without following a symlink so that an entry the scan skips is skipped here
+/// too. A path that vanished between notification and read has no type at all.
+fn dirent_type(path: &Path) -> Option<fs::FileType> {
+    fs::symlink_metadata(path).ok().map(|meta| meta.file_type())
+}
+
 /// Directory names encode the cwd with '/' turned into '-'; the reverse mapping is best
 /// effort (dashes that belonged to the real path are indistinguishable). The parser
 /// prefers the per-record cwd field over this value whenever one is present.
@@ -98,6 +114,20 @@ fn decode_project_dir(name: &str) -> Option<String> {
         return None;
     }
     Some(name.replace('-', "/"))
+}
+
+/// The entry a scan yields for one name inside a project directory: `.jsonl` files
+/// only, session id from the stem, project decoded from the directory name. Shared
+/// with `entry_for` so one known path and a full scan cannot disagree about a file.
+fn project_entry(project_dir: &Path, name: &str) -> Option<SessionEntry> {
+    let session_id = name.strip_suffix(".jsonl")?;
+    Some(SessionEntry {
+        file: project_dir.join(name),
+        session_id: Some(session_id.to_string()),
+        project: project_dir
+            .file_name()
+            .and_then(|dir| decode_project_dir(&dir.to_string_lossy())),
+    })
 }
 
 /// `String.prototype.slice(0, 65536)`, which counts UTF-16 code units. A cut that would

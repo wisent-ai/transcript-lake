@@ -678,6 +678,21 @@ impl Adapter for Hooks {
         out
     }
 
+    /// The two telemetry logs this adapter reads, recognised by name. Anything
+    /// else under the root — a closed segment, a claim, an acknowledgement —
+    /// belongs to the segment path, not to this one.
+    fn entry_for(&self, path: &Path) -> Option<SessionEntry> {
+        let name = path.file_name()?.to_str()?;
+        if !matches!(name, "telemetry.prev.jsonl" | "telemetry.jsonl") {
+            return None;
+        }
+        let root = crate::util::home_dir().join(".hooks-adaptive");
+        if path.parent() != Some(root.as_path()) {
+            return None;
+        }
+        Some(SessionEntry { file: path.to_path_buf(), session_id: None, project: None })
+    }
+
     fn parser(&self, ctx: ParserCtx) -> Box<dyn Parser> {
         Box::new(HooksParser { file: ctx.file })
     }

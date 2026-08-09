@@ -52,30 +52,31 @@ impl Adapter for Droid {
         let Some(entries) = read_dirents(root) else {
             return Vec::new();
         };
-        let project = root
-            .file_name()
-            .map(|name| name.to_string_lossy().to_string())
-            .and_then(|name| decode_project(&name));
         let mut sessions = Vec::new();
         for (name, file_type) in entries {
             if !file_type.is_file() {
                 continue;
             }
-            let extension = if name.ends_with(SETTINGS_EXT) {
-                SETTINGS_EXT
-            } else if name.ends_with(JSONL_EXT) {
-                JSONL_EXT
-            } else {
-                continue;
-            };
-            let session_id = name[..name.len() - extension.len()].to_string();
-            sessions.push(SessionEntry {
-                file: root.join(&name),
-                session_id: Some(session_id),
-                project: project.clone(),
-            });
+            if let Some(session) = session_entry(root, &name) {
+                sessions.push(session);
+            }
         }
         sessions
+    }
+
+    fn entry_for(&self, path: &Path) -> Option<SessionEntry> {
+        let name = path.file_name()?.to_string_lossy();
+        let root = path.parent()?;
+        let home = crate::util::home_dir();
+        // Both the flat legacy directory and each encoded-cwd directory beneath it are
+        // roots in their own right, so a transcript always sits directly in one.
+        if !self.roots(&home).iter().any(|known| known.as_path() == root) {
+            return None;
+        }
+        if !dirent_type(path)?.is_file() {
+            return None;
+        }
+        session_entry(root, &name)
     }
 
     fn parser(&self, ctx: ParserCtx) -> Box<dyn Parser> {
@@ -107,6 +108,32 @@ fn read_dirents(dir: &Path) -> Option<Vec<(String, fs::FileType)>> {
     }
     out.sort_unstable_by(|left, right| left.0.cmp(&right.0));
     Some(out)
+}
+
+/// The type `read_dirents` would have reported for a path the caller already knows,
+/// taken without following a symlink so that an entry the scan skips is skipped here
+/// too. A path that vanished between notification and read has no type at all.
+fn dirent_type(path: &Path) -> Option<fs::FileType> {
+    fs::symlink_metadata(path).ok().map(|meta| meta.file_type())
+}
+
+/// The entry a scan yields for one name inside a session directory: transcripts and
+/// their settings sidecars, session id from the stem, project decoded from the
+/// directory name. Shared with `entry_for` so one known path and a full scan cannot
+/// disagree about a file.
+fn session_entry(root: &Path, name: &str) -> Option<SessionEntry> {
+    let extension = if name.ends_with(SETTINGS_EXT) {
+        SETTINGS_EXT
+    } else if name.ends_with(JSONL_EXT) {
+        JSONL_EXT
+    } else {
+        return None;
+    };
+    Some(SessionEntry {
+        file: root.join(name),
+        session_id: Some(name[..name.len() - extension.len()].to_string()),
+        project: root.file_name().and_then(|dir| decode_project(&dir.to_string_lossy())),
+    })
 }
 
 /// Best-effort decode of '-Users-name-...' directory names; lossy for real

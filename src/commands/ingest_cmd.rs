@@ -1,12 +1,10 @@
 //! Ingest, safe replay, and the online watch loop. Every one of them ends in
 //! the same refresh the external timer runs — ingest, then the Oko export —
 //! so a Lake is never left with events its derived artifacts do not know.
-use std::collections::VecDeque;
-use std::path::{Component, PathBuf};
+use std::collections::BTreeSet;
+use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{channel, RecvTimeoutError};
-use std::sync::Arc;
-use std::thread;
 use std::time::{Duration, Instant};
 
 use notify::{RecursiveMode, Watcher};
@@ -18,13 +16,16 @@ use crate::args::{
 };
 use crate::ingest::{ingest as run_ingest, IngestOptions};
 use crate::paths::{hook_source_roots, resolve_data_dir, SUMMARY_FILE};
-use crate::types::{HOOKS, SUPPORTED_SOURCES};
 use crate::util::{absolute, home_dir, now_iso, write_json, Error, Result};
 
 const SECOND_MS: u64 = 1000;
 /// How often the watch loop wakes to notice a signal while it is otherwise
 /// idle.
 const TICK: Duration = Duration::from_millis(250);
+/// How long a burst of writes is gathered before it is read. One agent turn
+/// appends several times in quick succession; this collapses that into one
+/// pass without making the operator wait for a quiet interval.
+const COALESCE: Duration = Duration::from_millis(250);
 
 /// Ingest, export for Oko, then publish the run summary. The summary file is
 /// what `status` reads and what the timer's logs quote, so it is written even
@@ -107,20 +108,30 @@ pub fn rebuild(rest: &[String]) -> Result<i32> {
     perform_ingest(require_runtime(parsed.value("source"))?, true, target)
 }
 
-/// Watch roots come from the same adapter and hooks discovery that ingest and
-/// sources use, so a new runtime store is watched the moment it is supported.
+/// The directories to watch recursively.
+///
+/// Deliberately NOT `adapter.roots()`. Several adapters root themselves at a
+/// per-working-directory subdirectory — omp and droid create one the first
+/// time an agent runs somewhere new — and those are enumerated once. A batch
+/// run re-listed them every time and so noticed a new project by accident; a
+/// watcher started before that directory existed would never see it, and every
+/// session in a new checkout would be invisible until someone restarted the
+/// service. Watching the stable base above them covers the ones that exist and
+/// the ones created later, and costs nothing extra: the notification carries
+/// the path, and a path no adapter claims is skipped.
 fn watch_roots() -> Vec<PathBuf> {
     let home = home_dir();
-    let mut roots = Vec::new();
-    for runtime in SUPPORTED_SOURCES {
-        if runtime == HOOKS {
-            roots.extend(hook_source_roots().roots);
-            continue;
-        }
-        if let Some(adapter) = crate::adapters::by_name(runtime) {
-            roots.extend(adapter.roots(&home));
-        }
-    }
+    let mut roots = vec![
+        home.join(".claude").join("projects"),
+        home.join(".codex").join("sessions"),
+        home.join(".omp").join("agent").join("sessions"),
+        home.join(".factory").join("sessions"),
+        home.join(".kimi-code").join("sessions"),
+    ];
+    roots.extend(hook_source_roots().roots);
+    roots.retain(|root| root.exists());
+    roots.sort();
+    roots.dedup();
     roots
 }
 
@@ -156,38 +167,6 @@ fn log(json: bool, kind: &str, details: &[(&str, Value)]) {
     }
 }
 
-/// Run one refresh step as a child of this process, so a crash in a step is a
-/// non-zero status here rather than a dead watcher.
-fn run_step(json: bool, command: &str) -> i32 {
-    log(json, "run-start", &[("command", Value::String(command.to_string()))]);
-    let executable =
-        std::env::current_exe().unwrap_or_else(|_| PathBuf::from(env!("CARGO_BIN_NAME")));
-    match std::process::Command::new(executable).arg(command).status() {
-        Ok(status) => {
-            let code = status.code().unwrap_or(1);
-            log(
-                json,
-                "run-finish",
-                &[
-                    ("command", Value::String(command.to_string())),
-                    ("status", Value::from(code)),
-                ],
-            );
-            code
-        }
-        Err(error) => {
-            log(
-                json,
-                "run-finish",
-                &[
-                    ("command", Value::String(command.to_string())),
-                    ("error", Value::String(error.to_string())),
-                ],
-            );
-            1
-        }
-    }
-}
 
 static STOP: AtomicBool = AtomicBool::new(false);
 
@@ -211,31 +190,114 @@ fn install_stop_handlers() {
     }
 }
 
-/// Online freshness: recursively watch every supported source root, coalesce
-/// changes over a quiet interval, then run the same refresh the external timer
-/// runs (ingest, then export-oko) as child processes of this CLI. At most one
-/// refresh runs and one more is queued; the writer lease inside ingest remains
-/// the backstop against any other writer. This is a long-running foreground
-/// process: launchd or systemd should KeepAlive it.
+/// Read the named files, then let the export merge what they produced.
+///
+/// In process, not as child processes: spawning the CLI twice per burst pays
+/// two process startups and, worse, hands the children no way to be told which
+/// files moved — they would rediscover it by walking. A failure here is logged
+/// and the loop continues, because the next write brings the same paths back
+/// and the hourly timer sweeps anything that stays stuck.
+fn refresh_paths(json: bool, data_dir: &Path, paths: &[PathBuf]) {
+    log(json, "run-start", &[("command", Value::String("ingest".into()))]);
+    match crate::ingest::ingest_paths(data_dir, paths) {
+        Ok(summary) => {
+            let files = summary.get("filesIngested").and_then(Value::as_u64).unwrap_or(0);
+            log(
+                json,
+                "run-finish",
+                &[
+                    ("command", Value::String("ingest".into())),
+                    ("files", Value::from(files)),
+                    ("ms", summary.get("durationMs").cloned().unwrap_or(Value::Null)),
+                ],
+            );
+            if files == 0 {
+                // Nothing this adapter set owns was written — an editor's
+                // scratch file, a lock, a directory touch. No partitions
+                // changed, so the export has nothing to merge.
+                return;
+            }
+        }
+        Err(error) => {
+            log(
+                json,
+                "run-finish",
+                &[
+                    ("command", Value::String("ingest".into())),
+                    ("error", Value::String(error.to_string())),
+                ],
+            );
+            return;
+        }
+    }
+    log(json, "run-start", &[("command", Value::String("export-oko".into()))]);
+    match crate::oko_export::export_oko(false, data_dir) {
+        Ok(summary) => log(
+            json,
+            "run-finish",
+            &[
+                ("command", Value::String("export-oko".into())),
+                ("sessions", summary.get("sessions").cloned().unwrap_or(Value::Null)),
+                ("written", summary.get("written").cloned().unwrap_or(Value::Null)),
+                ("ms", summary.get("durationMs").cloned().unwrap_or(Value::Null)),
+            ],
+        ),
+        Err(error) => log(
+            json,
+            "run-finish",
+            &[
+                ("command", Value::String("export-oko".into())),
+                ("error", Value::String(error.to_string())),
+            ],
+        ),
+    }
+}
+
+/// Online freshness: watch every supported source root and, when a file under
+/// one of them is written, read that file from where the cursor left it.
+///
+/// This used to discard the event, wait out a sixty-second quiet interval, and
+/// then spawn `ingest` and `export-oko` as child processes — a full walk of
+/// every root and a stat of every transcript on the machine, to rediscover the
+/// one file the notification had already named. That is a batch refresh on a
+/// trigger, and it is why a conversation could sit six hours outside the Lake.
+///
+/// Now the path travels with the event, a short window coalesces the burst of
+/// writes one turn produces, and the ingest reads exactly those files in this
+/// process. The export that follows is already incremental: it reads the bytes
+/// appended to the partitions it just wrote and merges them into the sessions
+/// they belong to.
+///
+/// The lease is taken per batch rather than held for the process lifetime, so
+/// the hourly timer stays a working backstop for anything written while this
+/// process was down.
 pub fn watch(rest: &[String]) -> Result<i32> {
     let parsed = parse_options("watch", rest, &["debounce"], &["json"])?;
     require_flags_only("watch", &parsed)?;
-    let debounce_seconds = bounded_integer(
-        parsed.value("debounce"),
-        "--debounce",
-        DEFAULT_DEBOUNCE as i64,
-        MAX_LIMIT,
-    )? as u64;
+    let debounce_ms = match parsed.value("debounce") {
+        Some(_) => {
+            bounded_integer(parsed.value("debounce"), "--debounce", DEFAULT_DEBOUNCE as i64, MAX_LIMIT)?
+                as u64
+                * SECOND_MS
+        }
+        None => COALESCE.as_millis() as u64,
+    };
     let json = parsed.flag("json");
+    let data_dir = resolve_data_dir(None);
     let roots = watch_roots();
     if roots.is_empty() {
         return Err(Error("watch found no supported source roots on this machine".into()));
     }
-    let debounce = Duration::from_millis(debounce_seconds * SECOND_MS);
+    let debounce = Duration::from_millis(debounce_ms);
     let (sender, receiver) = channel();
     let mut watcher = notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
-        if event.is_ok() {
-            let _ = sender.send(());
+        // The paths are the point. A notification that says only "something
+        // moved" forces the reader to go and find out what, which is the walk
+        // this loop exists to avoid.
+        if let Ok(event) = event {
+            for path in event.paths {
+                let _ = sender.send(path);
+            }
         }
     })
     .map_err(|error| Error(format!("watch could not start: {error}")))?;
@@ -246,17 +308,16 @@ pub fn watch(rest: &[String]) -> Result<i32> {
     }
     install_stop_handlers();
 
-    let running = Arc::new(AtomicBool::new(false));
-    let queued = Arc::new(AtomicBool::new(false));
-    let mut workers: VecDeque<thread::JoinHandle<()>> = VecDeque::new();
-    let mut pending: u64 = 0;
+    // One refresh at a time, and the paths that arrived while it ran are
+    // carried into the next one rather than dropped.
+    let mut pending: BTreeSet<PathBuf> = BTreeSet::new();
     let mut deadline: Option<Instant> = None;
     log(
         json,
         "start",
         &[
             ("roots", Value::from(roots.len())),
-            ("debounceSeconds", Value::from(debounce_seconds)),
+            ("coalesceMs", Value::from(debounce.as_millis() as u64)),
         ],
     );
     while !STOP.load(Ordering::SeqCst) {
@@ -265,8 +326,8 @@ pub fn watch(rest: &[String]) -> Result<i32> {
             .unwrap_or(TICK)
             .min(TICK);
         match receiver.recv_timeout(wait) {
-            Ok(()) => {
-                pending += 1;
+            Ok(path) => {
+                pending.insert(path);
                 deadline = Some(Instant::now() + debounce);
                 continue;
             }
@@ -280,35 +341,22 @@ pub fn watch(rest: &[String]) -> Result<i32> {
             continue;
         }
         deadline = None;
-        let batch = pending;
-        pending = 0;
-        log(json, "batch", &[("events", Value::from(batch))]);
-        if running.load(Ordering::SeqCst) {
-            // One run in flight, one queued: further batches while that queued
-            // run is still pending collapse into it.
-            if !queued.swap(true, Ordering::SeqCst) {
-                log(json, "queued", &[("events", Value::from(batch))]);
-            }
+        if pending.is_empty() {
             continue;
         }
-        running.store(true, Ordering::SeqCst);
-        let (running_flag, queued_flag) = (Arc::clone(&running), Arc::clone(&queued));
-        workers.push_back(thread::spawn(move || {
-            loop {
-                if run_step(json, "ingest") == 0 {
-                    run_step(json, "export-oko");
-                }
-                if !queued_flag.swap(false, Ordering::SeqCst) {
-                    break;
-                }
-            }
-            running_flag.store(false, Ordering::SeqCst);
-        }));
-        while workers.front().is_some_and(thread::JoinHandle::is_finished) {
-            if let Some(worker) = workers.pop_front() {
-                let _ = worker.join();
-            }
-        }
+        let batch: Vec<PathBuf> = pending.iter().cloned().collect();
+        pending.clear();
+        log(
+            json,
+            "batch",
+            &[
+                ("paths", Value::from(batch.len())),
+                // The first path, so a batch that ingests nothing says what it
+                // was looking at instead of leaving the operator to guess.
+                ("first", Value::String(batch[0].display().to_string())),
+            ],
+        );
+        refresh_paths(json, &data_dir, &batch);
     }
     for root in &roots {
         let _ = watcher.unwatch(root);

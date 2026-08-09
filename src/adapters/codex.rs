@@ -47,19 +47,36 @@ impl Adapter for Codex {
                         if !file_type.is_file() {
                             continue;
                         }
-                        if !name.starts_with("rollout-") || !name.ends_with(".jsonl") {
-                            continue;
+                        if let Some(session) = day_entry(&day, &name) {
+                            sessions.push(session);
                         }
-                        sessions.push(SessionEntry {
-                            file: day.join(&name),
-                            session_id: Some(session_id_from_name(&name)),
-                            project: None,
-                        });
                     }
                 }
             }
         }
         sessions
+    }
+
+    fn entry_for(&self, path: &Path) -> Option<SessionEntry> {
+        let name = path.file_name()?.to_string_lossy();
+        let day = path.parent()?;
+        let month = day.parent()?;
+        let year = month.parent()?;
+        let home = crate::util::home_dir();
+        if !self.roots(&home).iter().any(|root| year.parent() == Some(root.as_path())) {
+            return None;
+        }
+        // The date nesting `subdirs` walks is exactly three levels deep and each level
+        // must be a real directory, so a rollout parked anywhere else is not ours.
+        for dir in [year, month, day] {
+            if !dirent_type(dir)?.is_dir() {
+                return None;
+            }
+        }
+        if !dirent_type(path)?.is_file() {
+            return None;
+        }
+        day_entry(day, &name)
     }
 
     fn parser(&self, ctx: ParserCtx) -> Box<dyn Parser> {
@@ -106,6 +123,27 @@ fn subdirs(dir: &Path) -> Vec<PathBuf> {
         .filter(|(_, file_type)| file_type.is_dir())
         .map(|(name, _)| dir.join(name))
         .collect()
+}
+
+/// The type `read_dirents` would have reported for a path the caller already knows,
+/// taken without following a symlink so that an entry the scan skips is skipped here
+/// too. A path that vanished between notification and read has no type at all.
+fn dirent_type(path: &Path) -> Option<fs::FileType> {
+    fs::symlink_metadata(path).ok().map(|meta| meta.file_type())
+}
+
+/// The entry a scan yields for one name inside a day directory: `rollout-*.jsonl` only,
+/// with the uuid in the stem as the session id. Shared with `entry_for` so one known
+/// path and a full scan cannot disagree about a file.
+fn day_entry(day: &Path, name: &str) -> Option<SessionEntry> {
+    if !name.starts_with("rollout-") || !name.ends_with(".jsonl") {
+        return None;
+    }
+    Some(SessionEntry {
+        file: day.join(name),
+        session_id: Some(session_id_from_name(name)),
+        project: None,
+    })
 }
 
 fn session_id_from_name(name: &str) -> String {

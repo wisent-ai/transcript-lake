@@ -56,18 +56,45 @@ impl Adapter for Kimi {
             }
             let work_dir = root.join(&name);
             for (entry, entry_type) in read_dirents(&work_dir) {
-                if !entry_type.is_dir() || !entry.starts_with("session_") {
+                if !entry_type.is_dir() {
                     continue;
                 }
-                let file = work_dir.join(&entry).join("agents").join("main").join("wire.jsonl");
-                if !file.exists() {
-                    continue;
+                if let Some(session) = session_entry(&work_dir, &entry, &index) {
+                    sessions.push(session);
                 }
-                let project = index.get(&entry).cloned();
-                sessions.push(SessionEntry { file, session_id: Some(entry), project });
             }
         }
         sessions
+    }
+
+    fn entry_for(&self, path: &Path) -> Option<SessionEntry> {
+        // The wire transcript is the only file a scan ever offers, and it sits at a
+        // fixed depth: `<root>/wd_*/session_*/agents/main/wire.jsonl`.
+        if path.file_name()?.to_string_lossy() != "wire.jsonl" {
+            return None;
+        }
+        let main = path.parent()?;
+        let agents = main.parent()?;
+        if main.file_name()?.to_string_lossy() != "main"
+            || agents.file_name()?.to_string_lossy() != "agents"
+        {
+            return None;
+        }
+        let session_dir = agents.parent()?;
+        let work_dir = session_dir.parent()?;
+        let home = crate::util::home_dir();
+        let root =
+            self.roots(&home).into_iter().find(|root| work_dir.parent() == Some(root.as_path()))?;
+        if !work_dir.file_name()?.to_string_lossy().starts_with("wd_")
+            || !dirent_type(work_dir)?.is_dir()
+            || !dirent_type(session_dir)?.is_dir()
+        {
+            return None;
+        }
+        let name = session_dir.file_name()?.to_string_lossy();
+        // The work-dir index is the only place the absolute project path exists, so
+        // resolving one file pays the same small read the scan pays once per root.
+        session_entry(work_dir, &name, &read_work_dir_index(&root))
     }
 
     fn parser(&self, ctx: ParserCtx) -> Box<dyn Parser> {
@@ -106,6 +133,36 @@ fn read_dirents(dir: &Path) -> Vec<(String, fs::FileType)> {
     }
     out.sort_unstable_by(|left, right| left.0.cmp(&right.0));
     out
+}
+
+/// The type `read_dirents` would have reported for a path the caller already knows,
+/// taken without following a symlink so that an entry the scan skips is skipped here
+/// too. A path that vanished between notification and read has no type at all.
+fn dirent_type(path: &Path) -> Option<fs::FileType> {
+    fs::symlink_metadata(path).ok().map(|meta| meta.file_type())
+}
+
+/// The entry a scan yields for one directory inside a work directory: `session_*` only,
+/// and only once it holds a wire transcript, with the directory name as the session id
+/// and the project the index records for it. Shared with `entry_for` so one known path
+/// and a full scan cannot disagree about a file.
+fn session_entry(
+    work_dir: &Path,
+    name: &str,
+    index: &HashMap<String, String>,
+) -> Option<SessionEntry> {
+    if !name.starts_with("session_") {
+        return None;
+    }
+    let file = work_dir.join(name).join("agents").join("main").join("wire.jsonl");
+    if !file.exists() {
+        return None;
+    }
+    Some(SessionEntry {
+        file,
+        session_id: Some(name.to_string()),
+        project: index.get(name).cloned(),
+    })
 }
 
 fn read_work_dir_index(root: &Path) -> HashMap<String, String> {

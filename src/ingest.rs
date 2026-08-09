@@ -3,6 +3,7 @@
 //! cursor offsets, feeds raw lines to adapter parsers, masks every text and
 //! extra string through one masker instance, appends canonical events to
 //! runtime/date partitions, checkpoints cursors after every flushed batch.
+use std::collections::HashMap;
 use std::fs::{self, File, OpenOptions};
 use std::io::{BufRead, BufReader, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
@@ -575,4 +576,91 @@ pub fn ingest(opts: IngestOptions) -> Result<Value> {
     let summary = ingest_locked(&opts);
     lease.close();
     summary
+}
+
+/// Ingest exactly the files the caller names, in one pass, under the same
+/// exclusive lease a full run takes.
+///
+/// This is the online path. A full run answers "what changed anywhere" by
+/// walking every adapter root and stat-ing every transcript on the machine —
+/// thousands of syscalls to discover the handful of files an agent is
+/// currently appending to. The watcher already knows which file moved, so it
+/// pays for that file alone and the cost of being online stops scaling with
+/// how much history the machine has accumulated.
+///
+/// Everything below the file boundary is shared with the full run: the same
+/// cursors, the same single masking `Writer`, the same `ingest_file`. A path
+/// no adapter claims is skipped in silence — the watcher sees every write
+/// under a root, including lock files and the adapters' own scratch.
+pub fn ingest_paths(data_dir: &Path, paths: &[PathBuf]) -> Result<Value> {
+    let mut lease = open_writer_lease(data_dir)?;
+    let summary = ingest_paths_locked(data_dir, paths);
+    lease.close();
+    summary
+}
+
+fn ingest_paths_locked(data_dir: &Path, paths: &[PathBuf]) -> Result<Value> {
+    let started = Instant::now();
+    let home = home_dir();
+    let adapters = crate::adapters::all();
+    let mut cursors = Cursors::open(&data_dir.to_path_buf())?;
+    let mut writer = Writer::new(data_dir.to_path_buf(), machine_name());
+    let mut per_runtime: Map<String, Value> = Map::new();
+    let mut tallies: HashMap<&'static str, Tally> = HashMap::new();
+    let mut touched = 0u64;
+
+    for path in paths {
+        let Some(adapter) = adapters.iter().find(|adapter| {
+            adapter.roots(&home).iter().any(|root| path.starts_with(root))
+        }) else {
+            continue;
+        };
+        let Some(entry) = adapter.entry_for(path) else {
+            continue;
+        };
+        let Ok(meta) = fs::metadata(&entry.file) else {
+            // Deleted between the notification and now. Nothing to read, and
+            // nothing to repair: the cursor for a file that no longer exists
+            // costs one map entry and is what makes a restored file resume
+            // rather than replay.
+            continue;
+        };
+        let tally = tallies.entry(adapter.runtime()).or_default();
+        let key = entry.file.to_string_lossy().to_string();
+        if let Some(CursorRecord::Bytes(cursor)) = cursors.get(&key)? {
+            if cursor.mtime_ms == mtime_ms(&meta)
+                && cursor.size == meta.len()
+                && cursor.offset >= meta.len()
+            {
+                tally.skipped += 1;
+                continue;
+            }
+        }
+        match ingest_file(&mut writer, &mut cursors, adapter.as_ref(), &entry, &meta, false, tally)
+        {
+            Ok(()) => {
+                tally.files += 1;
+                touched += 1;
+            }
+            Err(error) => {
+                warn(&format!("{}: {error}", entry.file.display()));
+                tally.failures += 1;
+            }
+        }
+    }
+
+    cursors.flush()?;
+    let mut failures = 0u64;
+    for (runtime, tally) in tallies {
+        failures += tally.failures;
+        per_runtime.insert(runtime.to_string(), serde_json::to_value(&tally)?);
+    }
+    Ok(json!({
+        "perRuntime": Value::Object(per_runtime),
+        "maskCounts": writer.masker.counts(),
+        "durationMs": started.elapsed().as_millis() as u64,
+        "filesIngested": touched,
+        "partial": failures > 0,
+        "failures": failures,
+    }))
 }

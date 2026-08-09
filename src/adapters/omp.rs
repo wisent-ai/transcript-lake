@@ -49,23 +49,29 @@ impl Adapter for Omp {
         };
         let mut sessions = Vec::new();
         for (name, file_type) in entries {
-            if !file_type.is_file() || !name.ends_with(JSONL_EXT) {
+            if !file_type.is_file() {
                 continue;
             }
-            let stem = &name[..name.len() - JSONL_EXT.len()];
-            // Encoded directory names are home-relative and dash-mangled for omp, so
-            // the parser recovers the real project from the session line cwd instead.
-            let session_id = match stem.find('_') {
-                Some(at) => stem[at + 1..].to_string(),
-                None => stem.to_string(),
-            };
-            sessions.push(SessionEntry {
-                file: root.join(&name),
-                session_id: Some(session_id),
-                project: None,
-            });
+            if let Some(session) = session_entry(root, &name) {
+                sessions.push(session);
+            }
         }
         sessions
+    }
+
+    fn entry_for(&self, path: &Path) -> Option<SessionEntry> {
+        let name = path.file_name()?.to_string_lossy();
+        let root = path.parent()?;
+        let home = crate::util::home_dir();
+        // Every omp root is itself an encoded-cwd directory, so a transcript sits
+        // directly in one; anything nested deeper was never listed.
+        if !self.roots(&home).iter().any(|known| known.as_path() == root) {
+            return None;
+        }
+        if !dirent_type(path)?.is_file() {
+            return None;
+        }
+        session_entry(root, &name)
     }
 
     fn parser(&self, ctx: ParserCtx) -> Box<dyn Parser> {
@@ -94,6 +100,31 @@ fn read_dirents(dir: &Path) -> Option<Vec<(String, fs::FileType)>> {
     }
     out.sort_unstable_by(|left, right| left.0.cmp(&right.0));
     Some(out)
+}
+
+/// The type `read_dirents` would have reported for a path the caller already knows,
+/// taken without following a symlink so that an entry the scan skips is skipped here
+/// too. A path that vanished between notification and read has no type at all.
+fn dirent_type(path: &Path) -> Option<fs::FileType> {
+    fs::symlink_metadata(path).ok().map(|meta| meta.file_type())
+}
+
+/// The entry a scan yields for one name inside a session directory: `.jsonl` files
+/// only, session id taken from the `<stamp>_<uuid>` stem. Shared with `entry_for` so
+/// one known path and a full scan cannot disagree about a file.
+fn session_entry(root: &Path, name: &str) -> Option<SessionEntry> {
+    let stem = name.strip_suffix(JSONL_EXT)?;
+    // Encoded directory names are home-relative and dash-mangled for omp, so
+    // the parser recovers the real project from the session line cwd instead.
+    let session_id = match stem.find('_') {
+        Some(at) => &stem[at + 1..],
+        None => stem,
+    };
+    Some(SessionEntry {
+        file: root.join(name),
+        session_id: Some(session_id.to_string()),
+        project: None,
+    })
 }
 
 fn clip(value: &str) -> String {

@@ -90,6 +90,13 @@ pub trait Adapter {
     /// Candidate transcript files beneath one root. A directory that vanishes
     /// mid-scan yields no entries instead of failing the run.
     fn list_sessions(&self, root: &Path) -> Vec<SessionEntry>;
+    /// The entry for one transcript file whose path is already known, derived
+    /// without listing a root. `None` when this adapter does not own the path
+    /// or the path is not a transcript file it would have listed.
+    ///
+    /// This is what lets the online watcher read the file it was told about
+    /// instead of re-walking every root to find it again.
+    fn entry_for(&self, path: &Path) -> Option<SessionEntry>;
     fn parser(&self, ctx: ParserCtx) -> Box<dyn Parser>;
 }
 
