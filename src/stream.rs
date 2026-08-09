@@ -13,7 +13,9 @@ use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
 
 use crate::cursors::{open_writer_lease, ByteCursor, CursorRecord, Cursors};
-use crate::hook_segments::{replay_closed_hook_segments, stream_hook_segment};
+use crate::hook_segments::{
+    catch_up_closed_hook_segments, replay_closed_hook_segments, stream_hook_segment,
+};
 use crate::redact::Masker;
 use crate::types::{
     Adapter, CanonicalEvent, EventSink, ParserCtx, RawEvent, SegmentOutput, SessionEntry, HOOKS,
@@ -620,22 +622,6 @@ fn catch_up_locked(data_dir: &Path) -> Result<Value> {
     let mut discovered = 0u64;
     let mut touched = 0u64;
 
-    if hook_sources.segment_mode {
-        let before = total_hits(&writer.masker.counts());
-        let report =
-            replay_closed_hook_segments(&hook_sources.ready, data_dir, &mut cursors, &mut writer)?;
-        discovered += report.files + report.skipped + report.invalid;
-        let tally = Tally {
-            files: report.files,
-            events: report.events,
-            skipped: report.skipped,
-            failures: report.invalid,
-            masked_hits: total_hits(&writer.masker.counts()) - before,
-        };
-        touched += report.files;
-        per_runtime.insert(HOOKS.to_string(), serde_json::to_value(tally)?);
-    }
-
     for adapter in adapters {
         let mut tally = Tally::default();
         let before = total_hits(&writer.masker.counts());
@@ -685,6 +671,25 @@ fn catch_up_locked(data_dir: &Path) -> Result<Value> {
         }
         tally.masked_hits = total_hits(&writer.masker.counts()) - before;
         per_runtime.insert(adapter.runtime().to_string(), serde_json::to_value(tally)?);
+    }
+    if hook_sources.segment_mode {
+        let before = total_hits(&writer.masker.counts());
+        let report = catch_up_closed_hook_segments(
+            &hook_sources.ready,
+            data_dir,
+            &mut cursors,
+            &mut writer,
+        )?;
+        discovered += report.files + report.skipped + report.invalid;
+        let tally = Tally {
+            files: report.files,
+            events: report.events,
+            skipped: report.skipped,
+            failures: report.invalid,
+            masked_hits: total_hits(&writer.masker.counts()) - before,
+        };
+        touched += report.files;
+        per_runtime.insert(HOOKS.to_string(), serde_json::to_value(tally)?);
     }
 
     cursors.flush()?;
