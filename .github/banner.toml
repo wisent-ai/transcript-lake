@@ -1,0 +1,15 @@
+[automation]
+managed = true
+source_fingerprint = "2d4c825b5a922ff1"
+category = "agent"
+
+[banner]
+title = "Archive agent conversations privately."
+description = "Privacy-masked local transcript store with incremental updates, SQL inspection, and Oko import."
+product = "Wisent"
+url = "wisent.ai"
+theme = "dark"
+layout = "orbit-left"
+art_seed = "transcript-lake"
+width = 1584
+height = 396
