@@ -6,6 +6,7 @@
 //! Segment reading, validation, claiming and the cursor commit live here; masking,
 //! canonicalization and partition writing belong to the `EventSink` the driver
 //! passes in, so there is exactly one place that writes events.
+use std::collections::HashSet;
 use std::fs::{self, File, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -16,7 +17,7 @@ use sha2::{Digest, Sha256};
 
 use crate::cursors::{CursorRecord, Cursors};
 use crate::stream::warn;
-use crate::types::{Adapter, EventSink, Parser, ParserCtx, RawEvent, SessionEntry};
+use crate::types::{Adapter, EventSink, Parser, ParserCtx, RawEvent, SessionEntry, HOOKS};
 use crate::util::{machine_name, Error, Result};
 
 const PROTOCOL: &str = "hooks-telemetry-segment-v1";
@@ -332,6 +333,23 @@ fn outputs_valid(outputs: Option<&Value>) -> bool {
     })
 }
 
+/// Cheap startup check for immutable segment partitions. Full digest validation
+/// belongs to explicit replay; normal restart only needs a regular file at every
+/// path attested independently by the cursor and producer acknowledgement.
+fn outputs_present(outputs: Option<&Value>) -> bool {
+    let Some(Value::Array(items)) = outputs else {
+        return false;
+    };
+    !items.is_empty()
+        && items.iter().all(|item| {
+            let Some(path) = string_field(item, "path") else {
+                return false;
+            };
+            fs::symlink_metadata(path)
+                .is_ok_and(|metadata| metadata.is_file() && !metadata.file_type().is_symlink())
+        })
+}
+
 fn output_key(item: &Value) -> String {
     format!(
         "{}\u{0}{}",
@@ -564,13 +582,12 @@ fn process_segment(
     outcome
 }
 
-fn commit_segment(
+fn stage_segment(
     path: &Path,
     segment: &Segment,
-    ready_dir: &Path,
     cursors: &mut Cursors,
     sink: &mut dyn EventSink,
-) -> Result<Outcome> {
+) -> Result<Value> {
     let mut events = Vec::with_capacity(segment.events.len());
     for (sequence, record) in segment.events.iter().enumerate() {
         let event =
@@ -622,6 +639,17 @@ fn commit_segment(
         "outputs": outputs,
     });
     cursors.set_segment(&format!("hooks:{}", segment.segment_id), commit.clone());
+    Ok(commit)
+}
+
+fn commit_segment(
+    path: &Path,
+    segment: &Segment,
+    ready_dir: &Path,
+    cursors: &mut Cursors,
+    sink: &mut dyn EventSink,
+) -> Result<Outcome> {
+    let commit = stage_segment(path, segment, cursors, sink)?;
     cursors.flush()?;
     publish_ack(ready_dir, segment, &commit)?;
     Ok(Outcome::Committed(segment.events.len() as u64))
@@ -683,6 +711,78 @@ pub fn replay_closed_hook_segments(
     Ok(report)
 }
 
+/// Restore the cursor half of an already published segment commit. The producer
+/// receipt identifies immutable outputs; explicit replay performs full digest
+/// validation when an operator requests an integrity scan.
+fn commit_from_ack(acked_dir: &Path, id: &str) -> Option<Value> {
+    let ack = fs::read_to_string(acked_dir.join(ack_name(id)))
+        .ok()
+        .and_then(|raw| parse(&raw))?;
+    if ack.get("protocol").and_then(Value::as_str) != Some(ACK_PROTOCOL)
+        || ack.get("segmentId").and_then(Value::as_str) != Some(id)
+        || !outputs_present(ack.get("outputs"))
+    {
+        return None;
+    }
+    let source_sha256 = string_field(&ack, "sourceSha256")?;
+    let source_size = ack.get("sourceSize").and_then(Value::as_u64)?;
+    let event_count = ack.get("eventCount").and_then(Value::as_u64)?;
+    let payload_sha256 = string_field(&ack, "payloadSha256")?;
+    let commit_id = string_field(&ack, "lakeCommitId")?;
+    let outputs = ack.get("outputs")?.clone();
+    Some(json!({
+        "kind": COMMIT_KIND,
+        "protocol": PROTOCOL,
+        "state": "committed",
+
+        "segmentId": id,
+        "sourceSha256": source_sha256,
+        "sourceSize": source_size,
+        "eventCount": event_count,
+        "payloadSha256": payload_sha256,
+        "commitId": commit_id,
+        "outputs": outputs,
+    }))
+}
+fn published_segment_ids(data_dir: &Path) -> HashSet<String> {
+    let mut ids = HashSet::new();
+    let root = data_dir.join("events").join(format!("runtime={HOOKS}"));
+    let Ok(dates) = fs::read_dir(root) else {
+        return ids;
+    };
+    for date in dates.flatten() {
+        let Ok(outputs) = fs::read_dir(date.path()) else {
+            continue;
+        };
+        for output in outputs.flatten() {
+            let name = output.file_name().to_string_lossy().to_string();
+            if let Some(id) = name.strip_suffix(".ndjson") {
+                ids.insert(id.to_string());
+            }
+        }
+    }
+    ids
+}
+
+const CATCH_UP_BATCH: usize = 8_192;
+
+fn publish_staged(
+    ready_dir: &Path,
+    cursors: &mut Cursors,
+    sink: &mut dyn EventSink,
+    staged: &mut Vec<(Segment, Value)>,
+) -> Result<()> {
+    if staged.is_empty() {
+        return Ok(());
+    }
+    sink.flush()?;
+    cursors.flush()?;
+    for (segment, commit) in staged.drain(..) {
+        publish_ack(ready_dir, &segment, &commit)?;
+    }
+    Ok(())
+}
+
 /// Resume only closed segments that have no durable Lake commit and producer
 /// acknowledgement. A committed, acknowledged segment is immutable; explicit
 /// recovery replay remains the path that revalidates every historical payload.
@@ -705,8 +805,10 @@ pub fn catch_up_closed_hook_segments(
         .filter(|name| name.starts_with("segment-") && name.ends_with(".jsonl"))
         .collect();
     names.sort_unstable();
+    let published = published_segment_ids(data_dir);
 
     let mut report = SegmentReport::default();
+    let mut pending = Vec::new();
     for name in names {
         let id = name
             .strip_prefix("segment-")
@@ -715,7 +817,7 @@ pub fn catch_up_closed_hook_segments(
         let committed = match cursors.get(&format!("hooks:{id}"))? {
             Some(CursorRecord::Segment(record)) => {
                 record.get("kind").and_then(Value::as_str) == Some(COMMIT_KIND)
-                    && outputs_valid(record.get("outputs"))
+                    && outputs_present(record.get("outputs"))
                     && acked_dir.join(ack_name(id)).exists()
             }
             _ => false,
@@ -724,15 +826,53 @@ pub fn catch_up_closed_hook_segments(
             report.skipped += 1;
             continue;
         }
-        match process_segment(&ready_dir.join(name), data_dir, cursors, sink)? {
-            Outcome::Invalid => report.invalid += 1,
-            Outcome::Skipped => report.skipped += 1,
-            Outcome::Committed(events) => {
-                report.files += 1;
-                report.events += events;
+        if published.contains(id) {
+            if let Some(commit) = commit_from_ack(&acked_dir, id) {
+                cursors.set_segment(&format!("hooks:{id}"), commit);
+                report.skipped += 1;
+                continue;
             }
         }
+        pending.push(name);
     }
+    cursors.flush()?;
+    let mut staged = Vec::with_capacity(CATCH_UP_BATCH);
+    for name in pending {
+        let path = ready_dir.join(name);
+        let Some(mut segment) = validate_hook_segment(&path) else {
+            warn(&format!("invalid closed hook segment: {}", path.display()));
+            report.invalid += 1;
+            continue;
+        };
+        let key = format!("hooks:{}", segment.segment_id);
+        if let Some(CursorRecord::Segment(existing)) = cursors.get(&key)? {
+            let committed = existing.get("kind").and_then(Value::as_str) == Some(COMMIT_KIND)
+                && existing.get("sourceSha256").and_then(Value::as_str)
+                    == Some(segment.source_sha256.as_str())
+                && outputs_valid(existing.get("outputs"));
+            if committed {
+                publish_ack(ready_dir, &segment, &existing)?;
+                report.skipped += 1;
+                continue;
+            }
+        }
+        let claims_root = data_dir.join("staging").join("hooks").join("claims");
+        let Some(claim) = acquire_claim(&claims_root, &segment.segment_id)? else {
+            report.skipped += 1;
+            continue;
+        };
+        let commit = stage_segment(&path, &segment, cursors, sink);
+        release_claim(&claim);
+        let commit = commit?;
+        report.files += 1;
+        report.events += segment.events.len() as u64;
+        segment.events = Vec::new();
+        staged.push((segment, commit));
+        if staged.len() == CATCH_UP_BATCH {
+            publish_staged(ready_dir, cursors, sink, &mut staged)?;
+        }
+    }
+    publish_staged(ready_dir, cursors, sink, &mut staged)?;
     Ok(report)
 }
 

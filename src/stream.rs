@@ -6,6 +6,7 @@ use std::collections::HashMap;
 use std::fs::{self, File, OpenOptions};
 use std::io::{BufRead, BufReader, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::time::Instant;
 
 use serde::Serialize;
@@ -147,6 +148,8 @@ pub struct Writer {
     data_dir: PathBuf,
     machine: String,
     masker: Masker,
+    defer_segment_sync: bool,
+    has_deferred_outputs: bool,
 }
 
 impl Writer {
@@ -155,7 +158,13 @@ impl Writer {
             data_dir,
             machine,
             masker: Masker::new(),
+            defer_segment_sync: false,
+            has_deferred_outputs: false,
         }
+    }
+
+    fn defer_segment_sync(&mut self, enabled: bool) {
+        self.defer_segment_sync = enabled;
     }
 
     fn canonicalize(&mut self, event: &RawEvent, runtime: &str) -> (CanonicalEvent, String) {
@@ -278,6 +287,34 @@ fn durable_write(path: &Path, content: &str) -> Result<()> {
     write
 }
 
+/// Recovery batches publish unique immutable paths. They can defer the costly
+/// disk barrier until the whole batch is written, provided that barrier still
+/// precedes the cursor commit and acknowledgements.
+fn deferred_write(path: &Path, content: &str) -> Result<()> {
+    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    fs::create_dir_all(parent)?;
+    let name = path
+        .file_name()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .to_string();
+    let temporary = parent.join(format!(".{name}.{}.tmp", uuid::Uuid::new_v4()));
+    let write = (|| -> Result<()> {
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temporary)?;
+        file.write_all(content.as_bytes())?;
+        drop(file);
+        fs::rename(&temporary, path)?;
+        Ok(())
+    })();
+    if write.is_err() {
+        let _ = fs::remove_file(&temporary);
+    }
+    write
+}
+
 /// Closed segments are immutable and content-addressed: republishing the same
 /// bytes is a no-op, republishing different bytes under the same name is a
 /// refusal, never an overwrite.
@@ -318,11 +355,28 @@ impl EventSink for Writer {
                     )));
                 }
             } else {
-                durable_write(&path, &content)?;
+                if self.defer_segment_sync {
+                    deferred_write(&path, &content)?;
+                    self.has_deferred_outputs = true;
+                } else {
+                    durable_write(&path, &content)?;
+                }
             }
             outputs.push(SegmentOutput { path, sha256 });
         }
         Ok(outputs)
+    }
+
+    fn flush(&mut self) -> Result<()> {
+        if !self.has_deferred_outputs {
+            return Ok(());
+        }
+        let status = Command::new("/bin/sync").status()?;
+        if !status.success() {
+            return Err(Error("could not make hook recovery outputs durable".into()));
+        }
+        self.has_deferred_outputs = false;
+        Ok(())
     }
 }
 
@@ -674,12 +728,11 @@ fn catch_up_locked(data_dir: &Path) -> Result<Value> {
     }
     if hook_sources.segment_mode {
         let before = total_hits(&writer.masker.counts());
-        let report = catch_up_closed_hook_segments(
-            &hook_sources.ready,
-            data_dir,
-            &mut cursors,
-            &mut writer,
-        )?;
+        writer.defer_segment_sync(true);
+        let report =
+            catch_up_closed_hook_segments(&hook_sources.ready, data_dir, &mut cursors, &mut writer);
+        writer.defer_segment_sync(false);
+        let report = report?;
         discovered += report.files + report.skipped + report.invalid;
         let tally = Tally {
             files: report.files,

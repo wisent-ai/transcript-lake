@@ -123,4 +123,11 @@ pub trait EventSink {
         source_file: &std::path::Path,
         events: &[RawEvent],
     ) -> crate::util::Result<Vec<SegmentOutput>>;
+
+    /// Make every output returned since the preceding flush durable before its
+    /// producer publishes cursor or acknowledgement state. Sinks that already
+    /// durably publish in `accept` need no additional work.
+    fn flush(&mut self) -> crate::util::Result<()> {
+        Ok(())
+    }
 }
