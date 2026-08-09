@@ -2,26 +2,26 @@
 
 This document defines the smallest provider-neutral system that fulfills Transcript Lake's README promise. Integrations may consume or extend these contracts but cannot redefine them.
 
-## Workflow: incrementally ingest local evidence
+## Workflow: stream local evidence
 
-- **Actor:** local developer or scheduled operator process.
-- **Initial state:** a selected writable `LAKE_DATA`; zero or more supported local source stores; no concurrent Lake writer.
-- **Input:** optional runtime selector and deliberate full-mode flag.
+- **Actor:** one supervised local stream process.
+- **Initial state:** a selected `LAKE_DATA`; zero or more supported local source stores; no concurrent Lake writer.
+- **Input:** filesystem notifications naming transcript or closed-hook-segment files.
 - **Authoritative inputs:** vendor transcript stores and closed hook segments.
 - **Authoritative Lake state:** masked NDJSON partitions plus the cursor store that proves consumed source boundaries.
-- **Success:** structured summary, durable newline-complete events, and cursors no further than persisted events.
-- **Partial completion:** successfully checkpointed files remain valid; failed files increment `failures`, set `partial`, and cause a non-zero CLI exit after the summary is emitted.
-- **Retry:** incremental retry resumes from durable cursors and must not repeat checkpointed source bytes.
-- **Recovery:** interruption is retryable. Corrupt cursor state, source truncation, and non-append rewrite are not replayed into an existing Lake; recovery targets a separate empty root.
-- **Security:** raw text is masked before partition writes. No credential is required. Source stores are read-only.
+- **Success:** every complete new source line is masked and appended to its partition and affected Oko session before its durable byte cursor advances.
+- **Source failure:** the named file's cursor does not advance; the failure is logged and other source files continue streaming.
+- **Restart:** the stream resumes from durable cursors and does not repeat checkpointed source bytes.
+- **Recovery:** corrupt cursor state, source truncation, and non-append rewrite are not replayed into an existing Lake; reconstruction targets a separate empty root.
+- **Security:** raw text is masked before partition or projection writes. No credential is required. Source stores are read-only.
 
-Full mode is not an in-place destructive repair. It is a complete source replay allowed only when `LAKE_DATA` is empty. This turns replacement into an explicit operator-controlled cutover: build a new Lake, inspect it, stop writers, then choose which root to retain.
+The stream is event-driven: it receives the path that changed, waits only for a short coalescing window, and reads that file from its cursor. It does not enumerate every transcript, launch a refresh command, or rely on a timer. `rebuild` is the explicit historical path and writes a separate empty Lake.
 
 ## Workflow: discover and inspect state
 
-`transcript-lake paths`, `sources`, `doctor`, and `status` are read-only. Together they report resolved state and integration paths, discovered provider roots and file counts, cursor integrity, optional dependency presence, runtime partition counts and bytes, last-ingest evidence, and Oko freshness. `--json` exposes stable structured command results for automation.
+`transcript-lake paths`, `sources`, `doctor`, and `status` are read-only. Together they report resolved state and integration paths, discovered provider roots and file counts, cursor integrity, optional dependency presence, runtime partition counts and bytes, live stream state, and Oko freshness. `--json` exposes stable structured command results for automation.
 
-These commands never create configuration, start ingestion, repair state, contact providers, or claim that a missing optional integration invalidates core partitions. Corrupt authoritative metadata makes `doctor` and `status` exit non-zero. Missing optional DuckDB or Oko is a warning until the corresponding capability is invoked.
+These commands never create configuration, start streaming, repair state, contact providers, or claim that a missing optional integration invalidates core partitions. Corrupt authoritative metadata makes `doctor` and `status` exit non-zero. Missing optional DuckDB or Oko is a warning until the corresponding capability is invoked.
 
 ## Workflow: query evidence
 
@@ -42,8 +42,8 @@ The canonical `events` view pins column names and types and tolerates only a tor
 | `paths` / `sources` | None | Resolved paths and discovered supported stores | Permission or adapter error is explicit |
 | `doctor` | None | Health report; missing optional tools are warnings | Corrupt authoritative state or broken adapter is non-zero |
 | `status` | None | Human or JSON inventory and freshness | Corrupt cursor/summary state is non-zero without repair |
-| `ingest` | `LAKE_DATA` only | JSON summary; zero exit only when not partial | Actionable stderr, structured partial evidence when available, non-zero exit |
-| `rebuild` | Separate empty target only | Full replay and export in the new root | Current root preserved; invalid/non-empty target is non-zero |
+| `stream` | `LAKE_DATA` only | Long-running direct source-to-Lake/Oko commits; clean stop on SIGINT/SIGTERM | Startup/configuration failure is non-zero; source failures are logged without advancing that source cursor |
+| `rebuild` | Separate empty target only | Historical replay and projection in the new root | Current root preserved; invalid/non-empty target is non-zero |
 | `sessions` / `events` | None | Filtered normalized evidence | Non-zero dependency or input error |
 | `search` | None | Newest-first literal substring matches over event text | Non-zero dependency or input error |
 | `show` | None | One conversation, oldest turn first, untruncated masked text, with a rendered/matched footer | Unknown session, unknown event type, or dependency error is non-zero |
@@ -52,7 +52,7 @@ The canonical `events` view pins column names and types and tolerates only a tor
 | `stats` / `hooks` | None | Bounded aggregates or hook decisions | Non-zero dependency or input error |
 | `query` | User SQL may have DuckDB-defined effects | DuckDB result | Non-zero dependency or SQL error |
 | `compact` | Derived Parquet only | Filterable per-runtime size/path report | Non-zero; NDJSON preserved |
-| `export-oko` | Derived Oko export only | JSON export summary | Non-zero; partitions and cursors preserved |
+| `rebuild-oko` | Derived Oko projection only | Full reconstruction summary | Non-zero; partitions and cursors preserved |
 | `oko-refresh` | Oko-owned index through `oko-cli` | Child-process success | Non-zero or actionable missing-CLI guidance |
 | `clean` | Derived Parquet/Oko only with `--apply` | Dry-run by default; explicit removal report | Active writer or filesystem failure is non-zero |
 
@@ -81,10 +81,10 @@ The detailed field table is frozen in [LAKE.md](LAKE.md). Provider adapters emit
 | Closed hook segments | Tama hook runtime until handed off | Tama then Lake handoff | Segment protocol | Preserve segment evidence on failure |
 | `events/` NDJSON | Transcript Lake | State writer lease | Append-only | Backup or rebuild into a separate root |
 | `cursors.json` | Transcript Lake | Locked read-modify-write transaction | Atomic merge under state lease | Hard-fail on corruption; never silently reset |
-| `last-ingest.json` | Transcript Lake CLI | Current ingest | State writer lease | Diagnostic; may be regenerated |
+| `stream-status.json` | Transcript Lake stream | Current stream process | Atomic replacement | Diagnostic; regenerated on start, stop, and commit |
 | `parquet/` | DuckDB compaction | State writer lease | No concurrent Lake mutation | `clean --target parquet --apply`; rebuild from NDJSON |
-| `exports/oko/` | Lake exporter | State writer lease | Atomic session/cursor writes | `clean --target oko --apply`; rebuild from NDJSON |
-| `labels/labels.ndjson` | Operator via Transcript Lake | Append-only single-line writes | No writer lease; independent of ingest | Deleting loses only labels; events and exports unaffected |
+| `exports/oko/` | Lake stream or recovery exporter | Same transaction as the corresponding canonical events | Atomic session/cursor writes | `clean --target oko --apply`; rebuild from NDJSON |
+| `labels/labels.ndjson` | Operator via Transcript Lake | Append-only single-line writes | No writer lease; independent of stream | Deleting loses only labels; events and exports unaffected |
 | Oko SQLite index | Oko | Oko | External single-writer contract | Rebuild from Lake export |
 
 A writer lease fails fast when another live owner holds the root. Stale same-host claims are reclaimed only after process identity no longer matches. Shared cross-host mutation is unsupported.
@@ -97,18 +97,18 @@ A writer lease fails fast when another live owner holds the root. Stale same-hos
 - **Source conflict:** truncation or same-size rewrite; reject replay into existing partitions.
 - **State conflict:** active writer; fail fast and preserve incumbent ownership.
 - **Corrupt authoritative metadata:** cursor parse or numeric validation failure; preserve state and require separate-root recovery.
-- **Partial source failure:** preserve completed checkpoints, report failure count, and exit non-zero.
-- **Interruption:** append and cursor ordering permits incremental retry.
-- **Storage exhaustion:** write fails; cursor cannot advance past a failed batch. Operator frees space or selects another root before retry.
+- **Source failure:** preserve completed cursors, log the named file, and continue other paths.
+- **Interruption:** append, projection, and cursor ordering permits restart from the last committed source boundary.
+- **Storage exhaustion:** the source cursor does not advance past the failed write. Freeing space allows a later source notification or process restart to retry it.
 
-There is no hidden retry loop. Operators or external schedulers choose when to retry after reading the classified result.
+There is no external retry scheduler. The supervised process remains live after a source-local failure and retries that path on its next filesystem notification; startup and authoritative-state failures exit for the supervisor to restart.
 
 ## Configuration
 
 - `--data-dir <path>`: global per-invocation state-root selection, resolved to an absolute path.
 - `LAKE_DATA`: automation default when `--data-dir` is absent. Default `~/.transcript-lake`.
 - `OKO_CLI`: optional integration executable override. Default path discovery searches `PATH` only when the integration is invoked.
-- `HOOKS_ADAPTIVE_SEGMENTS_READY`: optional Tama handoff location used only by hook discovery and ingestion.
+- `HOOKS_ADAPTIVE_SEGMENTS_READY`: optional Tama handoff location used only by hook discovery and streaming.
 - `TRANSCRIPT_LAKE_SQL`: optional directory of view definitions replacing the ones compiled into the binary. Used to iterate on views against an installed CLI. A directory that is set but does not contain the requested script is an error, never a silent fall back to the compiled copy.
 
 Unknown CLI flags are rejected. Environment variables not documented here are not part of the public product contract. `paths` exposes resolved locations without transcript contents or credentials.
@@ -121,7 +121,7 @@ The masker is deterministic and idempotent. Nested metadata is depth bounded and
 
 ## Resource behavior
 
-Ingest streams source files from newline-aligned offsets and batches a bounded number of events before checkpointing. Individual text fields are capped. Nested extra metadata is depth bounded. Session count and total Lake disk usage are not globally capped because they reflect operator-selected source history; operators control scope with `--source`, an empty target root, storage quotas, and scheduling.
+The stream reads changed files from newline-aligned byte cursors and bounds each in-memory commit. Individual text fields are capped and nested extra metadata is depth bounded. Session count and total Lake disk usage are not globally capped because they reflect the history appended by supported runtimes; operators control storage with filesystem quotas and use explicit separate-root rebuilds for historical scope.
 
 The product supports one writer and concurrent read-only status or query operations per local state root. It defines no shared-filesystem, multi-host, or distributed-write topology.
 

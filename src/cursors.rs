@@ -37,11 +37,19 @@ fn coerce(record: &Value) -> Result<ByteCursor> {
     else {
         return Err(Error("cursor record contains invalid numeric state".into()));
     };
-    if !mtime_ms.is_finite() || !size.is_finite() || !offset.is_finite() || size < 0.0 || offset < 0.0
+    if !mtime_ms.is_finite()
+        || !size.is_finite()
+        || !offset.is_finite()
+        || size < 0.0
+        || offset < 0.0
     {
         return Err(Error("cursor record contains invalid numeric state".into()));
     }
-    Ok(ByteCursor { mtime_ms, size: size as u64, offset: offset as u64 })
+    Ok(ByteCursor {
+        mtime_ms,
+        size: size as u64,
+        offset: offset as u64,
+    })
 }
 
 /// Cursor loss can replay already-persisted evidence, so unreadable state is a
@@ -97,7 +105,10 @@ fn owner_is_alive(owner: Option<&Value>) -> bool {
     if pid == 0 {
         return false;
     }
-    let host = owner.get("host").and_then(Value::as_str).unwrap_or_default();
+    let host = owner
+        .get("host")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
     if host != machine_name() {
         return true;
     }
@@ -179,7 +190,10 @@ fn acquire_lock(data_dir: &Path, lock_path: &Path) -> Result<String> {
         fs::create_dir(&prepared)?;
         let published = (|| -> Result<()> {
             let owner_path = prepared.join("owner.json");
-            let mut file = OpenOptions::new().write(true).create_new(true).open(&owner_path)?;
+            let mut file = OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&owner_path)?;
             file.write_all(serde_json::to_string(&owner)?.as_bytes())?;
             file.sync_all()?;
             drop(file);
@@ -203,13 +217,18 @@ fn acquire_lock(data_dir: &Path, lock_path: &Path) -> Result<String> {
             .and_then(|raw| serde_json::from_str::<Value>(&raw).ok());
         if owner_is_alive(incumbent.as_ref()) {
             let incumbent = incumbent.unwrap_or(Value::Null);
-            let host = incumbent.get("host").and_then(Value::as_str).unwrap_or("unknown-host");
+            let host = incumbent
+                .get("host")
+                .and_then(Value::as_str)
+                .unwrap_or("unknown-host");
             let pid = incumbent
                 .get("pid")
                 .and_then(Value::as_u64)
                 .map(|pid| pid.to_string())
                 .unwrap_or_else(|| "unknown".to_string());
-            return Err(Error(format!("state writer lock is held by {host} pid {pid}")));
+            return Err(Error(format!(
+                "state writer lock is held by {host} pid {pid}"
+            )));
         }
         match fs::remove_dir_all(lock_path) {
             Ok(()) => {}
@@ -238,7 +257,7 @@ fn release_lock(data_dir: &Path, lock_path: &Path, token: &str) {
 /// Take the exclusive state lease for this Lake root.
 pub fn open_writer_lease(data_dir: &Path) -> Result<WriterLease> {
     fs::create_dir_all(data_dir)?;
-    let lock_path = data_dir.join("ingest.lock");
+    let lock_path = data_dir.join("stream.lock");
     let token = acquire_lock(data_dir, &lock_path)?;
     Ok(WriterLease {
         data_dir: data_dir.to_path_buf(),
@@ -322,9 +341,13 @@ impl Cursors {
                 uuid::Uuid::new_v4()
             ));
             let write = (|| -> Result<()> {
-                let mut file =
-                    OpenOptions::new().write(true).create_new(true).open(&tmp_path)?;
-                file.write_all(serde_json::to_string_pretty(&Value::Object(merged.clone()))?.as_bytes())?;
+                let mut file = OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .open(&tmp_path)?;
+                file.write_all(
+                    serde_json::to_string_pretty(&Value::Object(merged.clone()))?.as_bytes(),
+                )?;
                 file.sync_all()?;
                 drop(file);
                 fs::rename(&tmp_path, &self.file_path)?;

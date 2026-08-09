@@ -1,13 +1,12 @@
 # Query cross-runtime sessions
 
-1. **Goal:** Retrieve recent masked session summaries across every ingested runtime, single out the conversations that were left unfinished, and locate events containing literal text.
-2. **Status:** Development `0.x`; implemented capability, execution evidence pending.
-3. **Risk:** Read-only for the documented query; external DuckDB process.
-4. **Environment:** macOS terminal, valid Lake partitions, DuckDB CLI `1.5.x` on `PATH`.
-5. **Preconditions:** At least one ingested session for a non-empty result.
-6. **Inputs:** Selected Lake, optional runtime/project/session/type filters, a literal search term, and a bounded limit.
-7. **Artifacts and side effects:** Transcript Lake writes nothing. DuckDB reads NDJSON through the pinned `sessions` and `events` views and formats rows or JSON.
-8. **Steps:**
+1. **Goal:** Retrieve recent masked session summaries across every streamed runtime, single out conversations left unfinished, and locate events containing literal text.
+2. **Risk:** Read-only for the documented query; external DuckDB process.
+3. **Environment:** macOS terminal, valid Lake partitions, DuckDB CLI `1.5.x` on `PATH`.
+4. **Preconditions:** At least one committed session for a non-empty result.
+5. **Inputs:** Selected Lake, optional runtime/project/session/type filters, a literal search term, and a bounded limit.
+6. **Artifacts and side effects:** Transcript Lake writes nothing. DuckDB reads NDJSON through the pinned `sessions` and `events` views and formats rows or JSON.
+7. **Steps:**
 
 ```sh
 LAKE="/absolute/operator-owned/lake"

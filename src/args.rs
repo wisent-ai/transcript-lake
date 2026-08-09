@@ -9,7 +9,6 @@ use crate::util::{Error, Result};
 pub const DEFAULT_LIMIT: i64 = 20;
 pub const MAX_LIMIT: i64 = 500;
 pub const DEFAULT_DAYS: i64 = 7;
-pub const DEFAULT_DEBOUNCE: u64 = 60;
 pub const SHOW_LIMIT: i64 = 2000;
 pub const SHOW_MAX_LIMIT: i64 = 50000;
 

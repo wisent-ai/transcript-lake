@@ -2,8 +2,8 @@
 //! dependency checks, and the Lake status snapshot. Everything here reads;
 //! neither the state root nor any source store is modified. These four
 //! commands are the ones an operator runs before trusting the Lake, so their
-//! exit status is meaningful: a broken cursor store, an unreadable last-ingest
-//! summary, or a source that cannot be enumerated is a non-zero exit.
+//! exit status is meaningful: a broken cursor store, unreadable stream state,
+//! or a source that cannot be enumerated is non-zero.
 use std::fs;
 use std::io::Write;
 use std::path::PathBuf;
@@ -13,8 +13,8 @@ use serde_json::Value;
 
 use crate::args::{parse_options, require_flags_only};
 use crate::paths::{
-    hook_source_roots, lake_paths, partition_report, read_cursor_status, read_last_ingest,
-    CursorStatus, LastIngest, PartitionRow,
+    hook_source_roots, lake_paths, partition_report, read_cursor_status, read_stream_status,
+    CursorStatus, PartitionRow, StreamStatus,
 };
 use crate::types::HOOKS;
 use crate::util::{home_dir, write_json, Result};
@@ -85,7 +85,10 @@ fn hooks_row() -> SourceRow {
             Ok(entries) => entries
                 .flatten()
                 .filter(|entry| {
-                    entry.file_type().map(|kind| kind.is_file()).unwrap_or(false)
+                    entry
+                        .file_type()
+                        .map(|kind| kind.is_file())
+                        .unwrap_or(false)
                         && entry.file_name().to_string_lossy().ends_with(".jsonl")
                 })
                 .count() as u64,
@@ -123,7 +126,7 @@ fn hooks_row() -> SourceRow {
 }
 
 /// Availability and candidate-file counts for every supported source, in the
-/// order ingest walks them: every transcript adapter, then hooks.
+/// order used by the stream: every transcript adapter, then hooks.
 pub fn source_report() -> Vec<SourceRow> {
     let home = home_dir();
     let mut rows = Vec::new();
@@ -176,21 +179,18 @@ pub struct StatusReport {
     pub data_dir: PathBuf,
     pub partitions: Vec<PartitionRow>,
     pub cursors: CursorStatus,
-    #[serde(rename = "lastIngest")]
-    pub last_ingest: LastIngest,
+    pub stream: StreamStatus,
     pub oko: Value,
 }
 
-/// Everything `status` prints, gathered without touching DuckDB: partition
-/// inventory, cursor health, last ingest, and Oko export freshness. Oko is
-/// optional, so an exporter that cannot answer reports an `unavailable` state
-/// rather than failing the whole snapshot.
+/// Everything `status` prints without touching DuckDB: partition inventory,
+/// cursor health, live stream state, and Oko freshness. Oko is optional.
 pub fn status_snapshot() -> StatusReport {
     let paths = lake_paths();
     StatusReport {
         partitions: partition_report(&paths.data_dir),
         cursors: read_cursor_status(&paths.cursors),
-        last_ingest: read_last_ingest(&paths.last_ingest),
+        stream: read_stream_status(&paths.stream_status),
         oko: crate::oko_export::freshness(),
         data_dir: paths.data_dir,
     }
@@ -200,8 +200,7 @@ pub fn status(rest: &[String]) -> Result<i32> {
     let parsed = parse_options("status", rest, &[], &["json"])?;
     require_flags_only("status", &parsed)?;
     let report = status_snapshot();
-    let status =
-        i32::from(report.cursors.state == "invalid" || report.last_ingest.state == "invalid");
+    let status = i32::from(report.cursors.state == "invalid" || report.stream.state == "invalid");
     if parsed.flag("json") {
         write_json(&report)?;
         return Ok(status);
@@ -209,7 +208,7 @@ pub fn status(rest: &[String]) -> Result<i32> {
     let mut out = std::io::stdout().lock();
     writeln!(out, "data dir: {}", report.data_dir.display())?;
     if report.partitions.is_empty() {
-        writeln!(out, "partitions: none (run ingest first)")?;
+        writeln!(out, "partitions: none (the stream has not recorded events)")?;
     }
     for row in &report.partitions {
         writeln!(
@@ -230,29 +229,32 @@ pub fn status(rest: &[String]) -> Result<i32> {
     if let Some(error) = &report.cursors.error {
         writeln!(out, "  cursor error: {error}")?;
     }
-    // A summary of literal `null` parses cleanly but carries nothing, so the
-    // state is reported instead of a line of placeholders.
     let summary = report
-        .last_ingest
+        .stream
         .summary
         .as_ref()
         .filter(|value| !value.is_null());
     match summary {
-        Some(last) => {
-            let failures = match last.get("failures") {
-                Some(Value::Null) | None => "0".to_string(),
-                other => js_string(other),
-            };
+        Some(current) => {
+            let state = js_string(current.get("state"));
+            let updated = current
+                .get("updatedAt")
+                .or_else(|| current.get("startedAt"));
+            let files = current
+                .get("filesStreamed")
+                .and_then(Value::as_u64)
+                .unwrap_or(0);
+            let failures = current.get("failures").and_then(Value::as_u64).unwrap_or(0);
             writeln!(
                 out,
-                "last ingest: {}, failures {failures}",
-                js_string(last.get("finishedAt"))
+                "stream: {state}, updated {}, files {files}, failures {failures}",
+                js_string(updated)
             )?
         }
-        None => writeln!(out, "last ingest: {}", report.last_ingest.state)?,
+        None => writeln!(out, "stream: {}", report.stream.state)?,
     }
-    if let Some(error) = &report.last_ingest.error {
-        writeln!(out, "  summary error: {error}")?;
+    if let Some(error) = &report.stream.error {
+        writeln!(out, "  stream state error: {error}")?;
     }
     match &report.oko {
         Value::String(text) => writeln!(out, "oko: {text}")?,
@@ -286,8 +288,8 @@ pub fn doctor(rest: &[String]) -> Result<i32> {
     let checks = vec![
         Check {
             name: "state-root",
-            // An absent state root is the zero state, not a fault: the first
-            // ingest creates it.
+            // An absent state root is the zero state; the stream creates it
+            // when the service starts.
             status: "ok",
             detail: if paths.data_dir.exists() {
                 paths.data_dir.to_string_lossy().into_owned()
@@ -297,7 +299,11 @@ pub fn doctor(rest: &[String]) -> Result<i32> {
         },
         Check {
             name: "cursors",
-            status: if cursors.state == "invalid" { "error" } else { "ok" },
+            status: if cursors.state == "invalid" {
+                "error"
+            } else {
+                "ok"
+            },
             detail: match &cursors.error {
                 Some(error) => format!("{}: {error}", cursors.state),
                 None => cursors.state.to_string(),
@@ -324,7 +330,11 @@ pub fn doctor(rest: &[String]) -> Result<i32> {
                 broken
                     .iter()
                     .map(|row| {
-                        format!("{}: {}", row.runtime, row.error.as_deref().unwrap_or_default())
+                        format!(
+                            "{}: {}",
+                            row.runtime,
+                            row.error.as_deref().unwrap_or_default()
+                        )
                     })
                     .collect::<Vec<String>>()
                     .join("; ")
@@ -332,7 +342,11 @@ pub fn doctor(rest: &[String]) -> Result<i32> {
         },
         Check {
             name: "duckdb",
-            status: if paths.duckdb.is_some() { "ok" } else { "warning" },
+            status: if paths.duckdb.is_some() {
+                "ok"
+            } else {
+                "warning"
+            },
             detail: match &paths.duckdb {
                 Some(found) => found.to_string_lossy().into_owned(),
                 None => {
@@ -342,7 +356,11 @@ pub fn doctor(rest: &[String]) -> Result<i32> {
         },
         Check {
             name: "oko-cli",
-            status: if paths.oko_cli.is_some() { "ok" } else { "warning" },
+            status: if paths.oko_cli.is_some() {
+                "ok"
+            } else {
+                "warning"
+            },
             detail: match &paths.oko_cli {
                 Some(found) => found.to_string_lossy().into_owned(),
                 None => "optional dependency not found; reindex unavailable".to_string(),

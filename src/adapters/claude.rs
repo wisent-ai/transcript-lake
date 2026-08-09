@@ -1,7 +1,7 @@
 //! Adapter: Claude Code transcripts — `~/.claude/projects/<encoded-cwd>/<sessionId>.jsonl`
 //!
 //! Frozen interface: `runtime`, `roots(home)`, `list_sessions(root)`, `parser(ctx)`.
-//! Adapters emit UNMASKED text (the ingest driver masks) and never do IO in `on_line`.
+//! Adapters emit UNMASKED text (the stream masks) and never do IO in `on_line`.
 //! Contract: malformed lines are tolerated silently (no events). Verified against live
 //! files on this machine: record types user | assistant | system | summary carry
 //! messages; permission-mode, file-history-snapshot, attachment, ai-title, last-prompt,
@@ -53,7 +53,11 @@ impl Adapter for Claude {
         let name = path.file_name()?.to_string_lossy();
         let project_dir = path.parent()?;
         let home = crate::util::home_dir();
-        if !self.roots(&home).iter().any(|root| project_dir.parent() == Some(root.as_path())) {
+        if !self
+            .roots(&home)
+            .iter()
+            .any(|root| project_dir.parent() == Some(root.as_path()))
+        {
             return None;
         }
         if !dirent_type(project_dir)?.is_dir() || !dirent_type(path)?.is_file() {
@@ -72,7 +76,7 @@ impl Adapter for Claude {
 }
 
 /// A root or project directory may vanish between scan and read; that is not an error
-/// state worth failing ingestion over. Anything else (permissions, IO) was fatal in the
+/// state worth failing the stream over. Anything else (permissions, IO) was fatal in the
 /// previous implementation, which could throw out of `listSessions`; the frozen Rust
 /// signature cannot, so it is reported on stderr with the driver's own prefix instead.
 /// Names come back in byte order, because Node's `readdirSync` sorts with strcmp and
@@ -83,7 +87,10 @@ fn read_dirents(dir: &Path) -> Vec<(String, fs::FileType)> {
         Err(error) => {
             // ENOENT and ENOTDIR: the tree moved under us.
             if !matches!(error.raw_os_error(), Some(2) | Some(20)) {
-                eprintln!("ingest: listSessions failed under {}: {error}", dir.display());
+                eprintln!(
+                    "stream: listSessions failed under {}: {error}",
+                    dir.display()
+                );
             }
             return Vec::new();
         }
@@ -337,7 +344,9 @@ fn persisted_output_path(text: &str) -> Option<String> {
     let marker = "saved to: ";
     let at = text.find(marker)?;
     let start = at + marker.len();
-    let stop = text[start..].find('\n').map_or(text.len(), |offset| start + offset);
+    let stop = text[start..]
+        .find('\n')
+        .map_or(text.len(), |offset| start + offset);
     let reference = text[start..stop].trim();
     (!reference.is_empty()).then(|| reference.to_string())
 }
@@ -442,9 +451,16 @@ fn attach_usage(
     if let Some(first) = events.first_mut() {
         first.tokens_in = Some(tokens_in);
         first.tokens_out = tokens_out;
-        first.extra.insert("input_non_cached_tokens".into(), Value::from(input_tokens));
-        first.extra.insert("cache_creation_tokens".into(), Value::from(cache_creation_tokens));
-        first.extra.insert("cache_read_tokens".into(), Value::from(cache_read_tokens));
+        first
+            .extra
+            .insert("input_non_cached_tokens".into(), Value::from(input_tokens));
+        first.extra.insert(
+            "cache_creation_tokens".into(),
+            Value::from(cache_creation_tokens),
+        );
+        first
+            .extra
+            .insert("cache_read_tokens".into(), Value::from(cache_read_tokens));
         return;
     }
     let mut event = make("meta", "");
@@ -452,8 +468,15 @@ fn attach_usage(
     event.tokens_in = Some(tokens_in);
     event.tokens_out = tokens_out;
     event.extra.insert("kind".into(), Value::from("usage"));
-    event.extra.insert("input_non_cached_tokens".into(), Value::from(input_tokens));
-    event.extra.insert("cache_creation_tokens".into(), Value::from(cache_creation_tokens));
-    event.extra.insert("cache_read_tokens".into(), Value::from(cache_read_tokens));
+    event
+        .extra
+        .insert("input_non_cached_tokens".into(), Value::from(input_tokens));
+    event.extra.insert(
+        "cache_creation_tokens".into(),
+        Value::from(cache_creation_tokens),
+    );
+    event
+        .extra
+        .insert("cache_read_tokens".into(), Value::from(cache_read_tokens));
     events.push(event);
 }

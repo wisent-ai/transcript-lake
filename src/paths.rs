@@ -1,5 +1,5 @@
-//! Where every piece of product state lives, and the cheap inspections built
-//! on top of it: partition inventory, cursor health, last-ingest summary.
+//! Product state paths and cheap inspections: partition inventory, cursor
+//! health, and the live stream state.
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -9,7 +9,7 @@ use serde_json::Value;
 
 use crate::util::{absolute, find_on_path, home_dir, Result};
 
-pub const SUMMARY_FILE: &str = "last-ingest.json";
+pub const STREAM_STATUS_FILE: &str = "stream-status.json";
 
 /// Resolved state root: the explicit selection, `LAKE_DATA`, or the default.
 pub fn resolve_data_dir(selected: Option<&Path>) -> PathBuf {
@@ -31,8 +31,8 @@ pub struct LakePaths {
     pub data_dir: PathBuf,
     pub events: PathBuf,
     pub cursors: PathBuf,
-    #[serde(rename = "lastIngest")]
-    pub last_ingest: PathBuf,
+    #[serde(rename = "streamStatus")]
+    pub stream_status: PathBuf,
     pub parquet: PathBuf,
     #[serde(rename = "okoExport")]
     pub oko_export: PathBuf,
@@ -50,7 +50,7 @@ pub fn lake_paths() -> LakePaths {
     LakePaths {
         events: data_dir.join("events"),
         cursors: data_dir.join("cursors.json"),
-        last_ingest: data_dir.join(SUMMARY_FILE),
+        stream_status: data_dir.join(STREAM_STATUS_FILE),
         parquet: data_dir.join("parquet"),
         oko_export: data_dir.join("exports").join("oko"),
         oko_staging: data_dir.join("staging").join("oko-export"),
@@ -58,7 +58,10 @@ pub fn lake_paths() -> LakePaths {
             .map(PathBuf::from)
             .filter(|path| !path.as_os_str().is_empty())
             .unwrap_or_else(|| {
-                home_dir().join(".hooks-adaptive").join("telemetry-segments").join("ready")
+                home_dir()
+                    .join(".hooks-adaptive")
+                    .join("telemetry-segments")
+                    .join("ready")
             }),
         duckdb: find_on_path("duckdb"),
         oko_cli: env::var_os("OKO_CLI")
@@ -176,22 +179,35 @@ pub fn read_cursor_status(path: &Path) -> CursorStatus {
 }
 
 #[derive(Debug, Serialize)]
-pub struct LastIngest {
+pub struct StreamStatus {
     pub state: &'static str,
     pub summary: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
 }
 
-pub fn read_last_ingest(path: &Path) -> LastIngest {
+pub fn read_stream_status(path: &Path) -> StreamStatus {
     if !path.exists() {
-        return LastIngest { state: "absent", summary: None, error: None };
+        return StreamStatus {
+            state: "absent",
+            summary: None,
+            error: None,
+        };
     }
-    match fs::read_to_string(path).map_err(|e| e.to_string()).and_then(|raw| {
-        serde_json::from_str::<Value>(&raw).map_err(|error| error.to_string())
-    }) {
-        Ok(summary) => LastIngest { state: "healthy", summary: Some(summary), error: None },
-        Err(error) => LastIngest { state: "invalid", summary: None, error: Some(error) },
+    match fs::read_to_string(path)
+        .map_err(|e| e.to_string())
+        .and_then(|raw| serde_json::from_str::<Value>(&raw).map_err(|error| error.to_string()))
+    {
+        Ok(summary) => StreamStatus {
+            state: "healthy",
+            summary: Some(summary),
+            error: None,
+        },
+        Err(error) => StreamStatus {
+            state: "invalid",
+            summary: None,
+            error: Some(error),
+        },
     }
 }
 

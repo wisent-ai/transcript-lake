@@ -73,26 +73,26 @@ No migration is currently required. Derived Parquet and Oko-export data may be d
 
 ## Upgrade
 
-1. Stop external schedulers that invoke Transcript Lake.
+1. Stop the supervised stream and every other process that can mutate its `LAKE_DATA`.
 2. Record `transcript-lake --version` and `transcript-lake status`.
 3. Back up `LAKE_DATA`, including cursors and partitions.
 4. Obtain the exact target release archive, checksum, and provenance from GitHub Releases.
 5. Verify SHA-256 before installation.
 6. Install the archive and confirm the reported version.
 7. Apply only migrations documented for that release.
-8. Run an incremental ingest and inspect status before restoring scheduling.
+8. Start the new stream and inspect its status before restoring downstream readers.
 
 Skipping intermediate versions is supported only when every intervening release note says its migration may be skipped.
 
 ## Rollback and recovery
 
-1. Stop every process or scheduler that can mutate the same `LAKE_DATA` root.
+1. Stop the stream and every other process that can mutate the same `LAKE_DATA` root.
 2. Restore the prior immutable archive by version and verified digest.
 3. If the newer release changed durable state, restore the matching pre-upgrade backup. Never let two versions mutate one state root concurrently.
 4. Confirm the restored version and inspect status.
-5. Resume ingestion only after state compatibility is established.
+5. Resume the supervised stream only after state compatibility is established.
 
-If only derived Parquet or Oko-export state is damaged, keep NDJSON and cursors, remove only the affected derived directory, and rebuild it with the matching supported release. If authoritative partitions or cursors are damaged, preserve them for diagnosis and restore the backup rather than attempting ad hoc repair.
+If only derived Parquet or Oko-projection state is damaged, keep NDJSON and cursors, remove only the affected derived directory, and rebuild it with the matching supported release. If authoritative partitions or cursors are damaged, preserve them for diagnosis and restore the backup rather than attempting ad hoc repair.
 
 ## Release notes and limitations
 

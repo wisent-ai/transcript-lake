@@ -1,13 +1,12 @@
 # Create the first local archive
 
-1. **Goal:** Install the development build, ingest supported local transcripts, and observe the masked Lake inventory.
-2. **Status:** Development `0.x`; implemented capability, execution evidence pending.
-3. **Risk:** Local mutation and provider-facing read. No network or credential use after installation.
-4. **Environment:** macOS, local user account, isolated terminal, repository checkout only for the development channel.
-5. **Preconditions:** A Rust toolchain at version `1.85` or newer; writable operator-owned path; no scheduler using that path; local agent sessions optional.
-6. **Inputs:** `LAKE_DATA` is an absolute local directory selected by the operator. This example uses a temporary directory printed by `mktemp`.
-7. **Artifacts and side effects:** Installs one executable into `~/.cargo/bin`; writes cursors, masked partitions when sources exist, last-ingest summary, and Oko export beneath the temporary root. Reads but never changes vendor stores.
-8. **Steps:**
+1. **Goal:** Install the development build, start the stream, and observe its masked Lake inventory.
+2. **Risk:** Local mutation and provider-facing read. No network or credential use after installation.
+3. **Environment:** macOS, local user account, isolated terminal, repository checkout.
+4. **Preconditions:** Rust `1.85` or newer, a writable operator-owned path, no other writer using that path, and optional local agent sessions.
+5. **Inputs:** One absolute `LAKE_DATA`; this example uses a temporary directory.
+6. **Artifacts and side effects:** Installs one executable into `~/.cargo/bin`; writes cursors, masked partitions, live stream state, and Oko projection files beneath the selected root. Vendor stores are read-only.
+7. **Steps:**
 
 ```sh
 git clone https://github.com/wisent-ai/transcript-lake.git
@@ -18,12 +17,18 @@ transcript-lake
 transcript-lake --data-dir "$LAKE" paths
 transcript-lake --data-dir "$LAKE" sources
 transcript-lake --data-dir "$LAKE" doctor
-transcript-lake --data-dir "$LAKE" ingest
+transcript-lake --data-dir "$LAKE" stream --json
+```
+
+While the stream remains open, use another terminal:
+
+```sh
+transcript-lake --data-dir "$LAKE" status
 transcript-lake --data-dir "$LAKE" sessions --limit 10
 transcript-lake --data-dir "$LAKE" stats --days 7
 ```
 
-9. **Verification:** The first invocation prints purpose and safe next commands without creating the selected root. Paths, sources, and doctor expose configuration and availability without mutation. Ingest prints one JSON object with `partial: false` and `failures: 0` when every discovered source succeeded. Sessions and stats expose normalized evidence only when supported records existed.
-10. **Failure path:** If `partial` is true or exit is non-zero, retain the root and read stderr plus per-runtime failure counts. Use [representative failures](../failures/representative-failures.md); do not delete evidence or rerun full mode into this root.
-11. **Cleanup or off-switch:** Stop future invocations, retain the printed temporary parent for inspection, then remove it only after deciding the evidence is unnecessary. `cargo uninstall transcript-lake` removes the executable but not Lake data.
-12. **Next:** Continue with [incremental ingest](../core/incremental-ingest.md) or [query sessions](../core/query-sessions.md).
+8. **Observable result:** The first invocation prints purpose and safe commands without creating the selected root. The stream prints one `start` record, source activity produces `commit` records, and status reports the live process plus durable cursors.
+9. **Failure path:** A fatal startup or authoritative-state error exits non-zero. A source-local failure is named in the stream log and leaves that source cursor unchanged. Preserve the root and use [representative failures](../failures/representative-failures.md).
+10. **Off-switch:** Stop the foreground process with SIGINT or SIGTERM. The executable and Lake data remain independent.
+11. **Related operations:** Continue with the [live stream](../core/live-stream.md) or [query sessions](../core/query-sessions.md).

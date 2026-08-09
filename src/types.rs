@@ -1,6 +1,5 @@
-//! The canonical event contract and the adapter interface, frozen exactly as
-//! docs/LAKE.md documents them. Adapters emit UNMASKED text; the ingest driver
-//! is the single masking boundary. Adapters never write anything.
+//! Canonical events and adapter contracts. Adapters emit unmasked text; the
+//! stream owns the single masking boundary and adapters never write directly.
 use std::path::{Path, PathBuf};
 
 use serde::Serialize;
@@ -20,7 +19,7 @@ pub const EVENT_TYPES: [&str; 7] = [
     "hook_decision",
 ];
 
-/// One transcript file an adapter offers for ingestion.
+/// One transcript file exposed by an adapter.
 #[derive(Debug, Clone)]
 pub struct SessionEntry {
     pub file: PathBuf,
@@ -107,8 +106,8 @@ pub struct SegmentOutput {
     pub sha256: String,
 }
 
-/// Where a producer that is not a plain line adapter hands its events: the
-/// ingest driver implements this, so masking, capping, canonicalization, and
+/// Where a producer that is not a plain line adapter hands its events. The
+/// stream implements this boundary so masking, capping, canonicalization, and
 /// partition placement stay in exactly one place.
 ///
 /// Closed hook segments are immutable, so their output is published durably
@@ -125,4 +124,3 @@ pub trait EventSink {
         events: &[RawEvent],
     ) -> crate::util::Result<Vec<SegmentOutput>>;
 }
-

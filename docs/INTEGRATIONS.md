@@ -15,8 +15,8 @@ The Transcript Lake maintainers own these contracts. Source-runtime maintainers 
 | Kimi Code | Read wire messages, tools, and turn usage | Supported | No individual adapter is mandatory | None | Observed Kimi wire and session-index layout |
 | Tama adaptive hooks | Import validated closed decision segments; legacy log fallback | Supported | No | None | Segment protocol `hooks-telemetry-segment-v1`; legacy logs only when segment handoff directory is absent |
 | DuckDB | SQL views and Parquet compaction | Supported optional tool | No | None | CLI `1.5.x` on `PATH` |
-| Oko | Consume canonical per-session export and optionally reindex | Supported optional tool | No | None for local invocation | Export schema `oko-import-v1`; compatible `oko-cli transcripts reindex` |
-| Gemini and Qwen | Transcript ingestion | Not supported | No | None | Planned only after verified local formats exist |
+| Oko | Consume canonical per-session projection and optionally reindex | Supported optional tool | No | None for local invocation | Projection schema `oko-import-v1`; compatible `oko-cli transcripts reindex` |
+| Gemini and Qwen | Transcript streaming | Not supported | No | None | Planned only after verified local formats exist |
 
 Unsupported runtime selection fails before state mutation. The absence of one adapter root means that runtime contributes no files; it does not disable other runtimes.
 
@@ -25,8 +25,9 @@ Unsupported runtime selection fails before state mutation. The absence of one ad
 Every `src/adapters/<runtime>.rs` module implements the `Adapter` trait:
 
 - `runtime()`: stable runtime identifier;
-- `roots(home)`: existing local roots only;
-- `list_sessions(root)`: source file, runtime-native session identity, and project hint;
+- `roots(home)`: watched local roots;
+- `list_sessions(root)`: historical replay entries;
+- `entry_for(root, path)`: one notified source file without sibling enumeration;
 - `parser(context)`: per-file `Parser` with `on_line` and `end`.
 
 Adapters translate external records into canonical product intent. They do not write Lake state, perform network requests, fetch referenced tool-result files, or mask text themselves. `on_line` performs no I/O. The core driver applies bounds, recursive masking, partition ownership, cursors, and failure reporting.
@@ -44,13 +45,13 @@ Provider-specific record types, IDs, and usage fields remain inside adapter modu
 - **Retention:** vendor-owned; Lake retains only its masked copy according to operator policy.
 - **Sensitivity:** raw transcript text is untrusted and potentially secret-bearing. It crosses only the in-process adapter-to-masker boundary.
 
-A malformed source line is dropped by the adapter. A parser exception, unreadable file, invalid adapter, or invalid source transition contributes a failure and makes the run partial. Other runtime checkpoints remain recoverable.
+A malformed source line is dropped by the adapter. A parser exception, unreadable file, invalid adapter, or invalid source transition leaves that file cursor unchanged and is logged by the stream; unrelated paths continue.
 
 ### Compatibility and removal
 
 Support is pinned to the observed formats documented in [LAKE.md](LAKE.md), not to an unverified vendor marketing version. A format change is detected through parsing failures, missing required envelope fields, or qualification against a verified source sample. It must not be silently reinterpreted as another provider.
 
-Disabling a runtime means invoking `--source` for another runtime or removing that adapter in a compatibility-breaking release. Transcript Lake never deletes the runtime's source files. Existing Lake events remain understandable by their stable runtime identifier.
+The live stream follows every supported runtime with an existing root; it has no mutable source-selection configuration. `rebuild --source <runtime>` narrows explicit historical recovery. Removing an adapter is a compatibility-breaking release change and never deletes the runtime's source files; existing Lake events retain their stable runtime identifier.
 
 ## Tama adaptive-hook integration
 
@@ -70,13 +71,13 @@ A closed segment declares protocol, segment ID, producer and invocation identity
 - payload SHA-256;
 - producer identity and filename agreement.
 
-Invalid segments are not acknowledged, increment integration failures, and make the ingest partial. Valid output files are content checked; a conflicting existing output is a hard failure. Cursor commit precedes acknowledgement, so retry either completes the same transaction or republishes the existing acknowledgement.
+Invalid segments are not acknowledged and the stream logs the integration failure without blocking other sources. Valid output files are content checked; a conflicting existing output is a hard failure for that segment. Cursor commit precedes acknowledgement, so retry either completes the same transaction or republishes the existing acknowledgement.
 
 ### Selection and duplicate prevention
 
-`HOOKS_ADAPTIVE_SEGMENTS_READY` optionally selects the ready directory. The default is the Tama local handoff path. When that directory exists, closed segments are the only hook source. Legacy mutable telemetry logs are read only when the segment handoff directory is absent. The two paths are never ingested in the same run, preventing double counting during migration.
+`HOOKS_ADAPTIVE_SEGMENTS_READY` optionally selects the ready directory. The default is the Tama local handoff path. When that directory exists, closed segments are the only hook source. Legacy mutable telemetry logs are watched only when the segment handoff directory is absent. The two paths are never streamed together, preventing double counting during migration.
 
-No credential or network service is required. Removing the integration means stopping segment production and revoking any scheduler access to the ready directory. Already committed hook events remain ordinary Lake evidence.
+No credential or network service is required. Removing the integration means stopping segment production and removing the stream's read access to the ready directory. Already committed hook events remain ordinary Lake evidence.
 
 ## DuckDB integration
 
@@ -91,7 +92,7 @@ Configuration is executable discovery through `PATH`; there is no endpoint, cred
 
 Core views require no network. `signals` loads the compiled-in `signals.sql`, which may install DuckDB's SQLite extension and therefore may need network access on a fresh installation. It attaches the local Oko index read-only and selects one named report. Arbitrary `query` SQL is not sandboxed and may have DuckDB-defined write effects.
 
-Removal is omission of analytics/compaction workflows and, after readers stop, `clean --target parquet --apply`. Ingest, masking, cursors, discovery, health, status, and Oko export remain usable without DuckDB.
+Removal is omission of analytics/compaction workflows and, after readers stop, `clean --target parquet --apply`. Streaming, masking, cursors, discovery, health, status, and Oko projection remain usable without DuckDB.
 
 ## Oko integration
 
@@ -105,15 +106,15 @@ LAKE_DATA/exports/oko/runtime=<runtime>/<session-hash>.jsonl
 
 Each row declares `lake_schema: oko-import-v1`, deterministic event UUID, timestamp, runtime, native session identity, project, event type, text, tool, model, token counters, and bounded extra metadata. Oko recursively imports these files and owns its SQLite index.
 
-The export is derived and rebuildable. Incremental export reads newline-complete partition growth, merges affected sessions, preserves unchanged file mtimes, and writes session files and export cursors atomically. Full export rebuilds through staging and prunes only after a completed Lake scan.
+The projection is derived and rebuildable. Live streaming merges newly canonicalized events into only the affected session files, preserves unchanged mtimes, and writes session files atomically before advancing the source cursor. Full export is an explicit recovery operation that rebuilds through staging and prunes only after a completed Lake scan.
 
 ### Configuration and failure
 
-- `export-oko` needs no Oko installation and writes only derived files under `LAKE_DATA`.
-- `--reindex` additionally invokes `OKO_CLI` or `oko-cli` with `transcripts reindex --json`.
-- `oko-refresh` invokes the compatible reindex command without exporting.
+- Live projection needs no Oko installation and writes only derived files under `LAKE_DATA`.
+- `rebuild-oko` reconstructs the projection from Lake partitions; `--reindex` then invokes `OKO_CLI` or `oko-cli` with `transcripts reindex --json`.
+- `oko-refresh` invokes the compatible reindex command without reconstruction.
 
-If Oko is unavailable, export without reindex remains successful. An explicitly requested reindex that cannot start or exits non-zero makes the CLI exit non-zero and preserves the JSON integration result. Diagnostic prose goes to stderr; structured export stdout remains parseable.
+If Oko is unavailable, live projection and export recovery remain successful. An explicitly requested reindex that cannot start or exits non-zero makes that CLI operation exit non-zero and preserves the projection. Diagnostic prose goes to stderr; structured export stdout remains parseable.
 
 No credential is exchanged. Transcript Lake does not write Oko's database directly. Oko is responsible for its own index locking, compatibility, retention, and UI behavior.
 
@@ -123,6 +124,6 @@ Stop invoking reindex, remove Oko's reference to the export, then delete `LAKE_D
 
 ## Reliability and diagnostics
 
-Integrations do not use hidden unbounded retries. Local file operations either complete, preserve prior authoritative state, or return a classified failure. Optional integration outage cannot prevent help, version, status, or unrelated runtime ingestion.
+Integrations do not use hidden unbounded retries. Local file operations either complete or preserve prior authoritative state; a failed source delta leaves its cursor unchanged and is retried on a later notification or process restart. Optional integration outage cannot prevent help, version, status, or unrelated source streaming.
 
-Operator evidence includes per-runtime files/events/skips/failures, masking counts, partial status, partition inventory, Oko export mode and malformed count, reindex status, and DuckDB exit status. Diagnostics may include local paths and process identity but must never print unmasked transcript payloads or credentials.
+Operator evidence includes stream lifecycle and per-source commit/failure lines, masking counts, partition inventory, Oko projection state, reindex status, and DuckDB exit status. Diagnostics may include local paths and process identity but never print unmasked transcript payloads or credentials.

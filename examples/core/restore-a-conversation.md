@@ -2,13 +2,12 @@
 
 **Outcome:** read a past coding-agent conversation back in full — in order, untruncated — after the runtime that produced it has moved on, closed the session, or stopped mid-turn.
 
-**Status:** Draft — execution pending.
 **Risk:** Read-only, external tool (DuckDB).
 **Interface:** `transcript-lake sessions`, `transcript-lake search`, `transcript-lake show`.
 
 ## Preconditions
 
-- A Lake with at least one ingested session (`transcript-lake status` reports partitions).
+- A Lake with at least one streamed session (`transcript-lake status` reports partitions).
 - DuckDB `1.5.x` on `PATH`; `show` reads through the canonical views.
 - The session identifier. `sessions`, `sessions --interrupted`, and `search` all print it.
 
@@ -73,7 +72,7 @@ None. `show` reads Lake partitions through DuckDB views and writes nothing. Redi
 transcript-lake show not-a-session
 ```
 
-fails with `unknown session "not-a-session": not present in the selected Lake (check the id or run ingest first)` and a non-zero status; an unknown `--include` value is rejected with the exact list of accepted event types. Neither case prints a partial transcript.
+fails with `unknown session "not-a-session": not present in the selected Lake (check the id or start the stream first)` and a non-zero status; an unknown `--include` value is rejected with the exact list of accepted event types. Neither case prints a partial transcript.
 
 ## Notes
 

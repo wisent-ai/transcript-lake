@@ -1,6 +1,6 @@
 [package]
 name = "transcript-lake"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 rust-version = "1.85"
 description = "Privacy-masked local event archive for coding-agent transcripts"
@@ -18,7 +18,7 @@ path = "src/main.rs"
 # float_roundtrip makes JSON.parse-exact doubles: without it serde_json's fast
 # float path is off by one ULP, and every stored mtimeMs (cursors.json,
 # exports/oko/export-cursors.json) fails its equality check on read, which
-# fails ingest closed and forces a full Oko rebuild on every run.
+# rejects the stream state and forces a full Oko rebuild on every run.
 serde_json = { version = "1", features = ["preserve_order", "float_roundtrip"] }
 serde = { version = "1", features = ["derive"] }
 sha2 = "0.10"

@@ -2,7 +2,7 @@
 //!   `~/.kimi-code/sessions/wd_*/session_*/agents/main/wire.jsonl`
 //!
 //! Frozen interface: `runtime`, `roots(home)`, `list_sessions(root)`, `parser(ctx)`.
-//! Adapters emit UNMASKED text (the ingest driver masks) and never do IO in `on_line`.
+//! Adapters emit UNMASKED text (the stream masks) and never do IO in `on_line`.
 //! Shapes verified against the largest live wire files on this machine:
 //!   metadata {protocol_version, app_version, created_at(epoch ms)}
 //!   config.update {profileName, systemPrompt}          -> meta only, prompt dropped
@@ -83,8 +83,10 @@ impl Adapter for Kimi {
         let session_dir = agents.parent()?;
         let work_dir = session_dir.parent()?;
         let home = crate::util::home_dir();
-        let root =
-            self.roots(&home).into_iter().find(|root| work_dir.parent() == Some(root.as_path()))?;
+        let root = self
+            .roots(&home)
+            .into_iter()
+            .find(|root| work_dir.parent() == Some(root.as_path()))?;
         if !work_dir.file_name()?.to_string_lossy().starts_with("wd_")
             || !dirent_type(work_dir)?.is_dir()
             || !dirent_type(session_dir)?.is_dir()
@@ -108,10 +110,10 @@ impl Adapter for Kimi {
     }
 }
 
-/// A root or session directory may vanish between scan and read; that is not an error
-/// state worth failing ingestion over. Anything else (permissions, IO) was fatal in the
-/// previous implementation, which could throw out of `listSessions`; the frozen Rust
-/// signature cannot, so it is reported on stderr with the driver's own prefix instead.
+/// A root or session directory may vanish between scan and read; that is not an
+/// error state worth failing the stream over. Other permissions or IO failures
+/// were fatal in the previous implementation.
+/// The frozen Rust signature reports them on stderr with the stream prefix.
 /// Names come back in byte order, because Node's `readdirSync` sorts with strcmp.
 fn read_dirents(dir: &Path) -> Vec<(String, fs::FileType)> {
     let iter = match fs::read_dir(dir) {
@@ -119,7 +121,10 @@ fn read_dirents(dir: &Path) -> Vec<(String, fs::FileType)> {
         Err(error) => {
             // ENOENT and ENOTDIR: the tree moved under us.
             if !matches!(error.raw_os_error(), Some(2) | Some(20)) {
-                eprintln!("ingest: listSessions failed under {}: {error}", dir.display());
+                eprintln!(
+                    "stream: listSessions failed under {}: {error}",
+                    dir.display()
+                );
             }
             return Vec::new();
         }
@@ -154,7 +159,11 @@ fn session_entry(
     if !name.starts_with("session_") {
         return None;
     }
-    let file = work_dir.join(name).join("agents").join("main").join("wire.jsonl");
+    let file = work_dir
+        .join(name)
+        .join("agents")
+        .join("main")
+        .join("wire.jsonl");
     if !file.exists() {
         return None;
     }
@@ -319,7 +328,9 @@ impl KimiParser {
         }
         if record_type == "turn.cancel" {
             let mut event = make("meta", "");
-            event.extra.insert("kind".into(), Value::from("turn.cancel"));
+            event
+                .extra
+                .insert("kind".into(), Value::from("turn.cancel"));
             return vec![event];
         }
         // turn.prompt / turn.steer echo append_message; tools.*, permission.*, *_mode.*,
@@ -393,8 +404,9 @@ impl KimiParser {
                         _ => String::new(),
                     },
                 };
-                let tool_name =
-                    call_id.as_ref().and_then(|call_id| self.tool_names.get(call_id).cloned());
+                let tool_name = call_id
+                    .as_ref()
+                    .and_then(|call_id| self.tool_names.get(call_id).cloned());
                 let mut extra = Map::new();
                 if let Some(call_id) = &call_id {
                     extra.insert("tool_use_id".into(), Value::from(call_id.clone()));
@@ -426,7 +438,10 @@ impl KimiParser {
             return Vec::new();
         }
         let empty = Value::Object(Map::new());
-        let usage = rec.get("usage").filter(|value| value.is_object()).unwrap_or(&empty);
+        let usage = rec
+            .get("usage")
+            .filter(|value| value.is_object())
+            .unwrap_or(&empty);
         let input_other = num_or_zero(usage, "inputOther");
         let cache_read = num_or_zero(usage, "inputCacheRead");
         let cache_creation = num_or_zero(usage, "inputCacheCreation");
@@ -440,9 +455,15 @@ impl KimiParser {
         event.tokens_in = Some(tokens_in);
         event.tokens_out = Some(tokens_out);
         event.extra.insert("kind".into(), Value::from("usage"));
-        event.extra.insert("input_non_cached_tokens".into(), Value::from(input_other));
-        event.extra.insert("cache_creation_tokens".into(), Value::from(cache_creation));
-        event.extra.insert("cache_read_tokens".into(), Value::from(cache_read));
+        event
+            .extra
+            .insert("input_non_cached_tokens".into(), Value::from(input_other));
+        event
+            .extra
+            .insert("cache_creation_tokens".into(), Value::from(cache_creation));
+        event
+            .extra
+            .insert("cache_read_tokens".into(), Value::from(cache_read));
         vec![event]
     }
 }
@@ -452,7 +473,9 @@ fn is_truthy(value: &Value) -> bool {
     match value {
         Value::Null => false,
         Value::Bool(flag) => *flag,
-        Value::Number(number) => number.as_f64().is_some_and(|raw| raw != 0.0 && !raw.is_nan()),
+        Value::Number(number) => number
+            .as_f64()
+            .is_some_and(|raw| raw != 0.0 && !raw.is_nan()),
         Value::String(text) => !text.is_empty(),
         Value::Array(_) | Value::Object(_) => true,
     }

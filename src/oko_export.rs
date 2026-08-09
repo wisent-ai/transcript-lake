@@ -30,11 +30,20 @@ const MINUTES_PER_HOUR: f64 = 60.0;
 const HOURS_PER_DAY: f64 = 24.0;
 const CURSOR_WALK_DEPTH: usize = 4;
 const PAD: usize = 26;
-const CONVERSATION_EVENTS: [&str; 6] =
-    ["user", "assistant", "thinking", "tool_call", "tool_result", "meta"];
+const CONVERSATION_EVENTS: [&str; 6] = [
+    "user",
+    "assistant",
+    "thinking",
+    "tool_call",
+    "tool_result",
+    "meta",
+];
 
 fn oko_support_dir() -> PathBuf {
-    home_dir().join("Library").join("Application Support").join("Oko")
+    home_dir()
+        .join("Library")
+        .join("Application Support")
+        .join("Oko")
 }
 
 /// The Oko transcript index this machine would read. Shared with the DuckDB
@@ -159,7 +168,13 @@ fn js_string(value: &Value) -> String {
         Value::String(text) => text.clone(),
         Value::Array(items) => items
             .iter()
-            .map(|item| if item.is_null() { String::new() } else { js_string(item) })
+            .map(|item| {
+                if item.is_null() {
+                    String::new()
+                } else {
+                    js_string(item)
+                }
+            })
             .collect::<Vec<_>>()
             .join(","),
         Value::Object(_) => "[object Object]".to_string(),
@@ -170,7 +185,9 @@ fn is_truthy(value: &Value) -> bool {
     match value {
         Value::Null => false,
         Value::Bool(flag) => *flag,
-        Value::Number(number) => number.as_f64().is_some_and(|raw| raw != 0.0 && !raw.is_nan()),
+        Value::Number(number) => number
+            .as_f64()
+            .is_some_and(|raw| raw != 0.0 && !raw.is_nan()),
         Value::String(text) => !text.is_empty(),
         _ => true,
     }
@@ -193,7 +210,7 @@ fn number_value(raw: f64) -> Value {
     Value::from(raw)
 }
 
-// Deterministic per-event id dedupes explicit full re-ingests and gives Oko
+// Deterministic per-event ids deduplicate recovery replays and give Oko
 // stable tool-use identifiers without retaining a source filename.
 fn fingerprint(event: &Value, runtime: &str) -> String {
     let extra = match event.get("extra") {
@@ -239,7 +256,10 @@ fn export_line(event: &Value, runtime: &str, fingerprint: &str) -> Value {
     let mut row = Map::new();
     row.insert("lake_schema".to_string(), json!("oko-import-v1"));
     row.insert("uuid".to_string(), json!(fingerprint));
-    row.insert("ts".to_string(), event.get("ts").cloned().unwrap_or(Value::Null));
+    row.insert(
+        "ts".to_string(),
+        event.get("ts").cloned().unwrap_or(Value::Null),
+    );
     row.insert("runtime".to_string(), json!(runtime));
     row.insert(
         "session_id".to_string(),
@@ -260,7 +280,10 @@ fn export_line(event: &Value, runtime: &str, fingerprint: &str) -> Value {
     row.insert("tool_name".to_string(), optional_string(event, "tool_name"));
     row.insert("model".to_string(), optional_string(event, "model"));
     row.insert("tokens_in".to_string(), optional_number(event, "tokens_in"));
-    row.insert("tokens_out".to_string(), optional_number(event, "tokens_out"));
+    row.insert(
+        "tokens_out".to_string(),
+        optional_number(event, "tokens_out"),
+    );
     row.insert(
         "extra".to_string(),
         match event.get("extra") {
@@ -290,7 +313,9 @@ fn remove_tree(path: &Path) -> Result<()> {
 }
 
 fn read_text(file: &Path) -> Option<String> {
-    fs::read(file).ok().map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
+    fs::read(file)
+        .ok()
+        .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
 }
 
 /// Lines of one byte range of a partition, decoded the way Node's utf8 stream
@@ -346,10 +371,17 @@ fn accepted(event: &Value) -> bool {
     if !CONVERSATION_EVENTS.contains(&event_type) {
         return false;
     }
-    if !event.get("session_id").and_then(Value::as_str).is_some_and(|id| !id.is_empty()) {
+    if !event
+        .get("session_id")
+        .and_then(Value::as_str)
+        .is_some_and(|id| !id.is_empty())
+    {
         return false;
     }
-    event.get("ts").and_then(Value::as_str).is_some_and(|ts| !ts.is_empty())
+    event
+        .get("ts")
+        .and_then(Value::as_str)
+        .is_some_and(|ts| !ts.is_empty())
 }
 
 fn row_runtime(event: &Value, fallback: &str) -> String {
@@ -412,13 +444,22 @@ fn stage_events(
             let session_id = event["session_id"].as_str().unwrap_or_default().to_string();
             let key = session_key(&runtime, &session_id);
             let session_hash = hash_text(&key);
-            let staged_file = staging_root.join(&runtime).join(session_hash.clone() + ".ndjson");
+            let staged_file = staging_root
+                .join(&runtime)
+                .join(session_hash.clone() + ".ndjson");
             let fingerprint = fingerprint(&event, &runtime);
             let chunk = serde_json::to_string(&export_line(&event, &runtime, &fingerprint))? + "\n";
             buffered_bytes += chunk.len();
-            buffers.entry(staged_file.clone()).or_default().push_str(&chunk);
+            buffers
+                .entry(staged_file.clone())
+                .or_default()
+                .push_str(&chunk);
             if seen.insert(key) {
-                sessions.push(StagedSession { runtime, session_hash, staged_file });
+                sessions.push(StagedSession {
+                    runtime,
+                    session_hash,
+                    staged_file,
+                });
             }
             if buffered_bytes >= BUFFER_LIMIT {
                 flush_buffers(&mut buffers)?;
@@ -437,7 +478,9 @@ struct SessionWrite {
 }
 
 fn session_file(output_root: &Path, runtime: &str, session_hash: &str) -> PathBuf {
-    output_root.join(format!("runtime={runtime}")).join(format!("{session_hash}.jsonl"))
+    output_root
+        .join(format!("runtime={runtime}"))
+        .join(format!("{session_hash}.jsonl"))
 }
 
 fn row_order(left: &Value, right: &Value) -> std::cmp::Ordering {
@@ -445,7 +488,9 @@ fn row_order(left: &Value, right: &Value) -> std::cmp::Ordering {
         Some(value) => js_string(value),
         None => "undefined".to_string(),
     };
-    text(left, "ts").cmp(&text(right, "ts")).then_with(|| text(left, "uuid").cmp(&text(right, "uuid")))
+    text(left, "ts")
+        .cmp(&text(right, "ts"))
+        .then_with(|| text(left, "uuid").cmp(&text(right, "uuid")))
 }
 
 fn dedupe(rows: Vec<Value>) -> Vec<Value> {
@@ -492,10 +537,18 @@ fn materialize_session(entry: &StagedSession, output_root: &Path) -> Result<Sess
     let content = render(&rows)?;
     let existing = read_text(&file);
     if existing.as_deref() == Some(content.as_str()) {
-        return Ok(SessionWrite { file, records: rows.len() as u64, changed: false });
+        return Ok(SessionWrite {
+            file,
+            records: rows.len() as u64,
+            changed: false,
+        });
     }
     atomic_write(&file, &content)?;
-    Ok(SessionWrite { file, records: rows.len() as u64, changed: true })
+    Ok(SessionWrite {
+        file,
+        records: rows.len() as u64,
+        changed: true,
+    })
 }
 
 fn prune_outputs(output_root: &Path, expected: &HashSet<PathBuf>) -> Result<u64> {
@@ -607,8 +660,9 @@ fn incremental_sessions(
         if let Some(cursor) = &cursor {
             let shrank = cursor.size.is_some_and(|recorded| size < recorded);
             let same_size = cursor.size.is_some_and(|recorded| size == recorded);
-            let mtime_changed =
-                cursor.mtime_ms.is_none_or(|recorded| partition.mtime_ms != recorded);
+            let mtime_changed = cursor
+                .mtime_ms
+                .is_none_or(|recorded| partition.mtime_ms != recorded);
             let rewritten_in_place = match cursor.physical_size {
                 None => partition.physical_size == partition.size,
                 Some(recorded) => (partition.physical_size as f64) <= recorded,
@@ -662,7 +716,9 @@ fn incremental_sessions(
                 }
             };
             let fingerprint = fingerprint(&event, &runtime);
-            sessions[slot].rows.push(export_line(&event, &runtime, &fingerprint));
+            sessions[slot]
+                .rows
+                .push(export_line(&event, &runtime, &fingerprint));
         }
     }
     Ok(Some(sessions))
@@ -692,10 +748,59 @@ fn merge_incremental_session(
     let content = render(&unique)?;
     let records = entry.rows.len() as u64;
     if existing.as_deref() == Some(content.as_str()) {
-        return Ok(SessionWrite { file, records, changed: false });
+        return Ok(SessionWrite {
+            file,
+            records,
+            changed: false,
+        });
     }
     atomic_write(&file, &content)?;
-    Ok(SessionWrite { file, records, changed: true })
+    Ok(SessionWrite {
+        file,
+        records,
+        changed: true,
+    })
+}
+/// Apply already-masked canonical rows directly to Oko's per-session view.
+///
+/// The real-time stream calls this before advancing a source cursor, so Oko
+/// never waits for a second partition scan. Recovery export remains available
+/// to reconstruct the projection from authoritative Lake partitions.
+pub(crate) fn project_events(data_dir: &Path, events: Vec<Value>) -> Result<()> {
+    let output_root = data_dir.join("exports").join("oko");
+    let mut sessions: Vec<IncrementalSession> = Vec::new();
+    let mut index: HashMap<String, usize> = HashMap::new();
+    for event in events {
+        if !accepted(&event) {
+            continue;
+        }
+        let runtime = row_runtime(&event, "");
+        if runtime.is_empty() || runtime == crate::types::HOOKS {
+            continue;
+        }
+        let session_id = event["session_id"].as_str().unwrap_or_default();
+        let key = session_key(&runtime, session_id);
+        let slot = match index.get(&key) {
+            Some(slot) => *slot,
+            None => {
+                sessions.push(IncrementalSession {
+                    runtime: runtime.clone(),
+                    session_hash: hash_text(&key),
+                    rows: Vec::new(),
+                });
+                index.insert(key, sessions.len() - 1);
+                sessions.len() - 1
+            }
+        };
+        let event_id = fingerprint(&event, &runtime);
+        sessions[slot]
+            .rows
+            .push(export_line(&event, &runtime, &event_id));
+    }
+    for session in &sessions {
+        merge_incremental_session(session, &output_root)?;
+    }
+    Ok(())
 }
 
 struct ExportResult {
@@ -756,46 +861,54 @@ fn export_oko_locked(full: bool, reindex: bool, data_dir: &Path) -> Result<Value
     let cursor_file = output_root.join("export-cursors.json");
     let mut tally = Tally::default();
     let partitions = event_partition_files(data_dir)?;
-    let cursors = if full { None } else { read_export_cursors(&cursor_file) };
+    let cursors = if full {
+        None
+    } else {
+        read_export_cursors(&cursor_file)
+    };
     let result = match &cursors {
         None => full_export(&partitions, &output_root, &staging_root, &mut tally)?,
-        Some(cursors) => {
-            match incremental_sessions(&partitions, cursors, &mut tally)? {
-                None => full_export(&partitions, &output_root, &staging_root, &mut tally)?,
-                Some(sessions) => {
-                    if tally.malformed > 0 {
-                        return Err(Error(
+        Some(cursors) => match incremental_sessions(&partitions, cursors, &mut tally)? {
+            None => full_export(&partitions, &output_root, &staging_root, &mut tally)?,
+            Some(sessions) => {
+                if tally.malformed > 0 {
+                    return Err(Error(
                             "incremental Oko export refused malformed Lake rows; export cursor was not advanced"
                                 .to_string(),
                         ));
-                    }
-                    let mut records = 0;
-                    let mut written = 0;
-                    let mut unchanged = 0;
-                    for entry in &sessions {
-                        let merged = merge_incremental_session(entry, &output_root)?;
-                        records += merged.records;
-                        if merged.changed {
-                            written += 1;
-                        } else {
-                            unchanged += 1;
-                        }
-                    }
-                    ExportResult {
-                        sessions: sessions.len(),
-                        records,
-                        written,
-                        unchanged,
-                        pruned: 0,
-                        mode: "incremental",
+                }
+                let mut records = 0;
+                let mut written = 0;
+                let mut unchanged = 0;
+                for entry in &sessions {
+                    let merged = merge_incremental_session(entry, &output_root)?;
+                    records += merged.records;
+                    if merged.changed {
+                        written += 1;
+                    } else {
+                        unchanged += 1;
                     }
                 }
+                ExportResult {
+                    sessions: sessions.len(),
+                    records,
+                    written,
+                    unchanged,
+                    pruned: 0,
+                    mode: "incremental",
+                }
             }
-        }
+        },
     };
-    atomic_write(&cursor_file, &(pretty_one_space(&partition_snapshot(&partitions))? + "\n"))?;
+    atomic_write(
+        &cursor_file,
+        &(pretty_one_space(&partition_snapshot(&partitions))? + "\n"),
+    )?;
     let mut summary = Map::new();
-    summary.insert("outputRoot".to_string(), json!(output_root.to_string_lossy()));
+    summary.insert(
+        "outputRoot".to_string(),
+        json!(output_root.to_string_lossy()),
+    );
     summary.insert("sessions".to_string(), json!(result.sessions));
     summary.insert("records".to_string(), json!(result.records));
     summary.insert("written".to_string(), json!(result.written));
@@ -803,7 +916,10 @@ fn export_oko_locked(full: bool, reindex: bool, data_dir: &Path) -> Result<Value
     summary.insert("pruned".to_string(), json!(result.pruned));
     summary.insert("mode".to_string(), json!(result.mode));
     summary.insert("malformed".to_string(), json!(tally.malformed));
-    summary.insert("durationMs".to_string(), json!(started_at.elapsed().as_millis() as u64));
+    summary.insert(
+        "durationMs".to_string(),
+        json!(started_at.elapsed().as_millis() as u64),
+    );
     if let Some(last_error) = tally.last_error {
         summary.insert("lastError".to_string(), json!(last_error));
     }
@@ -821,11 +937,6 @@ fn pretty_one_space(value: &Value) -> Result<String> {
     let mut serializer = serde_json::Serializer::with_formatter(&mut buffer, formatter);
     serde::Serialize::serialize(value, &mut serializer)?;
     Ok(String::from_utf8_lossy(&buffer).into_owned())
-}
-
-/// Materialize the Oko import view under the exclusive state lease.
-pub fn export_oko(full: bool, data_dir: &Path) -> Result<Value> {
-    export_oko_with_reindex(full, false, data_dir)
 }
 
 /// The same export, optionally followed by an Oko reindex while the lease is

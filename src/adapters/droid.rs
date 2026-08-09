@@ -70,7 +70,11 @@ impl Adapter for Droid {
         let home = crate::util::home_dir();
         // Both the flat legacy directory and each encoded-cwd directory beneath it are
         // roots in their own right, so a transcript always sits directly in one.
-        if !self.roots(&home).iter().any(|known| known.as_path() == root) {
+        if !self
+            .roots(&home)
+            .iter()
+            .any(|known| known.as_path() == root)
+        {
             return None;
         }
         if !dirent_type(path)?.is_file() {
@@ -81,7 +85,10 @@ impl Adapter for Droid {
 
     fn parser(&self, ctx: ParserCtx) -> Box<dyn Parser> {
         if ctx.file.to_string_lossy().ends_with(SETTINGS_EXT) {
-            return Box::new(SettingsParser { ctx, lines: Vec::new() });
+            return Box::new(SettingsParser {
+                ctx,
+                lines: Vec::new(),
+            });
         }
         Box::new(TranscriptParser {
             project: ctx.project.clone(),
@@ -132,7 +139,9 @@ fn session_entry(root: &Path, name: &str) -> Option<SessionEntry> {
     Some(SessionEntry {
         file: root.join(name),
         session_id: Some(name[..name.len() - extension.len()].to_string()),
-        project: root.file_name().and_then(|dir| decode_project(&dir.to_string_lossy())),
+        project: root
+            .file_name()
+            .and_then(|dir| decode_project(&dir.to_string_lossy())),
     })
 }
 
@@ -232,7 +241,10 @@ impl Parser for SettingsParser {
             return Vec::new();
         };
         let empty = Value::Object(Map::new());
-        let usage = rec.get("tokenUsage").filter(|value| value.is_object()).unwrap_or(&empty);
+        let usage = rec
+            .get("tokenUsage")
+            .filter(|value| value.is_object())
+            .unwrap_or(&empty);
         let mut extra = Map::new();
         extra.insert("kind".into(), Value::from("settings"));
         let provider = match rec.get("apiProviderLock") {
@@ -257,7 +269,10 @@ impl Parser for SettingsParser {
 
 /// A JSON value that is a number, as `typeof x === 'number'` accepted it.
 fn number(value: &Value) -> Option<i64> {
-    value.as_f64().filter(|raw| raw.is_finite()).map(|raw| raw as i64)
+    value
+        .as_f64()
+        .filter(|raw| raw.is_finite())
+        .map(|raw| raw as i64)
 }
 
 struct TranscriptParser {
@@ -329,7 +344,11 @@ impl TranscriptParser {
 
     fn handle(&mut self, rec: &Value) -> Option<Vec<RawEvent>> {
         let ts = self.stamp(rec)?;
-        let record_type = rec.get("type").and_then(Value::as_str).unwrap_or_default().to_string();
+        let record_type = rec
+            .get("type")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string();
         if record_type == "session_start" {
             if let Some(Value::String(cwd)) = rec.get("cwd") {
                 if !cwd.is_empty() {
@@ -380,7 +399,9 @@ impl TranscriptParser {
         }
         let mut event = self.make(ts.as_ref(), "meta", "");
         event.extra.insert("kind".into(), Value::from("unknown"));
-        event.extra.insert("droid_type".into(), Value::from(js_string(rec.get("type"))));
+        event
+            .extra
+            .insert("droid_type".into(), Value::from(js_string(rec.get("type"))));
         Some(vec![event])
     }
 
@@ -448,9 +469,10 @@ impl TranscriptParser {
                     self.flush_text(&mut events, &mut buffer, ts, text_type, &role);
                     let mut event = self.make(ts, "meta", "");
                     event.extra.insert("kind".into(), Value::from("block"));
-                    event
-                        .extra
-                        .insert("droid_block".into(), Value::from(js_string(block.get("type"))));
+                    event.extra.insert(
+                        "droid_block".into(),
+                        Value::from(js_string(block.get("type"))),
+                    );
                     events.push(event);
                 }
             }

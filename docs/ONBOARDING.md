@@ -1,6 +1,6 @@
 # Onboarding
 
-This guide moves a new operator from a clean macOS environment to the first observable Transcript Lake result. Core ingestion is local, requires no account or credential, and never modifies vendor transcript stores.
+This guide moves a new operator from a clean macOS environment to the first observable Transcript Lake result. Core streaming is local, requires no account or credential, and never modifies vendor transcript stores.
 
 ## Choose the channel
 
@@ -15,7 +15,7 @@ Do not treat a `main` archive as an immutable release.
 
 - macOS.
 - A Rust toolchain (`cargo` and `rustc`) at version `1.85` or newer, to build the CLI. Running the built binary needs nothing else.
-- Local read permission for at least one supported transcript store if you expect non-empty ingestion.
+- Local read permission for at least one supported transcript store if you expect non-empty streaming.
 - Writable local storage for `LAKE_DATA`.
 
 Check:
@@ -36,7 +36,7 @@ Expected: `Darwin`, a cargo version of `1.85` or newer, and the intended local s
 duckdb --version
 ```
 
-A missing DuckDB binary does not prevent ingest, status, masking, or Oko export.
+A missing DuckDB binary does not prevent streaming, status, masking, or Oko projection.
 
 ### Required only for Oko integration
 
@@ -46,7 +46,7 @@ A missing DuckDB binary does not prevent ingest, status, masking, or Oko export.
 command -v "${OKO_CLI:-oko-cli}"
 ```
 
-Oko is optional. Its absence must not prevent core ingestion.
+Oko is optional. Its absence must not prevent core streaming.
 
 ## Install an immutable release
 
@@ -114,7 +114,7 @@ There are no core credentials. `OKO_CLI` is optional and needed only when asking
 
 - Transcript Lake is installed.
 - `LAKE_DATA` identifies a directory the operator owns.
-- No Transcript Lake process or scheduler is using that directory.
+- No Transcript Lake stream or other writer is using that directory.
 - Zero or more supported coding-agent stores may exist under the current user's home directory.
 
 ### Inspect without mutation
@@ -126,25 +126,37 @@ transcript-lake doctor
 transcript-lake status
 ```
 
-Expected on a clean setup: resolved paths, zero or more discovered runtime stores, optional-dependency warnings rather than core failure, an absent healthy zero-state, no partitions, no cursors, and no last ingest. The Oko freshness line may report that no index or export exists.
+Expected on a clean setup: resolved paths, zero or more discovered runtime stores, optional-dependency warnings rather than core failure, an absent healthy zero-state, no partitions, no cursors, and no live stream. The Oko freshness line may report that no index or projection exists.
 
 All four commands are read-only. `doctor` exits non-zero only for corrupt authoritative metadata or a broken installed adapter; missing DuckDB/Oko and absent source stores are warnings.
 
-### Ingest
+### Start the stream
+
+Run in the foreground:
 
 ```sh
-transcript-lake ingest
+transcript-lake stream
 ```
 
-### Scheduled freshness
+The process recursively watches every supported source root. A source append is
+read directly from its durable byte cursor, masked, committed to canonical
+partitions and the affected Oko session projection, and then checkpointed.
+There is no scan interval, timer, or refresh subprocess.
 
-The CLI never schedules itself; freshness comes from an external timer running `scripts/refresh-lake.sh` (incremental `ingest`, then `export-oko`). On macOS, install the CLI first (`cargo install --path .`, which places the binary in `~/.cargo/bin`) because launchd has no TCC grant for `~/Documents`, then load a LaunchAgent with `StartInterval` that runs the installed `transcript-lake` binary from a wrapper outside the Documents tree (reference copy at `~/.local/bin/transcript-lake-refresh`, plist `com.wisent.transcript-lake-refresh`, with `~/.cargo/bin` on the agent's `PATH`). The writer lease makes overlapping ticks fail fast, so the interval only trades freshness for load, never correctness.
+For an always-on development installation from the source checkout:
 
-For near-real-time freshness, `transcript-lake watch [--debounce <seconds>] [--json]` is the online variant and the timer is the backstop. `watch` is a long-running foreground process that recursively watches every supported source root and, after a quiet interval (sixty seconds unless `--debounce` says otherwise), runs the same `ingest` then `export-oko` refresh as the timer. At most one refresh is in flight with exactly one more queued, and the writer lease stays the backstop against any other writer, so watcher and timer coexist safely. launchd or systemd is expected to KeepAlive the process (a LaunchAgent with `KeepAlive` rather than `StartInterval`, same packaging constraints as above). One log line per change batch and per run start/finish goes to stdout, which the supervisor captures; `--json` emits JSON lines.
+```sh
+scripts/install-stream-service.sh
+```
 
-Expected: one JSON object containing `finishedAt`, `source`, `full`, `perRuntime`, `maskCounts`, `durationMs`, and `okoExport`. Supported stores contribute counts; absent stores are skipped. Success with no source stores creates an empty, valid run summary rather than fake events.
+The script installs the release-profile binary outside `~/Documents`, removes
+the obsolete timer/watch LaunchAgents, and loads one KeepAlive LaunchAgent named
+`com.wisent.transcript-lake-stream`. Its combined structured log is
+`~/Library/Logs/transcript-lake-stream.log`.
 
-Side effects are limited to the selected `LAKE_DATA`: cursors, masked NDJSON partitions when records exist, the last-ingest summary, and the derived Oko export. Vendor stores remain unchanged. The command makes no network request.
+Side effects remain inside the selected `LAKE_DATA`: cursors, masked NDJSON
+partitions, stream status, and Oko session projections. Vendor stores remain
+unchanged, and the stream makes no network request.
 
 ### Observe and use the result
 
@@ -159,7 +171,7 @@ transcript-lake label aspects
 transcript-lake stats --days 7
 ```
 
-Expected: status has a last-ingest timestamp and cursor count. When supported events existed, partition counts, recent sessions/events, and statistics are non-empty, and text search returns the newest events containing the literal term. `show` reads one whole conversation back in chronological order, closing with a `rendered N of M` footer. `label add` validates the session against the Lake and appends one operator annotation beneath `LAKE_DATA/labels`. The analytics commands require DuckDB. Add `--json` for automation.
+Expected: status has a live stream record and cursor count. When supported events exist, partition counts, recent sessions/events, and statistics are non-empty, and text search returns the newest events containing the literal term. `show` reads one whole conversation back in chronological order, closing with a `rendered N of M` footer. `label add` validates the session against the Lake and appends one operator annotation beneath `LAKE_DATA/labels`. The analytics commands require DuckDB. Add `--json` for automation.
 
 ## Safe recovery and derived cleanup
 
@@ -178,18 +190,18 @@ transcript-lake clean --target all
 transcript-lake clean --target all --apply
 ```
 
-`clean` never removes authoritative NDJSON, cursors, last-ingest evidence, or vendor transcripts.
+`clean` never removes authoritative NDJSON, cursors, stream state, or vendor transcripts.
 
 ## Safe reset and uninstall
 
-Stop every scheduler using the same root. Preserve evidence by moving rather than deleting the state:
+Stop the stream using the same root. Preserve evidence by moving rather than deleting the state:
 
 ```sh
 STAMP=$(date -u '+%Y%m%dT%H%M%SZ')
 mv "$LAKE_DATA" "$LAKE_DATA.reset-$STAMP"
 ```
 
-A later ingest starts from zero. Delete the retained directory only after confirming it is no longer needed. This does not remove vendor transcripts.
+A later stream starts from zero. Delete the retained directory only after confirming it is no longer needed. This does not remove vendor transcripts.
 
 Uninstall the global development or release package:
 
@@ -207,18 +219,18 @@ Uninstallation leaves `LAKE_DATA` intact. Remove or retain that state as a separ
 |---|---|---|
 | `transcript-lake: command not found` | The installed binary is not on `PATH` | Add the install directory (`~/.cargo/bin` after `cargo install`) to `PATH`, then rerun `transcript-lake --version` |
 | `unknown command` or `unknown ... flag` | Input is outside the public CLI contract | Run `transcript-lake --help` and correct the command before retrying |
-| Permission error reading a vendor path | Current user cannot read that source | Correct ownership or omit that runtime with `--source`; do not elevate the whole ingest unnecessarily |
-| Permission error beneath `LAKE_DATA` | State root is not writable | Select an owned local path and retry; no partial cursor should be trusted until status succeeds |
-| `duckdb failed to start` | Optional SQL dependency is absent | Install compatible DuckDB; ingest and status remain available |
+| Permission error reading a vendor path | Current user cannot read that source | Correct ownership for the same user; do not elevate the stream |
+| Permission error beneath `LAKE_DATA` | State root is not writable | Select an owned local path and restart; the failed source cursor did not advance |
+| `duckdb failed to start` | Optional SQL dependency is absent | Install compatible DuckDB; streaming and status remain available |
 | `oko-cli is not on PATH` | Optional Oko integration is unavailable | Install Oko or set `OKO_CLI`; core Lake state remains valid |
-| Empty partition inventory after ingest | No supported records were discovered | Confirm the agent has local sessions and that its path matches the supported adapter contract |
+| Empty partition inventory while streaming | No supported complete records have arrived | Confirm an agent is appending within a root reported by `sources` |
 | Cursor store is unreadable | Cursor JSON was damaged | Preserve the current Lake and run `rebuild --to <empty-path>`; never edit cursors or replay into existing partitions |
 | Source shrank or changed without append | The append-only source contract was violated | Preserve both source and Lake, then use `rebuild --to <empty-path>` |
 | Another writer holds the state lock | A mutation already owns this root | Let that writer finish or diagnose its process; do not delete a live lock |
-| Interrupted ingest | Process stopped after atomic checkpoints | Rerun the same incremental command; flushed batches remain checkpointed |
-| Full replay needs too much space | Entire local history was selected | Retain current evidence and rebuild to a larger empty root or select one runtime |
+| Interrupted stream | Process stopped after atomic checkpoints | Restart it; each source resumes at its last committed byte cursor |
+| Historical replay needs too much space | Entire selected history was rebuilt | Retain current evidence and rebuild to a larger empty root or select one runtime |
 
-Errors should name the failed dependency or path and exit non-zero. Retrying incremental ingest is safe; retrying a full ingest may repeat substantial local work but must not alter vendor stores.
+Errors name the failed dependency or path. A source-local failure is logged and leaves that cursor unchanged; fatal startup or authoritative-state failure exits non-zero for the supervisor to restart.
 
 ## Machine onboarding
 
@@ -227,15 +239,15 @@ Automation should:
 1. install an exact archive and verify its SHA-256 digest;
 2. pass an explicit absolute `--data-dir` or set `LAKE_DATA`;
 3. invoke `transcript-lake doctor --json` before mutation;
-4. invoke `transcript-lake ingest` and parse JSON stdout only after a zero exit;
-5. treat stderr and non-zero exit as failure rather than partial success;
-6. serialize mutations per state root;
+4. supervise one `transcript-lake stream --json` process and parse its JSONL lifecycle records;
+5. treat process exit as a fatal lifecycle event and each `failure` record as source-local;
+6. serialize compaction, reconstruction, and applied cleanup against the stream writer lease;
 7. use `status --json`, `sources --json`, and bounded analytics commands for machine diagnostics;
-8. retain selected version, source commit, archive digest, ingest summary, and cleanup ownership.
+8. retain selected version, source commit, archive digest, stream log, and cleanup ownership.
 
-No hidden service is required. Scheduling, retention, backups, and access control for the data directory remain operator-managed.
+Continuous freshness requires exactly one explicit supervised stream. Retention, backups, and access control for the data directory remain operator-managed.
 
-## Next steps
+## Further reading
 
 - Run the [canonical examples](../examples/README.md).
 - Learn the [event and storage contract](LAKE.md).

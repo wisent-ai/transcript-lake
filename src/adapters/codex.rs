@@ -1,7 +1,7 @@
 //! Adapter: Codex CLI rollouts — `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl`
 //!
 //! Frozen interface: `runtime`, `roots(home)`, `list_sessions(root)`, `parser(ctx)`.
-//! Adapters emit UNMASKED text (the ingest driver masks) and never do IO in `on_line`;
+//! Adapters emit UNMASKED text (the stream masks) and never do IO in `on_line`;
 //! malformed lines are tolerated silently. Envelope per line:
 //! `{ timestamp, type, payload }`. Verified on live files, old and current CLI
 //! versions: content is duplicated between the response_item stream and event_msg
@@ -63,7 +63,11 @@ impl Adapter for Codex {
         let month = day.parent()?;
         let year = month.parent()?;
         let home = crate::util::home_dir();
-        if !self.roots(&home).iter().any(|root| year.parent() == Some(root.as_path())) {
+        if !self
+            .roots(&home)
+            .iter()
+            .any(|root| year.parent() == Some(root.as_path()))
+        {
             return None;
         }
         // The date nesting `subdirs` walks is exactly three levels deep and each level
@@ -90,7 +94,7 @@ impl Adapter for Codex {
 }
 
 /// A directory may vanish between scan and read; that is not an error state worth
-/// failing ingestion over. Anything else (permissions, IO) was fatal in the previous
+/// failing the stream over. Anything else (permissions, IO) was fatal in the previous
 /// implementation, which could throw out of `listSessions`; the frozen Rust signature
 /// cannot, so it is reported on stderr with the driver's own prefix instead. Names come
 /// back in byte order, because Node's `readdirSync` sorts with strcmp and the walk
@@ -101,7 +105,10 @@ fn read_dirents(dir: &Path) -> Vec<(String, fs::FileType)> {
         Err(error) => {
             // ENOENT and ENOTDIR: the tree moved under us.
             if !matches!(error.raw_os_error(), Some(2) | Some(20)) {
-                eprintln!("ingest: listSessions failed under {}: {error}", dir.display());
+                eprintln!(
+                    "stream: listSessions failed under {}: {error}",
+                    dir.display()
+                );
             }
             return Vec::new();
         }
@@ -215,10 +222,18 @@ impl CodexParser {
         let Some(ts) = self.last_ts.clone() else {
             return Vec::new();
         };
-        let Some(payload) = rec.get("payload").filter(|value| value.is_object()).cloned() else {
+        let Some(payload) = rec
+            .get("payload")
+            .filter(|value| value.is_object())
+            .cloned()
+        else {
             return Vec::new();
         };
-        let record_type = rec.get("type").and_then(Value::as_str).unwrap_or_default().to_string();
+        let record_type = rec
+            .get("type")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string();
         if record_type == "session_meta" {
             if let Some(id) = text_field(&payload, "id") {
                 self.session_id = Some(id);
@@ -293,8 +308,9 @@ impl CodexParser {
                 let Some(info) = payload.get("info").filter(|value| value.is_object()) else {
                     return Vec::new();
                 };
-                let Some(usage) =
-                    info.get("last_token_usage").filter(|value| value.is_object())
+                let Some(usage) = info
+                    .get("last_token_usage")
+                    .filter(|value| value.is_object())
                 else {
                     return Vec::new();
                 };
@@ -309,13 +325,19 @@ impl CodexParser {
                 event.model = self.model.clone();
                 event.tokens_in = Some(total_input);
                 event.tokens_out = Some(output + reasoning_output);
-                event.extra.insert("kind".into(), Value::from("token_count"));
+                event
+                    .extra
+                    .insert("kind".into(), Value::from("token_count"));
                 event.extra.insert(
                     "input_non_cached_tokens".into(),
                     Value::from((total_input - cached_input).max(0)),
                 );
-                event.extra.insert("cache_creation_tokens".into(), Value::from(0));
-                event.extra.insert("cache_read_tokens".into(), Value::from(cached_input));
+                event
+                    .extra
+                    .insert("cache_creation_tokens".into(), Value::from(0));
+                event
+                    .extra
+                    .insert("cache_read_tokens".into(), Value::from(cached_input));
                 vec![event]
             }
             // agent_message / agent_reasoning duplicate response_item content;
@@ -420,7 +442,9 @@ impl CodexParser {
         }
         // developer / system prompts: record presence only, never the text.
         let mut event = make("meta", "");
-        event.extra.insert("kind".into(), Value::from("system_prompt"));
+        event
+            .extra
+            .insert("kind".into(), Value::from("system_prompt"));
         event.extra.insert("role".into(), Value::from(role));
         vec![event]
     }

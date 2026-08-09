@@ -5,7 +5,7 @@
 //! a crash mid-write loses at most the record being appended. Labels are
 //! derived operator data, not masked Lake events: the events writer lease
 //! deliberately does not cover this store, so labeling neither blocks nor is
-//! blocked by an active ingest, and deleting labels/ discards only labels.
+//! blocked by the active stream, and deleting labels/ discards only labels.
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -94,15 +94,22 @@ pub fn label_record(
         aspect: aspect.to_string(),
         value: value.to_string(),
         note,
-        source: if source.is_empty() { MANUAL.to_string() } else { source.to_string() },
+        source: if source.is_empty() {
+            MANUAL.to_string()
+        } else {
+            source.to_string()
+        },
     }
 }
 
 /// Append one complete record and fsync it. Never takes the events writer
-/// lease: labeling and ingest are independent stores.
+/// lease: labeling and streaming are independent stores.
 pub fn append_label(data_dir: &Path, record: &LabelRecord) -> Result<()> {
     fs::create_dir_all(data_dir.join(STORE_DIR))?;
-    let mut file = OpenOptions::new().create(true).append(true).open(labels_path(data_dir))?;
+    let mut file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(labels_path(data_dir))?;
     let mut line = serde_json::to_string(record)?;
     line.push('\n');
     file.write_all(line.as_bytes())?;

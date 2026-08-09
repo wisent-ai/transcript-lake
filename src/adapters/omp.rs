@@ -65,7 +65,11 @@ impl Adapter for Omp {
         let home = crate::util::home_dir();
         // Every omp root is itself an encoded-cwd directory, so a transcript sits
         // directly in one; anything nested deeper was never listed.
-        if !self.roots(&home).iter().any(|known| known.as_path() == root) {
+        if !self
+            .roots(&home)
+            .iter()
+            .any(|known| known.as_path() == root)
+        {
             return None;
         }
         if !dirent_type(path)?.is_file() {
@@ -202,7 +206,10 @@ fn epoch_iso(millis: f64) -> Option<String> {
 
 /// A JSON value that is a number, as `typeof x === 'number'` accepted it.
 fn number(value: &Value) -> Option<i64> {
-    value.as_f64().filter(|raw| raw.is_finite()).map(|raw| raw as i64)
+    value
+        .as_f64()
+        .filter(|raw| raw.is_finite())
+        .map(|raw| raw as i64)
 }
 
 struct OmpParser {
@@ -278,7 +285,11 @@ impl OmpParser {
 
     fn handle(&mut self, rec: &Value) -> Option<Vec<RawEvent>> {
         let ts = self.stamp(rec)?;
-        let record_type = rec.get("type").and_then(Value::as_str).unwrap_or_default().to_string();
+        let record_type = rec
+            .get("type")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string();
         if record_type == "session" {
             if let Some(Value::String(cwd)) = rec.get("cwd") {
                 if !cwd.is_empty() {
@@ -349,7 +360,9 @@ impl OmpParser {
         }
         let mut event = self.make(ts.as_ref(), "meta", "");
         event.extra.insert("kind".into(), Value::from("unknown"));
-        event.extra.insert("omp_type".into(), Value::from(js_string(rec.get("type"))));
+        event
+            .extra
+            .insert("omp_type".into(), Value::from(js_string(rec.get("type"))));
         Some(vec![event])
     }
 
@@ -423,9 +436,10 @@ impl OmpParser {
                     self.flush_text(&mut events, &mut buffer, ts, text_type, &role);
                     let mut event = self.make(ts, "meta", "");
                     event.extra.insert("kind".into(), Value::from("block"));
-                    event
-                        .extra
-                        .insert("omp_block".into(), Value::from(js_string(block.get("type"))));
+                    event.extra.insert(
+                        "omp_block".into(),
+                        Value::from(js_string(block.get("type"))),
+                    );
                     events.push(event);
                 }
             }

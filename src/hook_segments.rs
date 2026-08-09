@@ -1,6 +1,6 @@
-//! Transactional ingest for immutable adaptive-hook telemetry segments, plus the
-//! legacy mutable-log pseudo-adapter the driver falls back to when no ready
-//! directory exists.
+//! Transactional streaming for immutable adaptive-hook telemetry segments,
+//! plus the legacy mutable-log pseudo-adapter used when no ready directory
+//! exists.
 //!
 //! New hook outputs are deterministic per segment; acknowledgements publish last.
 //! Segment reading, validation, claiming and the cursor commit live here; masking,
@@ -15,7 +15,7 @@ use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
 
 use crate::cursors::{CursorRecord, Cursors};
-use crate::ingest::warn;
+use crate::stream::warn;
 use crate::types::{Adapter, EventSink, Parser, ParserCtx, RawEvent, SessionEntry};
 use crate::util::{machine_name, Error, Result};
 
@@ -62,7 +62,9 @@ fn truthy(value: &Value) -> bool {
     match value {
         Value::Null => false,
         Value::Bool(flag) => *flag,
-        Value::Number(number) => number.as_f64().is_some_and(|raw| raw != 0.0 && !raw.is_nan()),
+        Value::Number(number) => number
+            .as_f64()
+            .is_some_and(|raw| raw != 0.0 && !raw.is_nan()),
         Value::String(text) => !text.is_empty(),
         Value::Array(_) | Value::Object(_) => true,
     }
@@ -186,9 +188,16 @@ fn sync_directory(path: &Path) -> Result<()> {
 fn durable_write(path: &Path, content: &[u8]) -> Result<()> {
     let parent = path.parent().unwrap_or_else(|| Path::new("."));
     fs::create_dir_all(parent)?;
-    let name = path.file_name().unwrap_or_default().to_string_lossy().to_string();
+    let name = path
+        .file_name()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .to_string();
     let temporary = parent.join(format!(".{name}.{}.tmp", uuid::Uuid::new_v4()));
-    let mut file = OpenOptions::new().write(true).create_new(true).open(&temporary)?;
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&temporary)?;
     file.write_all(content)?;
     file.sync_all()?;
     drop(file);
@@ -241,9 +250,9 @@ fn validate_hook_segment(path: &Path) -> Option<Segment> {
     }
     string_field(&header, "producerId")?;
     string_field(&header, "invocationId")?;
-    let source_ok = header
-        .get("source")
-        .is_some_and(|value| truthy(value) && value.get("producer").and_then(Value::as_str) == Some("hooks-rotator"));
+    let source_ok = header.get("source").is_some_and(|value| {
+        truthy(value) && value.get("producer").and_then(Value::as_str) == Some("hooks-rotator")
+    });
     if !source_ok {
         return None;
     }
@@ -343,7 +352,10 @@ fn same_outputs(prior: Option<&Value>, current: Option<&Value>) -> bool {
 }
 
 fn publish_ack(ready_dir: &Path, segment: &Segment, commit: &Value) -> Result<()> {
-    let acked_dir = ready_dir.parent().unwrap_or_else(|| Path::new(".")).join("acked");
+    let acked_dir = ready_dir
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .join("acked");
     let path = acked_dir.join(ack_name(&segment.segment_id));
     let outputs = commit.get("outputs").cloned().unwrap_or(Value::Null);
     let ack = json!({
@@ -363,10 +375,9 @@ fn publish_ack(ready_dir: &Path, segment: &Segment, commit: &Value) -> Result<()
     let prior = fs::read_to_string(&path).ok().and_then(|raw| parse(&raw));
     // A conflict is a disagreement about the DATA: a different source, a different
     // payload, a different event count, or different outputs. The commit id
-    // identifies the run that wrote them, and one segment can be committed by more
-    // than one run — a cursor restored from backup, a rebuild, an interrupted ingest
-    // resumed. Treating that alone as a conflict wedges every later ingest on a
-    // segment whose bytes nobody disputes.
+    // identifies the process that wrote them, and one segment can be committed by
+    // more than one process — a cursor restored from backup, a rebuild, or a
+    // resumed stream. A differing process id alone is not a data conflict.
     let agrees = prior.as_ref().is_some_and(|prior| {
         prior.get("sourceSha256") == ack.get("sourceSha256")
             && prior.get("payloadSha256") == ack.get("payloadSha256")
@@ -464,7 +475,10 @@ fn acquire_claim(root: &Path, segment_id: &str) -> Result<Option<Claim>> {
             "nonce": nonce,
         });
         let temporary = root.join(format!(".{segment_id}.{nonce}.claim"));
-        let mut file = OpenOptions::new().write(true).create_new(true).open(&temporary)?;
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temporary)?;
         file.write_all(format!("{}\n", serde_json::to_string(&owner)?).as_bytes())?;
         file.sync_all()?;
         drop(file);
@@ -497,8 +511,12 @@ fn acquire_claim(root: &Path, segment_id: &str) -> Result<Option<Claim>> {
 }
 
 fn release_claim(claim: &Claim) {
-    let owner = fs::read_to_string(&claim.path).ok().and_then(|raw| parse(&raw));
-    let held = owner.as_ref().and_then(|owner| string_field(owner, "nonce"));
+    let owner = fs::read_to_string(&claim.path)
+        .ok()
+        .and_then(|raw| parse(&raw));
+    let held = owner
+        .as_ref()
+        .and_then(|owner| string_field(owner, "nonce"));
     if held.as_deref() != Some(claim.nonce.as_str()) {
         return;
     }
@@ -570,11 +588,15 @@ fn commit_segment(
         events.push(event);
     }
     if events.is_empty() {
-        return Err(Error("closed hook segment produced no canonical events".into()));
+        return Err(Error(
+            "closed hook segment produced no canonical events".into(),
+        ));
     }
     let published = sink.accept(path, &events)?;
     if published.is_empty() {
-        return Err(Error("closed hook segment produced no canonical events".into()));
+        return Err(Error(
+            "closed hook segment produced no canonical events".into(),
+        ));
     }
     // The acknowledgement and the cursor record carry exactly these two keys per
     // output; both are read back by the next run and by the rotator.
@@ -605,12 +627,34 @@ fn commit_segment(
     Ok(Outcome::Committed(segment.events.len() as u64))
 }
 
-/// Consume every closed segment in the ready directory, oldest name first. A ready
-/// directory that cannot be listed is an empty tally, not a failure; a segment that
-/// fails validation is counted and skipped. A disagreement between what is on disk
-/// and what was already committed aborts the run, because continuing would keep
-/// writing against evidence nobody can reconcile.
-pub fn ingest_closed_hook_segments(
+/// Stream one immutable segment named by a filesystem notification.
+pub fn stream_hook_segment(
+    path: &Path,
+    data_dir: &Path,
+    cursors: &mut Cursors,
+    sink: &mut dyn EventSink,
+) -> Result<SegmentReport> {
+    if !path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name.starts_with("segment-") && name.ends_with(".jsonl"))
+    {
+        return Ok(SegmentReport::default());
+    }
+    let mut report = SegmentReport::default();
+    match process_segment(path, data_dir, cursors, sink)? {
+        Outcome::Invalid => report.invalid = 1,
+        Outcome::Skipped => report.skipped = 1,
+        Outcome::Committed(events) => {
+            report.files = 1;
+            report.events = events;
+        }
+    }
+    Ok(report)
+}
+
+/// Replay every closed segment in the ready directory, oldest name first.
+pub fn replay_closed_hook_segments(
     ready_dir: &Path,
     data_dir: &Path,
     cursors: &mut Cursors,
@@ -650,7 +694,9 @@ pub fn hooks_adapter() -> Box<dyn Adapter> {
     Box::new(Hooks)
 }
 
-const PICK: [&str; 7] = ["event", "decision", "tool", "code", "ms", "timedOut", "infra"];
+const PICK: [&str; 7] = [
+    "event", "decision", "tool", "code", "ms", "timedOut", "infra",
+];
 
 struct Hooks;
 
@@ -672,7 +718,11 @@ impl Adapter for Hooks {
         for name in ["telemetry.prev.jsonl", "telemetry.jsonl"] {
             let file = root.join(name);
             if file.exists() {
-                out.push(SessionEntry { file, session_id: None, project: None });
+                out.push(SessionEntry {
+                    file,
+                    session_id: None,
+                    project: None,
+                });
             }
         }
         out
@@ -690,7 +740,11 @@ impl Adapter for Hooks {
         if path.parent() != Some(root.as_path()) {
             return None;
         }
-        Some(SessionEntry { file: path.to_path_buf(), session_id: None, project: None })
+        Some(SessionEntry {
+            file: path.to_path_buf(),
+            session_id: None,
+            project: None,
+        })
     }
 
     fn parser(&self, ctx: ParserCtx) -> Box<dyn Parser> {
@@ -795,4 +849,3 @@ fn first_present(rec: &Value, keys: &[&str]) -> Option<String> {
     }
     None
 }
-

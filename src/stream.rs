@@ -1,8 +1,7 @@
-//! Streaming ingest driver for the transcript lake (frozen interface, see the
-//! build contract). Walks adapter roots, resumes files from newline-aligned
-//! cursor offsets, feeds raw lines to adapter parsers, masks every text and
-//! extra string through one masker instance, appends canonical events to
-//! runtime/date partitions, checkpoints cursors after every flushed batch.
+//! Real-time transcript stream. Source notifications name the file that moved;
+//! the reader resumes that append-only file at its durable byte cursor, masks
+//! each canonical event, writes its Lake partition, and updates Oko's session
+//! projection before advancing the cursor.
 use std::collections::HashMap;
 use std::fs::{self, File, OpenOptions};
 use std::io::{BufRead, BufReader, Seek, SeekFrom, Write};
@@ -13,8 +12,8 @@ use serde::Serialize;
 use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
 
-use crate::cursors::{open_writer_lease, ByteCursor, Cursors, CursorRecord};
-use crate::hook_segments::ingest_closed_hook_segments;
+use crate::cursors::{open_writer_lease, ByteCursor, CursorRecord, Cursors};
+use crate::hook_segments::{replay_closed_hook_segments, stream_hook_segment};
 use crate::redact::Masker;
 use crate::types::{
     Adapter, CanonicalEvent, EventSink, ParserCtx, RawEvent, SegmentOutput, SessionEntry, HOOKS,
@@ -32,10 +31,9 @@ const EXTRA_DEPTH: i32 = 4;
 const PART_DIGEST_LEN: usize = 12;
 const READ_BUFFER: usize = 64 * 1024;
 
-/// Everything one run needs from its caller.
-pub struct IngestOptions {
+/// Parameters for an explicit recovery replay into an empty Lake.
+pub struct ReplayOptions {
     pub source: Option<String>,
-    pub full: bool,
     pub data_dir: PathBuf,
 }
 
@@ -51,10 +49,10 @@ struct Tally {
     failures: u64,
 }
 
-/// One operator-visible ingest warning. Never fatal on its own: the run
-/// continues and the affected runtime reports a failure in its tally.
+/// One operator-visible streaming warning. The process remains alive so the
+/// next source notification can retry the same uncommitted bytes.
 pub fn warn(message: &str) {
-    eprintln!("ingest: {message}");
+    eprintln!("stream: {message}");
 }
 
 fn hex_digest(bytes: &[u8]) -> String {
@@ -119,7 +117,12 @@ fn mask_deep(value: Value, masker: &mut Masker, depth: i32) -> Value {
             if depth <= 0 {
                 return Value::Null;
             }
-            Value::Array(items.into_iter().map(|item| mask_deep(item, masker, depth - 1)).collect())
+            Value::Array(
+                items
+                    .into_iter()
+                    .map(|item| mask_deep(item, masker, depth - 1))
+                    .collect(),
+            )
         }
         Value::Object(fields) => {
             if depth <= 0 {
@@ -146,7 +149,11 @@ pub struct Writer {
 
 impl Writer {
     fn new(data_dir: PathBuf, machine: String) -> Self {
-        Self { data_dir, machine, masker: Masker::new() }
+        Self {
+            data_dir,
+            machine,
+            masker: Masker::new(),
+        }
     }
 
     fn canonicalize(&mut self, event: &RawEvent, runtime: &str) -> (CanonicalEvent, String) {
@@ -183,7 +190,8 @@ impl Writer {
         (canonical, date)
     }
 
-    /// Append one batch to its runtime/date partitions, one append per date.
+    /// Persist one source delta to canonical partitions and Oko's live
+    /// per-session projection before the source cursor can advance.
     fn write_batch(
         &mut self,
         events: &[RawEvent],
@@ -193,20 +201,20 @@ impl Writer {
         tally: &mut Tally,
     ) -> Result<()> {
         let mut rows: Vec<(PathBuf, String)> = Vec::with_capacity(events.len());
+        let mut projections: Vec<Value> = Vec::with_capacity(events.len());
         for event in events {
             let (mut canonical, date) = self.canonicalize(event, runtime);
-            // Oko keys some runtimes by filename. Persist only its one-way
-            // digest; signals.sql hashes the Oko key too, so no token-like
-            // stem bypasses masking.
-            canonical
-                .extra
-                .insert("source_stem_hash".to_string(), Value::String(stem_hash.to_string()));
+            canonical.extra.insert(
+                "source_stem_hash".to_string(),
+                Value::String(stem_hash.to_string()),
+            );
             let dir = self
                 .data_dir
                 .join("events")
                 .join(format!("runtime={runtime}"))
                 .join(format!("date={date}"));
             rows.push((dir, serde_json::to_string(&canonical)?));
+            projections.push(serde_json::to_value(canonical)?);
             tally.events += 1;
         }
         let mut dirs: Vec<&PathBuf> = Vec::new();
@@ -224,10 +232,13 @@ impl Writer {
                     payload.push('\n');
                 }
             }
-            let mut file =
-                OpenOptions::new().create(true).append(true).open(dir.join(part_name))?;
+            let mut file = OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(dir.join(part_name))?;
             file.write_all(payload.as_bytes())?;
         }
+        crate::oko_export::project_events(&self.data_dir, projections)?;
         Ok(())
     }
 }
@@ -242,10 +253,17 @@ fn sync_directory(path: &Path) -> Result<()> {
 fn durable_write(path: &Path, content: &str) -> Result<()> {
     let parent = path.parent().unwrap_or_else(|| Path::new("."));
     fs::create_dir_all(parent)?;
-    let name = path.file_name().unwrap_or_default().to_string_lossy().to_string();
+    let name = path
+        .file_name()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .to_string();
     let temporary = parent.join(format!(".{name}.{}.tmp", uuid::Uuid::new_v4()));
     let write = (|| -> Result<()> {
-        let mut file = OpenOptions::new().write(true).create_new(true).open(&temporary)?;
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temporary)?;
         file.write_all(content.as_bytes())?;
         file.sync_all()?;
         drop(file);
@@ -319,19 +337,19 @@ fn file_stem(name: &str) -> String {
 /// Streams one source file from its resume offset, byte-accurate so cursor
 /// checkpoints always land on line boundaries even with multibyte text.
 #[allow(clippy::too_many_arguments)]
-fn ingest_file(
+fn stream_file(
     writer: &mut Writer,
     cursors: &mut Cursors,
     adapter: &dyn Adapter,
     entry: &SessionEntry,
     meta: &fs::Metadata,
-    full: bool,
+    replay: bool,
     tally: &mut Tally,
 ) -> Result<()> {
     let key = entry.file.to_string_lossy().to_string();
     let size = meta.len();
     let modified = mtime_ms(meta);
-    let current = match if full { None } else { cursors.get(&key)? } {
+    let current = match if replay { None } else { cursors.get(&key)? } {
         Some(CursorRecord::Bytes(cursor)) => Some(cursor),
         // A tagged segment commit is keyed by segment id, never by a source
         // path, so it can only mean this path is not a byte stream we resume.
@@ -340,13 +358,12 @@ fn ingest_file(
     if let Some(cursor) = current {
         if size < cursor.size {
             return Err(Error(
-                "source shrank after its last checkpoint; select an empty LAKE_DATA and run --full"
-                    .into(),
+                "source shrank after its last checkpoint; preserve the Lake and use rebuild".into(),
             ));
         }
         if size == cursor.size && cursor.mtime_ms != modified && cursor.offset >= size {
             return Err(Error(
-                "source changed without an append; select an empty LAKE_DATA and run --full".into(),
+                "source changed without an append; preserve the Lake and use rebuild".into(),
             ));
         }
     }
@@ -421,7 +438,14 @@ fn checkpoint(
         writer.write_batch(batch, runtime, part_name, stem_hash, tally)?;
         batch.clear();
     }
-    cursors.set_bytes(key, ByteCursor { mtime_ms: mtime, size, offset: consumed });
+    cursors.set_bytes(
+        key,
+        ByteCursor {
+            mtime_ms: mtime,
+            size,
+            offset: consumed,
+        },
+    );
     cursors.flush()
 }
 
@@ -435,11 +459,14 @@ fn segments_ready_dir() -> PathBuf {
         .map(PathBuf::from)
         .filter(|path| !path.as_os_str().is_empty())
         .unwrap_or_else(|| {
-            home_dir().join(".hooks-adaptive").join("telemetry-segments").join("ready")
+            home_dir()
+                .join(".hooks-adaptive")
+                .join("telemetry-segments")
+                .join("ready")
         })
 }
 
-fn ingest_locked(opts: &IngestOptions) -> Result<Value> {
+fn replay_locked(opts: &ReplayOptions) -> Result<Value> {
     let started = Instant::now();
     let data_dir = opts.data_dir.clone();
     let machine = machine_name();
@@ -472,7 +499,7 @@ fn ingest_locked(opts: &IngestOptions) -> Result<Value> {
                 // disk) aborts the run rather than counting a failure and
                 // continuing to write, exactly as it does today.
                 let report =
-                    ingest_closed_hook_segments(&ready, &data_dir, &mut cursors, &mut writer)?;
+                    replay_closed_hook_segments(&ready, &data_dir, &mut cursors, &mut writer)?;
                 tally.files += report.files;
                 tally.events += report.events;
                 tally.skipped += report.skipped;
@@ -508,29 +535,21 @@ fn ingest_locked(opts: &IngestOptions) -> Result<Value> {
                     let meta = match fs::metadata(&entry.file) {
                         Ok(meta) => meta,
                         Err(error) => {
-                            warn(&format!("stat failed for {}: {error}", entry.file.display()));
+                            warn(&format!(
+                                "stat failed for {}: {error}",
+                                entry.file.display()
+                            ));
                             tally.failures += 1;
                             continue;
                         }
                     };
-                    let key = entry.file.to_string_lossy().to_string();
-                    let current = if opts.full { None } else { cursors.get(&key)? };
-                    if let Some(CursorRecord::Bytes(cursor)) = current {
-                        if cursor.mtime_ms == mtime_ms(&meta)
-                            && cursor.size == meta.len()
-                            && cursor.offset >= meta.len()
-                        {
-                            tally.skipped += 1;
-                            continue;
-                        }
-                    }
-                    match ingest_file(
+                    match stream_file(
                         &mut writer,
                         &mut cursors,
                         adapter.as_ref(),
                         &entry,
                         &meta,
-                        opts.full,
+                        true,
                         &mut tally,
                     ) {
                         Ok(()) => tally.files += 1,
@@ -559,50 +578,40 @@ fn ingest_locked(opts: &IngestOptions) -> Result<Value> {
     }))
 }
 
-/// One ingest run, under the exclusive state lease for the whole of it.
-pub fn ingest(opts: IngestOptions) -> Result<Value> {
-    if opts.full {
-        let occupied = fs::read_dir(&opts.data_dir)
-            .map(|mut entries| entries.next().is_some())
-            .unwrap_or(false);
-        if occupied {
-            return Err(Error(
-                "--full requires an empty LAKE_DATA root so replay cannot duplicate or erase existing evidence"
-                    .into(),
-            ));
-        }
+/// Replay every selected source into a separate empty Lake for recovery.
+pub fn replay(opts: ReplayOptions) -> Result<Value> {
+    let occupied = fs::read_dir(&opts.data_dir)
+        .map(|mut entries| entries.next().is_some())
+        .unwrap_or(false);
+    if occupied {
+        return Err(Error(
+            "rebuild requires an empty LAKE_DATA root so replay cannot duplicate or erase existing evidence"
+                .into(),
+        ));
     }
     let mut lease = open_writer_lease(&opts.data_dir)?;
-    let summary = ingest_locked(&opts);
+    let summary = replay_locked(&opts);
     lease.close();
     summary
 }
 
-/// Ingest exactly the files the caller names, in one pass, under the same
-/// exclusive lease a full run takes.
+/// Stream exactly the source files named by filesystem notifications.
 ///
-/// This is the online path. A full run answers "what changed anywhere" by
-/// walking every adapter root and stat-ing every transcript on the machine —
-/// thousands of syscalls to discover the handful of files an agent is
-/// currently appending to. The watcher already knows which file moved, so it
-/// pays for that file alone and the cost of being online stops scaling with
-/// how much history the machine has accumulated.
-///
-/// Everything below the file boundary is shared with the full run: the same
-/// cursors, the same single masking `Writer`, the same `ingest_file`. A path
-/// no adapter claims is skipped in silence — the watcher sees every write
-/// under a root, including lock files and the adapters' own scratch.
-pub fn ingest_paths(data_dir: &Path, paths: &[PathBuf]) -> Result<Value> {
+/// The cost is proportional to bytes appended since each file's durable
+/// cursor. Paths outside the adapter contracts are ignored without a root
+/// walk, and Oko is projected in the same transaction as canonical rows.
+pub fn stream_paths(data_dir: &Path, paths: &[PathBuf]) -> Result<Value> {
     let mut lease = open_writer_lease(data_dir)?;
-    let summary = ingest_paths_locked(data_dir, paths);
+    let summary = stream_paths_locked(data_dir, paths);
     lease.close();
     summary
 }
 
-fn ingest_paths_locked(data_dir: &Path, paths: &[PathBuf]) -> Result<Value> {
+fn stream_paths_locked(data_dir: &Path, paths: &[PathBuf]) -> Result<Value> {
     let started = Instant::now();
     let home = home_dir();
     let adapters = crate::adapters::all();
+    let hook_sources = crate::paths::hook_source_roots();
     let mut cursors = Cursors::open(&data_dir.to_path_buf())?;
     let mut writer = Writer::new(data_dir.to_path_buf(), machine_name());
     let mut per_runtime: Map<String, Value> = Map::new();
@@ -610,8 +619,23 @@ fn ingest_paths_locked(data_dir: &Path, paths: &[PathBuf]) -> Result<Value> {
     let mut touched = 0u64;
 
     for path in paths {
+        if hook_sources.segment_mode && path.starts_with(&hook_sources.ready) {
+            let tally = tallies.entry(HOOKS).or_default();
+            let before = total_hits(&writer.masker.counts());
+            let report = stream_hook_segment(path, data_dir, &mut cursors, &mut writer)?;
+            tally.files += report.files;
+            tally.events += report.events;
+            tally.skipped += report.skipped;
+            tally.failures += report.invalid;
+            tally.masked_hits += total_hits(&writer.masker.counts()) - before;
+            touched += report.files;
+            continue;
+        }
         let Some(adapter) = adapters.iter().find(|adapter| {
-            adapter.roots(&home).iter().any(|root| path.starts_with(root))
+            adapter
+                .roots(&home)
+                .iter()
+                .any(|root| path.starts_with(root))
         }) else {
             continue;
         };
@@ -619,10 +643,6 @@ fn ingest_paths_locked(data_dir: &Path, paths: &[PathBuf]) -> Result<Value> {
             continue;
         };
         let Ok(meta) = fs::metadata(&entry.file) else {
-            // Deleted between the notification and now. Nothing to read, and
-            // nothing to repair: the cursor for a file that no longer exists
-            // costs one map entry and is what makes a restored file resume
-            // rather than replay.
             continue;
         };
         let tally = tallies.entry(adapter.runtime()).or_default();
@@ -636,8 +656,16 @@ fn ingest_paths_locked(data_dir: &Path, paths: &[PathBuf]) -> Result<Value> {
                 continue;
             }
         }
-        match ingest_file(&mut writer, &mut cursors, adapter.as_ref(), &entry, &meta, false, tally)
-        {
+        let before = total_hits(&writer.masker.counts());
+        match stream_file(
+            &mut writer,
+            &mut cursors,
+            adapter.as_ref(),
+            &entry,
+            &meta,
+            false,
+            tally,
+        ) {
             Ok(()) => {
                 tally.files += 1;
                 touched += 1;
@@ -647,6 +675,7 @@ fn ingest_paths_locked(data_dir: &Path, paths: &[PathBuf]) -> Result<Value> {
                 tally.failures += 1;
             }
         }
+        tally.masked_hits += total_hits(&writer.masker.counts()) - before;
     }
 
     cursors.flush()?;
@@ -659,7 +688,7 @@ fn ingest_paths_locked(data_dir: &Path, paths: &[PathBuf]) -> Result<Value> {
         "perRuntime": Value::Object(per_runtime),
         "maskCounts": writer.masker.counts(),
         "durationMs": started.elapsed().as_millis() as u64,
-        "filesIngested": touched,
+        "filesStreamed": touched,
         "partial": failures > 0,
         "failures": failures,
     }))

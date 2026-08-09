@@ -36,7 +36,7 @@ static TOKEN_RE: LazyLock<Regex> =
 static ENTROPY_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(&format!("{DENSE}{{40,}}")).expect("entropy pattern"));
 
-/// Per-class hit counts, reported by `ingest` in its run summary.
+/// Per-class hit counts reported by stream commits and recovery replay.
 #[derive(Debug, Clone, Copy, Default, Serialize)]
 pub struct MaskCounts {
     pub token: u64,
@@ -56,7 +56,11 @@ fn fingerprint(value: &str) -> String {
 }
 
 fn marker(class: &str, value: &str) -> String {
-    format!("[masked:{class}:{}:{}]", value.chars().count(), fingerprint(value))
+    format!(
+        "[masked:{class}:{}:{}]",
+        value.chars().count(),
+        fingerprint(value)
+    )
 }
 
 /// High-entropy filter: long enough, many distinct characters, and drawing on
@@ -75,7 +79,9 @@ fn dense_enough(run: &str) -> bool {
     let has_lower = run.chars().any(|c| c.is_ascii_lowercase());
     let has_upper = run.chars().any(|c| c.is_ascii_uppercase());
     let has_digit = run.chars().any(|c| c.is_ascii_digit());
-    let has_symbol = run.chars().any(|c| matches!(c, '+' | '/' | '=' | '_' | '-'));
+    let has_symbol = run
+        .chars()
+        .any(|c| matches!(c, '+' | '/' | '=' | '_' | '-'));
     let groups = [has_lower, has_upper, has_digit, has_symbol]
         .into_iter()
         .filter(|hit| *hit)

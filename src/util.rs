@@ -94,12 +94,16 @@ pub fn absolute(path: impl AsRef<Path>) -> PathBuf {
     if path.is_absolute() {
         return path.to_path_buf();
     }
-    env::current_dir().unwrap_or_else(|_| PathBuf::from(".")).join(path)
+    env::current_dir()
+        .unwrap_or_else(|_| PathBuf::from("."))
+        .join(path)
 }
 
 /// `$HOME`, or `.` when the environment has none.
 pub fn home_dir() -> PathBuf {
-    env::var_os("HOME").map(PathBuf::from).unwrap_or_else(|| PathBuf::from("."))
+    env::var_os("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("."))
 }
 
 /// Local host name as the cursor lease and canonical events record it.
@@ -109,7 +113,9 @@ pub fn machine_name() -> String {
 
 /// Current instant as an ISO-8601 UTC string with millisecond precision.
 pub fn now_iso() -> String {
-    chrono::Utc::now().format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string()
+    chrono::Utc::now()
+        .format("%Y-%m-%dT%H:%M:%S%.3fZ")
+        .to_string()
 }
 
 /// Milliseconds since the Unix epoch for a filesystem timestamp.

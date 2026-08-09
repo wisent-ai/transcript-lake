@@ -9,7 +9,7 @@ pub mod omp;
 
 use crate::types::Adapter;
 
-/// Every transcript adapter, in the order ingest walks them.
+/// Every transcript adapter, in stable discovery order.
 pub fn all() -> Vec<Box<dyn Adapter>> {
     vec![
         Box::new(claude::Claude),

@@ -170,7 +170,10 @@ pub fn search(rest: &[String]) -> Result<i32> {
 /// the `include:` header line reads back what the operator asked for.
 fn include_types(raw: Option<&str>) -> Result<Vec<String>> {
     let Some(raw) = raw else {
-        return Ok(SHOW_DEFAULT_TYPES.iter().map(|kind| kind.to_string()).collect());
+        return Ok(SHOW_DEFAULT_TYPES
+            .iter()
+            .map(|kind| kind.to_string())
+            .collect());
     };
     let wanted: Vec<String> = raw
         .split(',')
@@ -222,7 +225,7 @@ pub fn show(rest: &[String]) -> Result<i32> {
     let Some(head) = identity.first() else {
         return Err(Error(format!(
             "unknown session \"{session_id}\": not present in the selected Lake \
-             (check the id or run ingest first)"
+             (check the id or start the stream first)"
         )));
     };
     let type_filter = format!(

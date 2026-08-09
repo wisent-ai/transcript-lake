@@ -1,17 +1,16 @@
-//! Transcript Lake command router. Simple commands cover discovery, health,
-//! ingest, inspection, analytics, recovery, derived artifacts, and Oko.
-//! DuckDB remains optional and is required only for analytics and compaction.
+//! Transcript Lake command router: streaming, discovery, inspection,
+//! analytics, recovery, derived artifacts, and Oko integration.
 mod adapters;
 mod args;
 mod commands;
 mod cursors;
 mod duck;
 mod hook_segments;
-mod ingest;
 mod labels;
 mod oko_export;
 mod paths;
 mod redact;
+mod stream;
 mod types;
 mod util;
 
@@ -29,19 +28,17 @@ pub const USAGE: &str = concat!(
     "Start safely:\n",
     "  transcript-lake paths                         show every local product path\n",
     "  transcript-lake sources                       discover supported transcript stores\n",
-    "  transcript-lake status                        inspect Lake state without ingesting\n",
-    "  transcript-lake ingest                        ingest new local transcript events\n",
+    "  transcript-lake status                        inspect Lake and stream state\n",
+    "\n",
+    "Stream and recover:\n",
+    "  stream [--json]                               follow source appends in real time\n",
+    "  rebuild --to <empty-path> [--source <runtime>] replay history to a new Lake\n",
     "\n",
     "Discover and inspect:\n",
     "  paths [--json]                                resolved state and integration paths\n",
     "  sources [--json]                              source availability and file counts\n",
     "  doctor [--json]                               state and dependency health checks\n",
-    "  status [--json]                               partitions, cursors, masking, Oko\n",
-    "\n",
-    "Ingest and recover:\n",
-    "  ingest [--source <runtime>] [--full]           incremental scan; full needs empty root\n",
-    "  rebuild --to <empty-path> [--source <runtime>] safe full replay to a new Lake\n",
-    "  watch [--debounce <seconds>] [--json]          online refresh when sources change\n",
+    "  status [--json]                               partitions, cursors, stream, Oko\n",
     "\n",
     "Read and analyze:\n",
     "  sessions [--runtime <r>] [--project <text>] [--interrupted] [--limit <n>] [--json]\n",
@@ -60,7 +57,7 @@ pub const USAGE: &str = concat!(
     "\n",
     "Derived data and Oko:\n",
     "  compact [--source <runtime>] [--json]          write Parquet mirrors\n",
-    "  export-oko [--full] [--reindex]                materialize sessions for Oko\n",
+    "  rebuild-oko [--reindex]                        reconstruct Oko sessions\n",
     "  oko-refresh                                    reindex current export in Oko\n",
     "  clean [--target <parquet|oko|all>] [--apply] [--json]\n",
     "\n",
@@ -83,10 +80,9 @@ pub fn command_help(name: &str) -> Option<&'static str> {
         "paths" => "paths [--json]\n  Print resolved Lake, derived-data, Tama, DuckDB, and Oko paths.",
         "sources" => "sources [--json]\n  Discover supported runtime roots and count candidate transcript files.",
         "doctor" => "doctor [--json]\n  Check cursor integrity, source discovery, and optional dependency presence.",
-        "status" => "status [--json]\n  Show partitions, cursor freshness, last ingest, and Oko export freshness.",
-        "ingest" => "ingest [--source <runtime>] [--full]\n  Incremental by default. --full is allowed only for an empty selected root.",
-        "rebuild" => "rebuild --to <empty-path> [--source <runtime>]\n  Full replay into a different empty root; never mutates the current Lake.",
-        "watch" => "watch [--debounce <seconds>] [--json]\n  Watch supported source roots and run the ingest/export refresh after a quiet interval. Long-running foreground process; launchd or systemd is expected to KeepAlive it.",
+        "status" => "status [--json]\n  Show partitions, cursor freshness, live stream state, and Oko freshness.",
+        "stream" => "stream [--json]\n  Follow supported source files continuously and project each append directly into the Lake and Oko.",
+        "rebuild" => "rebuild --to <empty-path> [--source <runtime>]\n  Recovery replay into a different empty root; never mutates the current Lake.",
         "sessions" => "sessions [--runtime <r>] [--project <text>] [--interrupted] [--limit <n>] [--json]\n  List recent sessions through the canonical DuckDB view.\n  --interrupted keeps only conversations whose last turn was an unanswered user message or a tool call cut off mid-run, and reports stopped_as plus the opening of that final request.",
         "events" => "events [--runtime <r>] [--session <id>] [--type <type>] [--limit <n>] [--json]\n  List recent masked canonical events.",
         "search" => "search <text> [--runtime <r>] [--session <id>] [--type <type>] [--limit <n>] [--json]\n  Case-insensitive literal substring match over masked event text, newest first.",
@@ -97,7 +93,7 @@ pub fn command_help(name: &str) -> Option<&'static str> {
         "label" => "label <add|list|aspects> ...\n  add <session-id> --aspect <name> --value <v> [--note <text>] [--source <name[:detail]>] [--json] records a session label with provenance (manual, human, model, or brama, optional :detail).\n  list [--session <id>] [--aspect <a>] [--runtime <r>] [--limit <n>] [--json] shows the latest assignment per session and aspect, newest first.\n  aspects [--json] summarizes distinct aspects, values, and labeled sessions.",
         "query" => "query [--json] \"<sql>\"\n  Execute operator-supplied SQL after loading canonical Lake views.",
         "compact" => "compact [--source <runtime>] [--json]\n  Rebuild per-runtime Parquet mirrors; NDJSON remains authoritative.",
-        "export-oko" => "export-oko [--full] [--reindex]\n  Materialize canonical sessions and optionally invoke Oko reindex.",
+        "rebuild-oko" => "rebuild-oko [--reindex]\n  Reconstruct every Oko session projection from authoritative Lake partitions.",
         "oko-refresh" => "oko-refresh\n  Invoke the compatible oko-cli transcript reindex command.",
         "clean" => "clean [--target <parquet|oko|all>] [--apply] [--json]\n  Preview by default; --apply removes rebuildable derived data only.",
         "help" => "help [command]\n  Show general guidance or the exact syntax for one command.",
@@ -126,9 +122,8 @@ fn dispatch(command: &str, rest: &[String]) -> Result<i32> {
         "sources" => commands::inspect::sources(rest),
         "doctor" => commands::inspect::doctor(rest),
         "status" => commands::inspect::status(rest),
-        "ingest" => commands::ingest_cmd::ingest(rest),
-        "rebuild" => commands::ingest_cmd::rebuild(rest),
-        "watch" => commands::ingest_cmd::watch(rest),
+        "stream" => commands::stream::stream(rest),
+        "rebuild" => commands::stream::rebuild(rest),
         "sessions" => commands::read::sessions(rest),
         "events" => commands::read::events(rest),
         "search" => commands::read::search(rest),
@@ -139,7 +134,7 @@ fn dispatch(command: &str, rest: &[String]) -> Result<i32> {
         "label" => commands::label::label(rest),
         "query" => commands::read::query(rest),
         "compact" => commands::derived::compact(rest),
-        "export-oko" => commands::derived::export_oko(rest),
+        "rebuild-oko" => commands::derived::rebuild_oko(rest),
         "oko-refresh" => commands::derived::oko_refresh(rest),
         "clean" => commands::derived::clean(rest),
         "help" => cmd_help(rest),

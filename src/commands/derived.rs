@@ -25,7 +25,7 @@ pub fn compact(rest: &[String]) -> Result<i32> {
     }
     if rows.is_empty() {
         return Err(Error(format!(
-            "no matching partitions under {} (run ingest first)",
+            "no matching partitions under {} (start the stream first)",
             data_dir.join("events").display()
         )));
     }
@@ -34,7 +34,11 @@ pub fn compact(rest: &[String]) -> Result<i32> {
     let mut exit_code = 0;
     for row in &rows {
         let runtime_name = format!("runtime={}", row.runtime);
-        let source_glob = data_dir.join("events").join(&runtime_name).join("*").join("*.ndjson");
+        let source_glob = data_dir
+            .join("events")
+            .join(&runtime_name)
+            .join("*")
+            .join("*.ndjson");
         let out_dir = data_dir.join("parquet").join(&runtime_name);
         fs::create_dir_all(&out_dir)?;
         let out_file = out_dir.join("events.parquet");
@@ -83,22 +87,18 @@ pub fn compact(rest: &[String]) -> Result<i32> {
     Ok(exit_code)
 }
 
-/// Materialize the canonical per-session view Oko imports, and optionally ask
-/// Oko to reindex it. An explicit `--reindex` that did not succeed is a
-/// non-zero exit, because the operator asked for a refreshed Oko index.
-pub fn export_oko(rest: &[String]) -> Result<i32> {
-    let parsed = parse_options("export-oko", rest, &[], &["full", "reindex"])?;
-    require_flags_only("export-oko", &parsed)?;
+/// Reconstruct the canonical per-session projection Oko imports, and
+/// optionally ask Oko to reindex it. The live stream owns incremental updates.
+pub fn rebuild_oko(rest: &[String]) -> Result<i32> {
+    let parsed = parse_options("rebuild-oko", rest, &[], &["reindex"])?;
+    require_flags_only("rebuild-oko", &parsed)?;
     let reindex = parsed.flag("reindex");
-    let summary =
-        oko_export::export_oko_with_reindex(parsed.flag("full"), reindex, &resolve_data_dir(None))?;
+    let summary = oko_export::export_oko_with_reindex(true, reindex, &resolve_data_dir(None))?;
     write_json(&summary)?;
-    let reindexed = summary
-        .get("reindex")
-        .is_some_and(|report| {
-            report.get("ran").and_then(Value::as_bool).unwrap_or(false)
-                && report.get("status").and_then(Value::as_i64) == Some(0)
-        });
+    let reindexed = summary.get("reindex").is_some_and(|report| {
+        report.get("ran").and_then(Value::as_bool).unwrap_or(false)
+            && report.get("status").and_then(Value::as_i64) == Some(0)
+    });
     if reindex && !reindexed {
         return Ok(1);
     }
@@ -141,7 +141,7 @@ pub fn clean(rest: &[String]) -> Result<i32> {
     }
     let apply = parsed.flag("apply");
     // The lease is taken only for a removal that has something to remove, so a
-    // preview never blocks on a running ingest.
+    // preview never blocks on an active stream.
     let _lease = if apply && selected.iter().any(|(_, path)| path.exists()) {
         Some(open_writer_lease(&paths.data_dir)?)
     } else {

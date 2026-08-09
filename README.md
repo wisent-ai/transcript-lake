@@ -8,7 +8,7 @@
 <!-- wisent-readme-signals:end -->
 
 
-Transcript Lake turns local coding-agent conversations into one privacy-masked, incrementally updated event archive that operators can inspect with SQL and import into Oko.
+Transcript Lake streams local coding-agent conversations into one privacy-masked event archive that operators can inspect with SQL and Oko can consume immediately.
 
 ## Problem and intended users
 
@@ -21,18 +21,18 @@ Transcript Lake is for:
 - **Oko operators** who need a stable provider-neutral transcript feed rather than another set of vendor parsers;
 - **adapter maintainers** who add support for a verified local transcript format behind one canonical event contract.
 
-Its value is a single ingestion and masking boundary: every downstream consumer reads the same normalized evidence instead of independently handling raw vendor files.
+Its value is one live parsing and masking boundary: every downstream consumer reads the same normalized evidence instead of independently handling raw vendor files.
 
 ## Product boundaries
 
 ### Included
 
-- Incremental, newline-aligned ingestion from local Claude Code, Codex, OMP, Droid, and Kimi session stores.
-- Import of adaptive-hook decisions from the local Tama telemetry log when present.
+- Real-time, newline-aligned streaming from local Claude Code, Codex, OMP, Droid, and Kimi session stores.
+- Real-time adaptive-hook decisions from Tama telemetry segments or its legacy local log.
 - Provider-neutral NDJSON events for user, assistant, thinking, tool, usage, metadata, and hook-decision records.
 - Deterministic masking before any event reaches durable Lake storage.
-- Cursor-based restart, append-only daily partitions, status reporting, DuckDB views, and Parquet compaction.
-- A canonical, per-session export consumed by Oko.
+- Cursor-based restart, append-only daily partitions, live status, DuckDB views, and Parquet compaction.
+- A per-session Oko projection updated in the same stream commit as Lake partitions.
 
 ### Explicit non-goals
 
@@ -41,43 +41,43 @@ Its value is a single ingestion and masking boundary: every downstream consumer 
 - It does not provide semantic or vector search.
 - It does not currently ship Gemini or Qwen adapters.
 - It does not fully anonymize conversations. Hostname, runtime, timestamps, session identifiers, project paths, model names, and bounded structural metadata remain available for correlation.
-- It does not schedule ingestion. An operator or external scheduler invokes the CLI.
+- It does not run periodic scans or require an external scheduler; one supervised `stream` process follows source writes continuously.
 
 ### Environment and constraints
 
 - Current source formats and paths are supported on macOS. Other operating systems are not qualified.
 - The CLI is a single self-contained binary built from Rust. Running it requires no language runtime; building it requires a Rust toolchain.
 - DuckDB CLI `1.5.x` is required only for SQL queries and Parquet compaction.
-- Oko and Tama are optional integrations. Core ingestion remains usable without them.
+- Oko and Tama are optional integrations. Core streaming remains usable without them.
 - Data remains local under `LAKE_DATA`, defaulting to `~/.transcript-lake`.
-- A full ingest can read the entire available local transcript history and consume proportional disk space. It is never automatic.
+- Historical reconstruction is explicit through `rebuild` into a separate empty Lake.
 
 ## Core use cases
 
 | Actor | Initial situation | Desired result | Product action | Safety and cost boundary |
 |---|---|---|---|---|
-| Developer | Several supported agents have local session files | One masked, resumable local archive | Run `transcript-lake ingest` | Reads local transcripts; writes only beneath `LAKE_DATA` |
+| Developer | Several supported agents append local session files | One masked, continuously current archive | Run `transcript-lake stream` under a supervisor | Reads only changed source files; writes only beneath `LAKE_DATA` |
 | Analyst | Lake partitions exist | Cross-runtime session, tool, token, or hook evidence | Run `transcript-lake query "<sql>"` | Read-only over Lake data; requires local DuckDB |
 | Operator | NDJSON partitions consume too much scan time | Immutable additive Parquet mirrors | Run `transcript-lake compact` | Adds files; never deletes NDJSON partitions |
-| Oko operator | Oko must index multiple runtimes consistently | Stable per-session canonical JSONL | Run ingest or `transcript-lake export-oko` | Export contains masked Lake events and local metadata |
-| Maintainer | Oko index may be stale | Refresh Oko after export | Run `transcript-lake export-oko --reindex` | Optional child process; failure does not mutate Lake partitions |
+| Oko operator | Oko must index multiple runtimes consistently | Stable per-session canonical JSONL | Keep the stream running | The projection changes in the same commit as canonical Lake events |
+| Maintainer | A projection must be reconstructed | Rebuildable per-session JSONL | Run `transcript-lake rebuild-oko` | Reads authoritative masked partitions; never touches vendor stores |
 
 ## How the product works
 
 ```mermaid
 flowchart LR
-    A[Local vendor transcript stores] --> B[Runtime adapters]
-    H[Adaptive hook telemetry] --> B
-    B --> C[Canonical in-memory events]
+    A[Local transcript append] --> B[Filesystem notification]
+    H[Tama segment publication] --> B
+    B --> C[Runtime adapter]
     C --> D[Masking boundary]
-    D --> E[NDJSON partitions and cursors]
-    E --> F[DuckDB views and Parquet mirrors]
-    E --> G[Provider-neutral Oko export]
+    D --> E[Canonical NDJSON partition]
+    D --> G[Per-session Oko projection]
+    E --> F[Durable source cursor]
 ```
 
-Raw vendor text exists only on the source side of the masking boundary. Adapters translate source records but do not write them. The ingest driver masks `text` and every string in `extra` before appending canonical events to `LAKE_DATA/events`.
+Raw vendor text exists only on the source side of the masking boundary. A filesystem notification carries the changed path directly to its adapter; the stream resumes at that file's newline-aligned cursor, masks `text` and every string in `extra`, appends canonical events, updates affected Oko session files, and only then advances the cursor.
 
-`LAKE_DATA/cursors.json` is the ingestion checkpoint and the source of incremental progress. Daily NDJSON partitions are authoritative Lake evidence. Parquet files and the Oko export are rebuildable derived views. Cursor and export metadata use atomic replacement; transcript partitions are append-only.
+`LAKE_DATA/cursors.json` is the durable resume state. Daily NDJSON partitions are authoritative Lake evidence; Parquet and Oko files are rebuildable projections. Cursor and projection metadata use atomic replacement, and transcript partitions are append-only.
 
 See [the core workflow contract](docs/CORE.md) and [the data and architecture contract](docs/LAKE.md) for state transitions, schemas, masking behavior, paths, and recovery semantics.
 
@@ -108,17 +108,15 @@ transcript-lake doctor
 transcript-lake --data-dir "$HOME/.transcript-lake" status
 ```
 
-To produce the first local result:
+Start the foreground stream:
 
 ```sh
-transcript-lake --data-dir "$HOME/.transcript-lake" ingest
-transcript-lake --data-dir "$HOME/.transcript-lake" sessions --limit 10
-transcript-lake --data-dir "$HOME/.transcript-lake" stats --days 7
+transcript-lake --data-dir "$HOME/.transcript-lake" stream
 ```
 
-Expected result: `ingest` prints a JSON summary containing per-runtime counts, masking counts, duration, and Oko-export status. `sessions` lists recent normalized conversations and `stats` aggregates local evidence through DuckDB. If no supported source store exists, ingest produces an empty but valid Lake rather than fabricated data.
+The process reacts to source writes immediately; it has no polling interval, quiet-period timer, full-root refresh, or child command. Each successful source delta writes its canonical partition and affected Oko sessions before committing the byte cursor.
 
-This workflow reads local transcripts and creates or updates only the selected data root. Vendor transcripts are never changed. `clean` previews removal of rebuildable derived data; authoritative partitions require an explicit operator retention decision outside the CLI.
+For an always-on local installation, `scripts/install-stream-service.sh` installs the release binary and a KeepAlive LaunchAgent. Vendor transcripts remain read-only, and `clean` still previews removal of rebuildable artifacts only.
 
 Continue with the [CLI tour](examples/core/cli-tour.md), [full onboarding guide](docs/ONBOARDING.md), and [canonical examples catalog](examples/README.md).
 
@@ -131,10 +129,9 @@ The CLI is the canonical human and automation interface.
 | Guidance and identity | `transcript-lake help [command]`, `--version` | Exact syntax, safety guidance, or canonical version |
 | Paths and discovery | `paths`, `sources` | Resolved state/integration paths and available runtime stores |
 | Health | `doctor [--json]` | Cursor, source, DuckDB, and Oko checks with meaningful exit status |
-| Ingest | `ingest [--source <runtime>] [--full]` | Structured run summary and durable cursors/partitions |
-| Online freshness | `watch [--debounce <seconds>] [--json]` | Long-running watcher firing the standard refresh on source changes |
-| Safe recovery | `rebuild --to <empty-path> [--source <runtime>]` | Full replay into a separate empty Lake |
-| Inspect | `status [--json]` | Partition, cursor, last-ingest, and Oko freshness inventory |
+| Real-time stream | `stream [--json]` | Long-running event-driven source tail with direct Lake and Oko commits |
+| Safe recovery | `rebuild --to <empty-path> [--source <runtime>]` | Historical replay into a separate empty Lake |
+| Inspect | `status [--json]` | Partition, cursor, stream-state, and Oko freshness inventory |
 | Sessions and events | `sessions [--interrupted]`, `events` | Filtered recent normalized records; `--interrupted` keeps only conversations left without an answer |
 | Text search | `search <text> [--runtime <r>] [--session <id>] [--type <t>] [--limit <n>] [--json]` | Newest-first literal substring matches over masked event text |
 | Conversation restore | `show <session-id> [--include <types>] [--limit <n>] [--json]` | One conversation reconstructed oldest turn first, full masked text, with a rendered/matched footer |
@@ -142,7 +139,7 @@ The CLI is the canonical human and automation interface.
 | Statistics and signals | `stats`, `hooks`, `signals` | Usage aggregates, adaptive-hook decisions, and Oko/Lake correlations |
 | Advanced SQL | `query [--json] \"<sql>\"` | DuckDB result or actionable dependency error |
 | Compact | `compact [--source <runtime>] [--json]` | Per-runtime NDJSON-to-Parquet report |
-| Export and refresh Oko | `export-oko [--full] [--reindex]`, `oko-refresh` | Export summary and optional Oko reindex |
+| Projection recovery | `rebuild-oko [--reindex]`, `oko-refresh` | Reconstruct the Oko projection or explicitly reindex it |
 | Derived cleanup | `clean [--target <parquet|oko|all>] [--apply]` | Dry-run by default; removes rebuildable data only with `--apply` |
 
 Canonical event and adapter interfaces are machine contracts documented in [the architecture contract](docs/LAKE.md). Every supported operation maps to [one canonical example](examples/README.md).
@@ -151,10 +148,10 @@ Canonical event and adapter interfaces are machine contracts documented in [the 
 
 - **Configuration:** global `--data-dir <path>` selects the state root for one invocation; `LAKE_DATA` remains the automation default. `OKO_CLI` optionally selects the Oko executable. Unset values use documented local defaults; there are no credential fallbacks.
 - **State ownership:** vendor runtimes own source transcripts; Transcript Lake alone owns `LAKE_DATA`; Oko owns its SQLite index and imports a derived Lake export read-only.
-- **Credentials:** core ingestion needs none. Transcript contents may contain credentials, so masking occurs before durable Lake writes. Do not share a Lake directory as though it were anonymized data.
+- **Credentials:** core streaming needs none. Transcript contents may contain credentials, so masking occurs before durable Lake writes. Do not share a Lake directory as though it were anonymized data.
 - **Upgrades:** use an immutable release once available. State layout compatibility, rollback, and release channels are defined in [release policy](docs/RELEASES.md).
-- **Observability:** `paths`, `sources`, `doctor`, `status --json`, and structured mutation summaries expose configuration, availability, freshness, counts, and failures.
-- **Recovery:** rerun incremental ingest after interruption. A source truncation, same-size rewrite, or damaged cursor is rejected before replay; preserve the current Lake and use `rebuild --to <empty-path>` for a separate full reconstruction.
+- **Observability:** `paths`, `sources`, `doctor`, `status --json`, and stream logs expose configuration, availability, freshness, counts, and failures.
+- **Recovery:** the supervised stream resumes from durable byte cursors; a truncation, same-size rewrite, or damaged cursor is rejected, and `rebuild --to <empty-path>` reconstructs a separate Lake without mutating the current one.
 - **Retention:** no automatic authoritative deletion is performed. `clean` handles only rebuildable Parquet and Oko artifacts, previews by default, and requires `--apply`.
 - **Integrations:** capability, dependency, failure, and removal contracts are in [integration contracts](docs/INTEGRATIONS.md).
 

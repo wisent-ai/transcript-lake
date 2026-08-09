@@ -59,7 +59,7 @@ fn add(rest: &[String]) -> Result<i32> {
     if rows.is_empty() {
         return Err(Error(format!(
             "unknown session \"{session_id}\": not present in the selected Lake{}",
-            " (check the id or run ingest first)"
+            " (check the id or start the stream first)"
         )));
     }
     let mut runtimes: Vec<String> = rows
@@ -135,7 +135,10 @@ fn list(rest: &[String]) -> Result<i32> {
         where_clauses.push(format!("session_id = {}", quote_sql(session)));
     }
     if let Some(aspect) = parsed.value("aspect") {
-        where_clauses.push(format!("aspect = {}", quote_sql(normalize_aspect(Some(aspect))?)));
+        where_clauses.push(format!(
+            "aspect = {}",
+            quote_sql(normalize_aspect(Some(aspect))?)
+        ));
     }
     if let Some(runtime) = require_runtime(parsed.value("runtime"))? {
         where_clauses.push(format!("runtime = {}", quote_sql(runtime)));

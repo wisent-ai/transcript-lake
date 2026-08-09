@@ -1,65 +1,61 @@
 # Diagnose representative failures
 
-1. **Goal:** Recognize fail-closed behavior for invalid input, missing dependencies, partial ingest, and writer contention.
-2. **Status:** Development `0.x`; failure contracts implemented, execution evidence pending.
-3. **Risk:** Read-only except isolated ingest cases, which create local state. Do not provoke failures against a shared or only production-like Lake.
-4. **Environment:** macOS terminal, installed Transcript Lake, isolated temporary root for mutation scenarios.
-5. **Preconditions:** Preserve stderr and structured stdout separately; know whether the scenario is expected; never alter vendor files to force a failure.
-6. **Inputs:** Scenario-specific commands below.
-7. **Artifacts and side effects:** Invalid input and missing dependencies should create no Lake state. Partial ingest may preserve already flushed partitions and cursors. Writer contention leaves the incumbent writer's state untouched.
-8. **Steps and observable outcomes:**
+1. **Goal:** Interpret invalid input, missing dependencies, source-local failures, and writer contention without guessing from exit status alone.
+2. **Risk:** Read-only except for the ordinary live stream. Never alter vendor files to manufacture a failure.
+3. **Environment:** macOS terminal and installed Transcript Lake.
+4. **Inputs:** The command output, stream log, and `status --json`.
 
-**Invalid runtime, no mutation**
+## Invalid runtime
 
 ```sh
-LAKE="$(mktemp -d)/must-remain-absent"
-transcript-lake --data-dir "$LAKE" ingest --source unsupported-runtime
+TARGET="$(mktemp -d)/must-remain-absent"
+transcript-lake rebuild --to "$TARGET" --source unsupported-runtime
 ```
 
-Expected: supported identifiers are named, exit is non-zero, and the selected root remains absent.
+The command names the supported identifiers, exits non-zero, and leaves the
+target absent.
 
-**Missing DuckDB, no mutation**
+## Missing DuckDB
 
 ```sh
-PATH="/usr/bin:/bin" /absolute/path/to/transcript-lake --data-dir "$LAKE" sessions
+PATH="/usr/bin:/bin" /absolute/path/to/transcript-lake sessions
 ```
 
-Expected: a named DuckDB dependency error and non-zero exit. Use this only when `transcript-lake` itself is addressed by an absolute path or remains on that restricted `PATH`.
+The command names DuckDB as the missing optional dependency. Streaming and
+status remain available.
 
-**Incomplete SQL override, no mutation**
-
-The canonical views are compiled into the binary, so an installation can never present a Lake without them and there is no missing-view failure to provoke. `TRANSCRIPT_LAKE_SQL` deliberately replaces them, and an override that is set but incomplete is rejected rather than silently falling back to the compiled-in copy:
+## Incomplete SQL override
 
 ```sh
-TRANSCRIPT_LAKE_SQL="$(mktemp -d)" transcript-lake --data-dir "$LAKE" sessions
+TRANSCRIPT_LAKE_SQL="$(mktemp -d)" transcript-lake sessions
 ```
 
-Expected: `error: missing <that directory>/views.sql (TRANSCRIPT_LAKE_SQL is set but incomplete)` and a non-zero exit, with no Lake state created. Unset the variable to use the compiled-in views deliberately rather than by accident.
+An explicitly selected but incomplete override is rejected instead of silently
+falling back to compiled views. Unset the variable to use the compiled views.
 
-**Partial ingest**
+## Source-local failure
 
-Run ordinary incremental ingest and inspect its real result; do not corrupt a source to manufacture evidence:
+The live stream names the failed path and reason in a `failure` record, leaves
+that path's cursor unchanged, and continues processing other notifications.
+Truncation and same-size replacement direct recovery to a separate empty root;
+permissions and storage errors can be corrected in place before restart.
+
+## Writer contention
+
+A compaction, export recovery, rebuild, or second stream commit that reaches the
+same root while its writer lease is held reports the live owner and performs no
+mutation. Never create, edit, or delete lock files manually.
+
+## Health classification
 
 ```sh
-transcript-lake --data-dir "$LAKE" ingest
+transcript-lake doctor --json
+transcript-lake status --json
 ```
 
-Expected on an organic source/parser failure: parseable summary with `partial: true`, non-zero aggregate failures, affected per-runtime failures, and non-zero exit. Previously flushed checkpoints remain.
+Missing optional dependencies are warnings. Corrupt cursors or unreadable
+stream state are non-zero errors without automatic repair. Diagnostics may name
+paths and process identity but never unmasked transcript payloads.
 
-**Writer contention**
-
-If an ingest is already legitimately running, a second ordinary ingest against the same root should report the live lock owner and exit non-zero. Do not create or edit lock files manually.
-
-**Health classification**
-
-```sh
-transcript-lake --data-dir "$LAKE" doctor --json
-transcript-lake --data-dir "$LAKE" status --json
-```
-
-Expected: optional dependency absence is a warning; corrupt cursors or summaries are non-zero errors without automatic repair.
-
-9. **Verification:** A failure is verified by its classified message, non-zero exit, and bounded state effect—not by matching an implementation stack trace. Secret-bearing transcript payloads never appear in diagnostics.
-10. **Recovery:** Correct invalid input; install pinned DuckDB; retain and diagnose partial source failures; let a live writer finish. Remove a stale lock only through product recovery behavior, never manual deletion while ownership is uncertain.
-11. **Cleanup or off-switch:** Remove only isolated temporary parents created for no-mutation checks. Preserve organic failure evidence until diagnosis. No cloud or provider cleanup exists.
-12. **Next:** Use [rebuild into an empty root](../recovery/rebuild-into-empty-root.md) only for confirmed cursor damage or non-append source changes.
+For confirmed cursor damage or non-append source changes, preserve the current
+root and use [rebuild into an empty root](../recovery/rebuild-into-empty-root.md).
