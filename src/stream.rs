@@ -610,8 +610,11 @@ pub fn stream_paths(data_dir: &Path, paths: &[PathBuf]) -> Result<Value> {
 fn stream_paths_locked(data_dir: &Path, paths: &[PathBuf]) -> Result<Value> {
     let started = Instant::now();
     let home = home_dir();
-    let adapters = crate::adapters::all();
     let hook_sources = crate::paths::hook_source_roots();
+    let mut adapters = crate::adapters::all();
+    if !hook_sources.segment_mode && hook_sources.available {
+        adapters.push(crate::hook_segments::hooks_adapter());
+    }
     let mut cursors = Cursors::open(&data_dir.to_path_buf())?;
     let mut writer = Writer::new(data_dir.to_path_buf(), machine_name());
     let mut per_runtime: Map<String, Value> = Map::new();

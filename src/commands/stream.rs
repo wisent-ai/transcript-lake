@@ -81,6 +81,44 @@ fn source_roots() -> Vec<PathBuf> {
     roots
 }
 
+/// Every source file that may have advanced while the service was stopped.
+/// This is a single startup catch-up, not a polling path: filesystem
+/// notifications remain the only source of work after startup.
+fn source_files() -> Vec<PathBuf> {
+    let home = home_dir();
+    let mut files = Vec::new();
+    for adapter in crate::adapters::all() {
+        for root in adapter.roots(&home) {
+            files.extend(
+                adapter
+                    .list_sessions(&root)
+                    .into_iter()
+                    .map(|entry| entry.file),
+            );
+        }
+    }
+
+    let hooks = hook_source_roots();
+    if hooks.segment_mode {
+        if let Ok(entries) = fs::read_dir(&hooks.ready) {
+            files.extend(entries.flatten().map(|entry| entry.path()));
+        }
+    } else if hooks.available {
+        let adapter = crate::hook_segments::hooks_adapter();
+        for root in adapter.roots(&home) {
+            files.extend(
+                adapter
+                    .list_sessions(&root)
+                    .into_iter()
+                    .map(|entry| entry.file),
+            );
+        }
+    }
+    files.sort();
+    files.dedup();
+    files
+}
+
 /// One structured stream line: JSON when requested, otherwise timestamped
 /// key=value text for service logs.
 fn log(json: bool, kind: &str, details: &[(&str, Value)]) {
@@ -251,6 +289,16 @@ pub fn stream(rest: &[String]) -> Result<i32> {
         &json!({"state": "running", "startedAt": started_at, "roots": roots.len()}),
     )?;
     log(json_output, "start", &[("roots", Value::from(roots.len()))]);
+
+    // Watch first, then close any cursor gap left by downtime. Notifications
+    // arriving during this pass stay queued and become cheap cursor no-ops.
+    let initial = source_files();
+    log(
+        json_output,
+        "catch-up",
+        &[("paths", Value::from(initial.len()))],
+    );
+    process_paths(json_output, &data_dir, &initial);
 
     while !STOP.load(Ordering::SeqCst) {
         let first = match receiver.recv_timeout(TICK) {
