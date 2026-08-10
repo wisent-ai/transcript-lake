@@ -13,7 +13,9 @@ use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
 
 use crate::cursors::{open_writer_lease, ByteCursor, CursorRecord, Cursors};
-use crate::hook_segments::{replay_closed_hook_segments, stream_hook_segment};
+use crate::hook_segments::{
+    catch_up_closed_hook_segments, replay_closed_hook_segments, stream_hook_segment,
+};
 use crate::redact::Masker;
 use crate::types::{
     Adapter, CanonicalEvent, EventSink, ParserCtx, RawEvent, SegmentOutput, SessionEntry, HOOKS,
@@ -595,6 +597,117 @@ pub fn replay(opts: ReplayOptions) -> Result<Value> {
     summary
 }
 
+/// Close source cursor gaps left while the service was stopped, then hand off
+/// to filesystem notifications. Adapters enumerate once at startup and their
+/// already-derived entries go straight to the writer without re-discovering a
+/// runtime root for every file.
+pub fn catch_up(data_dir: &Path) -> Result<Value> {
+    let mut lease = open_writer_lease(data_dir)?;
+    let summary = catch_up_locked(data_dir);
+    lease.close();
+    summary
+}
+
+fn catch_up_locked(data_dir: &Path) -> Result<Value> {
+    let started = Instant::now();
+    let home = home_dir();
+    let hook_sources = crate::paths::hook_source_roots();
+    let mut adapters = crate::adapters::all();
+    if !hook_sources.segment_mode && hook_sources.available {
+        adapters.push(crate::hook_segments::hooks_adapter());
+    }
+    let mut cursors = Cursors::open(&data_dir.to_path_buf())?;
+    let mut writer = Writer::new(data_dir.to_path_buf(), machine_name());
+    let mut per_runtime = Map::new();
+    let mut discovered = 0u64;
+    let mut touched = 0u64;
+
+    for adapter in adapters {
+        let mut tally = Tally::default();
+        let before = total_hits(&writer.masker.counts());
+        for root in adapter.roots(&home) {
+            for entry in adapter.list_sessions(&root) {
+                discovered += 1;
+                let meta = match fs::metadata(&entry.file) {
+                    Ok(meta) => meta,
+                    Err(error) => {
+                        warn(&format!(
+                            "stat failed for {}: {error}",
+                            entry.file.display()
+                        ));
+                        tally.failures += 1;
+                        continue;
+                    }
+                };
+                let key = entry.file.to_string_lossy().to_string();
+                if let Some(CursorRecord::Bytes(cursor)) = cursors.get(&key)? {
+                    if cursor.mtime_ms == mtime_ms(&meta)
+                        && cursor.size == meta.len()
+                        && cursor.offset >= meta.len()
+                    {
+                        tally.skipped += 1;
+                        continue;
+                    }
+                }
+                match stream_file(
+                    &mut writer,
+                    &mut cursors,
+                    adapter.as_ref(),
+                    &entry,
+                    &meta,
+                    false,
+                    &mut tally,
+                ) {
+                    Ok(()) => {
+                        tally.files += 1;
+                        touched += 1;
+                    }
+                    Err(error) => {
+                        warn(&format!("{}: {error}", entry.file.display()));
+                        tally.failures += 1;
+                    }
+                }
+            }
+        }
+        tally.masked_hits = total_hits(&writer.masker.counts()) - before;
+        per_runtime.insert(adapter.runtime().to_string(), serde_json::to_value(tally)?);
+    }
+    if hook_sources.segment_mode {
+        let before = total_hits(&writer.masker.counts());
+        let report = catch_up_closed_hook_segments(
+            &hook_sources.ready,
+            data_dir,
+            &mut cursors,
+            &mut writer,
+        )?;
+        discovered += report.files + report.skipped + report.invalid;
+        let tally = Tally {
+            files: report.files,
+            events: report.events,
+            skipped: report.skipped,
+            failures: report.invalid,
+            masked_hits: total_hits(&writer.masker.counts()) - before,
+        };
+        touched += report.files;
+        per_runtime.insert(HOOKS.to_string(), serde_json::to_value(tally)?);
+    }
+
+    cursors.flush()?;
+    let failures = per_runtime
+        .values()
+        .filter_map(|tally| tally.get("failures").and_then(Value::as_u64))
+        .sum::<u64>();
+    Ok(json!({
+        "perRuntime": Value::Object(per_runtime),
+        "maskCounts": writer.masker.counts(),
+        "durationMs": started.elapsed().as_millis() as u64,
+        "filesDiscovered": discovered,
+        "filesStreamed": touched,
+        "partial": failures > 0,
+        "failures": failures,
+    }))
+}
+
 /// Stream exactly the source files named by filesystem notifications.
 ///
 /// The cost is proportional to bytes appended since each file's durable
@@ -610,8 +723,11 @@ pub fn stream_paths(data_dir: &Path, paths: &[PathBuf]) -> Result<Value> {
 fn stream_paths_locked(data_dir: &Path, paths: &[PathBuf]) -> Result<Value> {
     let started = Instant::now();
     let home = home_dir();
-    let adapters = crate::adapters::all();
     let hook_sources = crate::paths::hook_source_roots();
+    let mut adapters = crate::adapters::all();
+    if !hook_sources.segment_mode && hook_sources.available {
+        adapters.push(crate::hook_segments::hooks_adapter());
+    }
     let mut cursors = Cursors::open(&data_dir.to_path_buf())?;
     let mut writer = Writer::new(data_dir.to_path_buf(), machine_name());
     let mut per_runtime: Map<String, Value> = Map::new();

@@ -653,7 +653,7 @@ pub fn stream_hook_segment(
     Ok(report)
 }
 
-/// Replay every closed segment in the ready directory, oldest name first.
+/// Replay every closed segment in stable filename order.
 pub fn replay_closed_hook_segments(
     ready_dir: &Path,
     data_dir: &Path,
@@ -666,13 +666,64 @@ pub fn replay_closed_hook_segments(
     let mut names: Vec<String> = entries
         .flatten()
         .map(|entry| entry.file_name().to_string_lossy().to_string())
-        .filter(|name| name.ends_with(".jsonl"))
+        .filter(|name| name.starts_with("segment-") && name.ends_with(".jsonl"))
         .collect();
-    // Segment names are timestamped, so byte order is chronological order, and
-    // committing out of sequence would reorder the hook decision stream.
     names.sort_unstable();
     let mut report = SegmentReport::default();
     for name in names {
+        match process_segment(&ready_dir.join(name), data_dir, cursors, sink)? {
+            Outcome::Invalid => report.invalid += 1,
+            Outcome::Skipped => report.skipped += 1,
+            Outcome::Committed(events) => {
+                report.files += 1;
+                report.events += events;
+            }
+        }
+    }
+    Ok(report)
+}
+
+/// Resume only closed segments that have no durable Lake commit and producer
+/// acknowledgement. A committed, acknowledged segment is immutable; explicit
+/// recovery replay remains the path that revalidates every historical payload.
+pub fn catch_up_closed_hook_segments(
+    ready_dir: &Path,
+    data_dir: &Path,
+    cursors: &mut Cursors,
+    sink: &mut dyn EventSink,
+) -> Result<SegmentReport> {
+    let Ok(entries) = fs::read_dir(ready_dir) else {
+        return Ok(SegmentReport::default());
+    };
+    let acked_dir = ready_dir
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .join("acked");
+    let mut names: Vec<String> = entries
+        .flatten()
+        .map(|entry| entry.file_name().to_string_lossy().to_string())
+        .filter(|name| name.starts_with("segment-") && name.ends_with(".jsonl"))
+        .collect();
+    names.sort_unstable();
+
+    let mut report = SegmentReport::default();
+    for name in names {
+        let id = name
+            .strip_prefix("segment-")
+            .and_then(|value| value.strip_suffix(".jsonl"))
+            .unwrap_or_default();
+        let committed = match cursors.get(&format!("hooks:{id}"))? {
+            Some(CursorRecord::Segment(record)) => {
+                record.get("kind").and_then(Value::as_str) == Some(COMMIT_KIND)
+                    && outputs_valid(record.get("outputs"))
+                    && acked_dir.join(ack_name(id)).exists()
+            }
+            _ => false,
+        };
+        if committed {
+            report.skipped += 1;
+            continue;
+        }
         match process_segment(&ready_dir.join(name), data_dir, cursors, sink)? {
             Outcome::Invalid => report.invalid += 1,
             Outcome::Skipped => report.skipped += 1,

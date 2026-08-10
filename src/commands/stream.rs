@@ -248,9 +248,46 @@ pub fn stream(rest: &[String]) -> Result<i32> {
     let started_at = now_iso();
     write_stream_state(
         &data_dir,
-        &json!({"state": "running", "startedAt": started_at, "roots": roots.len()}),
+        &json!({"state": "catching-up", "startedAt": started_at, "roots": roots.len()}),
     )?;
     log(json_output, "start", &[("roots", Value::from(roots.len()))]);
+
+    // Watch first, then close any cursor gap left by downtime. Notifications
+    // arriving during this pass stay queued and become cheap cursor no-ops.
+    let summary = crate::stream::catch_up(&data_dir)?;
+    let discovered = summary
+        .get("filesDiscovered")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let streamed = summary
+        .get("filesStreamed")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let failures = summary.get("failures").and_then(Value::as_u64).unwrap_or(0);
+    let duration = summary.get("durationMs").cloned().unwrap_or(Value::Null);
+    log(
+        json_output,
+        "catch-up",
+        &[
+            ("files", Value::from(discovered)),
+            ("streamed", Value::from(streamed)),
+            ("failures", Value::from(failures)),
+            ("ms", duration.clone()),
+        ],
+    );
+    write_stream_state(
+        &data_dir,
+        &json!({
+            "state": if failures == 0 { "running" } else { "degraded" },
+            "startedAt": started_at,
+            "updatedAt": now_iso(),
+            "roots": roots.len(),
+            "filesDiscovered": discovered,
+            "filesStreamed": streamed,
+            "failures": failures,
+            "durationMs": duration,
+        }),
+    )?;
 
     while !STOP.load(Ordering::SeqCst) {
         let first = match receiver.recv_timeout(TICK) {
