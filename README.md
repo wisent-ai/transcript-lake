@@ -1,14 +1,27 @@
-# Transcript Lake
+<!-- wisent-banner:start -->
+<p align="center">
+  <img src="assets/readme-banner.webp" alt="transcript-lake by Wisent" width="100%">
+</p>
+<!-- wisent-banner:end -->
 
 <!-- wisent-readme-signals:start -->
-[![Release](https://img.shields.io/github/v/release/wisent-ai/transcript-lake?display_name=tag&sort=semver)](https://github.com/wisent-ai/transcript-lake/releases)
-[![Downloads](https://img.shields.io/github/downloads/wisent-ai/transcript-lake/total)](https://github.com/wisent-ai/transcript-lake/releases)
-[![License](https://img.shields.io/github/license/wisent-ai/transcript-lake)](https://github.com/wisent-ai/transcript-lake)
-[![Discord](https://img.shields.io/badge/Discord-Join%20Wisent-5865F2?logo=discord&logoColor=white)](https://discord.gg/qRjpkthq54)
+[![Source](https://img.shields.io/badge/GitHub-Source-181717?logo=github)](https://github.com/wisent-ai/transcript-lake) [![Issues](https://img.shields.io/badge/GitHub-Issues-181717?logo=github)](https://github.com/wisent-ai/transcript-lake/issues) [![Wisent](https://img.shields.io/badge/Wisent-Website-0B0B0B)](https://wisent.ai) [![Discord](https://img.shields.io/badge/Discord-Join-5865F2?logo=discord&logoColor=white)](https://discord.gg/qRjpkthq54) [![LinkedIn](https://img.shields.io/badge/LinkedIn-Follow-0A66C2?logo=linkedin&logoColor=white)](https://www.linkedin.com/company/wisent-ai/) [![X](https://img.shields.io/badge/X-Follow-000000?logo=x&logoColor=white)](https://x.com/wisentai) [![Enterprise](https://img.shields.io/badge/Enterprise-Book%20a%20call-0B0B0B?logo=calendly)](https://calendly.com/lbartoszcze)
 <!-- wisent-readme-signals:end -->
 
+# Transcript Lake: All the Knowledge from Your AI Agent Conversations, Organized
 
-Transcript Lake streams local coding-agent conversations into one privacy-masked event archive that operators can inspect with SQL and Oko can consume immediately.
+Nothing You Ever Told an AI Is Lost Again.
+
+Every hour your team spends with an agent produces the most valuable transcript
+in your company, and then it dies in a terminal nobody reopens. Transcript Lake
+catches all of it as it happens — every client, every machine, every session —
+and writes it into one archive you can query with plain SQL. Names, keys and
+paths are masked on the way in, so the archive is safe to keep and safe to share.
+Ask it who solved this before, what a project actually cost in tokens, or how
+long a contractor really worked, and the answer is a query away. Nothing has to
+be exported, remembered or reconstructed after the fact.
+
+Your Company’s Memory, Written as It Happens.
 
 ## Problem and intended users
 
