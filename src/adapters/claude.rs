@@ -1,4 +1,8 @@
-//! Adapter: Claude Code transcripts — `~/.claude/projects/<encoded-cwd>/<sessionId>.jsonl`
+//! Adapter: Claude Code transcripts — `~/.claude/projects/<encoded-cwd>/<sessionId>.jsonl`,
+//! plus the sidechain transcripts of that session's subagents in
+//! `<encoded-cwd>/<sessionId>/subagents/agent-*.jsonl`. Sidechain records carry the
+//! parent `sessionId` and `isSidechain: true`, so they join their session and stay
+//! marked rather than becoming a separate conversation.
 //!
 //! Frozen interface: `runtime`, `roots(home)`, `list_sessions(root)`, `parser(ctx)`.
 //! Adapters emit UNMASKED text (the stream masks) and never do IO in `on_line`.
@@ -14,6 +18,9 @@ use serde_json::{Map, Value};
 use crate::types::{Adapter, Parser, ParserCtx, RawEvent, SessionEntry};
 
 const TEXT_CAP: usize = 65536;
+/// Where Claude Code keeps a session's sidechain transcripts.
+const SUBAGENT_DIR: &str = "subagents";
+const JSONL_EXT: &str = ".jsonl";
 
 pub struct Claude;
 
@@ -38,11 +45,23 @@ impl Adapter for Claude {
             }
             let project_dir = root.join(&entry.0);
             for child in read_dirents(&project_dir) {
-                if !child.1.is_file() {
-                    continue;
-                }
-                if let Some(session) = project_entry(&project_dir, &child.0) {
-                    sessions.push(session);
+                if child.1.is_file() {
+                    if let Some(session) = project_entry(&project_dir, &child.0) {
+                        sessions.push(session);
+                    }
+                } else if child.1.is_dir() {
+                    // A per-session directory holds that session's sidechain
+                    // transcripts under `subagents/`, beside caches and images.
+                    // Skipping it omitted every subagent conversation.
+                    let subagents = project_dir.join(&child.0).join(SUBAGENT_DIR);
+                    for file in read_dirents(&subagents) {
+                        if !file.1.is_file() {
+                            continue;
+                        }
+                        if let Some(session) = subagent_entry(&project_dir, &child.0, &file.0) {
+                            sessions.push(session);
+                        }
+                    }
                 }
             }
         }
@@ -51,19 +70,34 @@ impl Adapter for Claude {
 
     fn entry_for(&self, path: &Path) -> Option<SessionEntry> {
         let name = path.file_name()?.to_string_lossy();
-        let project_dir = path.parent()?;
+        let parent = path.parent()?;
         let home = crate::util::home_dir();
-        if !self
-            .roots(&home)
-            .iter()
-            .any(|root| project_dir.parent() == Some(root.as_path()))
-        {
+        let roots = self.roots(&home);
+        let known = |dir: Option<&Path>| roots.iter().any(|root| dir == Some(root.as_path()));
+        if !dirent_type(path)?.is_file() {
             return None;
         }
-        if !dirent_type(project_dir)?.is_dir() || !dirent_type(path)?.is_file() {
+        if known(parent.parent()) {
+            if !dirent_type(parent)?.is_dir() {
+                return None;
+            }
+            return project_entry(parent, &name);
+        }
+        // `<project>/<sessionId>/subagents/<file>`: the same three levels the scan
+        // walks, so a notification cannot introduce a file the scan would not list.
+        if parent.file_name()?.to_string_lossy() != SUBAGENT_DIR {
             return None;
         }
-        project_entry(project_dir, &name)
+        let session_dir = parent.parent()?;
+        let project_dir = session_dir.parent()?;
+        if !known(project_dir.parent()) {
+            return None;
+        }
+        subagent_entry(
+            project_dir,
+            &session_dir.file_name()?.to_string_lossy(),
+            &name,
+        )
     }
 
     fn parser(&self, ctx: ParserCtx) -> Box<dyn Parser> {
@@ -127,9 +161,26 @@ fn decode_project_dir(name: &str) -> Option<String> {
 /// only, session id from the stem, project decoded from the directory name. Shared
 /// with `entry_for` so one known path and a full scan cannot disagree about a file.
 fn project_entry(project_dir: &Path, name: &str) -> Option<SessionEntry> {
-    let session_id = name.strip_suffix(".jsonl")?;
+    let session_id = name.strip_suffix(JSONL_EXT)?;
     Some(SessionEntry {
         file: project_dir.join(name),
+        session_id: Some(session_id.to_string()),
+        project: project_dir
+            .file_name()
+            .and_then(|dir| decode_project_dir(&dir.to_string_lossy())),
+    })
+}
+
+/// The entry for one sidechain transcript: `.jsonl` files only, and the session it
+/// belongs to comes from the directory that holds it. Every record in these files
+/// repeats that `sessionId`, so the identifier here is only what the first records
+/// are attributed to before one is read.
+fn subagent_entry(project_dir: &Path, session_id: &str, name: &str) -> Option<SessionEntry> {
+    if !name.ends_with(JSONL_EXT) {
+        return None;
+    }
+    Some(SessionEntry {
+        file: project_dir.join(session_id).join(SUBAGENT_DIR).join(name),
         session_id: Some(session_id.to_string()),
         project: project_dir
             .file_name()

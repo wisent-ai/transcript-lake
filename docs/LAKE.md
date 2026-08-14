@@ -53,10 +53,14 @@ driver's job, so adapters stay pure.
 
 Source formats, as verified on this machine:
 
-- **claude** — `~/.claude/projects/<encoded-cwd>/<id>.jsonl`. Typed lines
+- **claude** — `~/.claude/projects/<encoded-cwd>/<id>.jsonl`, plus that session's
+  subagent sidechains in `<encoded-cwd>/<id>/subagents/agent-*.jsonl`. Typed lines
   carrying message content blocks (text, thinking, tool use, tool result)
   plus per-message usage counters. Oversized tool results arrive as file
   references; the reference path is recorded in `extra` and never followed.
+  Sidechain records repeat their parent `sessionId` and set `isSidechain`, so a
+  subagent's turns join the session that spawned them and stay marked
+  (`extra.sidechain`) rather than becoming a separate conversation.
 - **codex** — `~/.codex/sessions/<year>/<month>/<day>/rollout-*.jsonl`.
   Envelope lines `{timestamp, type, payload}` covering session metadata,
   turn context, user and agent messages, usage counts, and response items
@@ -74,10 +78,13 @@ Source formats, as verified on this machine:
 - **droid** — `~/.factory/sessions/<encoded-cwd>/<uuid>.jsonl` with
   `<uuid>.settings.json` sidecars. The first line is the session start
   record; sidecars contribute meta events only.
-- **kimi** — `~/.kimi-code/sessions/wd_*/session_*/agents/main/wire.jsonl`
-  with `state.json` nearby for identity. Wire records are typed (metadata,
-  config updates, message and tool records); config and system-prompt
-  records contribute at most meta events and never text.
+- **kimi** — `~/.kimi-code/sessions/wd_*/session_*/agents/<agent>/wire.jsonl`
+  with `state.json` nearby for identity. `agents/main` is the conversation the
+  operator drives and keeps the session's own identifier; every sibling
+  `agents/*` directory is a subagent it spawned and becomes session
+  `<session_*>.<agent>`, because wire records carry no identifier of their own.
+  Wire records are typed (metadata, config updates, message and tool records);
+  config and system-prompt records contribute at most meta events and never text.
 - **hooks** — Tama publishes immutable closed segments in its ready directory;
   each segment is streamed once, content-checked, committed, and acknowledged.
   When that directory is absent, the adapter follows legacy

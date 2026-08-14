@@ -182,6 +182,93 @@ def replay(binary, tag, texts):
     return masked
 
 
+def claude_records(session_uuid, turns, sidechain):
+    """A minimal Claude transcript. A sidechain file repeats its parent's
+    `sessionId` and sets `isSidechain`, which is how Claude Code records the
+    conversation a subagent had."""
+    records = []
+    for index, text in enumerate(turns):
+        record = {
+            "type": "user",
+            "sessionId": session_uuid,
+            "cwd": "/Users/fixture/project",
+            "timestamp": f"2026-08-14T13:{index:02d}:00.000Z",
+            "message": {"role": "user", "content": text},
+        }
+        if sidechain:
+            record["isSidechain"] = True
+            record["parentUuid"] = "8bf0c6d2-df59-4729-8e46-4061addb250c"
+        records.append(record)
+    return "\n".join(json.dumps(record) for record in records) + "\n"
+
+
+def replay_claude_sidechain(binary):
+    """A Claude session plus the subagent transcript under its `subagents/`
+    directory. Sidechain events belong to the session that spawned them, so the
+    check is that they arrive, stay marked, and are masked. Returns failures."""
+    root = SCRATCH / "sidechain"
+    if root.exists():
+        shutil.rmtree(root)
+    project = root / "home" / ".claude" / "projects" / PROJECT_DIR
+    subagents = project / SESSION / "subagents"
+    subagents.mkdir(parents=True)
+    (project / f"{SESSION}.jsonl").write_text(
+        claude_records(SESSION, ["top-level turn"], sidechain=False), encoding="utf-8"
+    )
+    (subagents / "agent-a07fd2ec700acb537.jsonl").write_text(
+        claude_records(SESSION, [f'ssh host \'echo "{SECRET}" | sudo -S true\''], sidechain=True),
+        encoding="utf-8",
+    )
+    # A cache file the same session directory carries; it is not a transcript.
+    (project / SESSION / "notes.md").write_text("# not a transcript\n", encoding="utf-8")
+
+    current = root / "current"
+    current.mkdir(parents=True, exist_ok=True)
+    target = root / "replayed"
+    proc = subprocess.run(
+        [str(binary), "rebuild", "--to", str(target), "--source", "claude"],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=TIMEOUT,
+        env={
+            **os.environ,
+            "HOME": str(root / "home"),
+            "LAKE_DATA": str(current),
+            "PATH": "/usr/bin:/bin",
+        },
+    )
+    if proc.returncode != ZERO:
+        print(proc.stdout.strip()[: len("a" * 400)])
+        print(proc.stderr.strip()[: len("a" * 400)])
+        raise SystemExit(f"claude sidechain replay exit {proc.returncode}")
+    summary = json.loads(proc.stdout)
+    print(f"replay claude-sidechain: {json.dumps(summary, sort_keys=True)[: len('a' * 300)]}")
+    rows = []
+    for part in sorted((target / "events").rglob("part-*.ndjson")):
+        for line in part.read_text(encoding="utf-8").split("\n"):
+            if line.strip():
+                rows.append(json.loads(line))
+    texts = " ".join(row["text"] for row in rows)
+    marker = f"[masked:credential:{len(SECRET)}:"
+    sidechain_rows = [row for row in rows if row.get("extra", {}).get("sidechain") is True]
+    checks = [
+        ("both transcripts ingested", summary["perRuntime"]["claude"]["files"] == len("aa")),
+        ("sidechain event present", len(sidechain_rows) > ZERO),
+        ("sidechain joins its session", all(row["session_id"] == SESSION for row in sidechain_rows)),
+        ("sidechain credential masked", marker in texts),
+        ("sidechain secret gone", SECRET not in texts),
+        ("cache file ingested as nothing", "not a transcript" not in texts),
+    ]
+    failures = ZERO
+    for label, good in checks:
+        print(f"{'PASS' if good else 'FAIL'} claude-sidechain:{label}")
+        failures += not good
+    for row in sidechain_rows:
+        print("  masked | " + row["text"].replace("\n", "\\n")[: len("a" * 250)])
+    return failures
+
+
 def omp_records(session_uuid, turns):
     """A minimal omp transcript: the title and session records every real file
     opens with, then one user turn per text."""
@@ -330,9 +417,10 @@ def main():
         print(f"{'PASS' if same else 'FAIL'} idempotent:{label}")
         failures += not same
 
-    # Delegated conversations are transcripts too: the same fixture proves they
-    # are discovered and that the credential class applies to them.
+    # Delegated conversations are transcripts too, in every runtime that has them:
+    # the same fixture proves they are discovered and masked like any other.
     failures += replay_omp(binary)
+    failures += replay_claude_sidechain(binary)
 
     # The rules only protect the archive once the process that writes the archive
     # carries them, so the deployed artifact is replayed against the same fixture.

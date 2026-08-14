@@ -1,5 +1,10 @@
 //! Adapter: Kimi Code CLI wire transcripts —
-//!   `~/.kimi-code/sessions/wd_*/session_*/agents/main/wire.jsonl`
+//!   `~/.kimi-code/sessions/wd_*/session_*/agents/<agent>/wire.jsonl`
+//!
+//! `agents/main` is the conversation the operator drives; every other `agents/*`
+//! directory is a subagent that conversation spawned, with the same wire format.
+//! Wire records carry no identifier, so a subagent's session id is derived as
+//! `<session_*>.<agent>` — unique per file and readable next to its parent.
 //!
 //! Frozen interface: `runtime`, `roots(home)`, `list_sessions(root)`, `parser(ctx)`.
 //! Adapters emit UNMASKED text (the stream masks) and never do IO in `on_line`.
@@ -31,6 +36,10 @@ use serde_json::{Map, Value};
 use crate::types::{Adapter, Parser, ParserCtx, RawEvent, SessionEntry};
 
 const TEXT_CAP: usize = 65536;
+const AGENTS_DIR: &str = "agents";
+const WIRE_FILE: &str = "wire.jsonl";
+/// The conversation the operator drives; every sibling is a subagent it spawned.
+const MAIN_AGENT: &str = "main";
 
 pub struct Kimi;
 
@@ -59,25 +68,21 @@ impl Adapter for Kimi {
                 if !entry_type.is_dir() {
                     continue;
                 }
-                if let Some(session) = session_entry(&work_dir, &entry, &index) {
-                    sessions.push(session);
-                }
+                sessions.extend(session_entries(&work_dir, &entry, &index));
             }
         }
         sessions
     }
 
     fn entry_for(&self, path: &Path) -> Option<SessionEntry> {
-        // The wire transcript is the only file a scan ever offers, and it sits at a
-        // fixed depth: `<root>/wd_*/session_*/agents/main/wire.jsonl`.
-        if path.file_name()?.to_string_lossy() != "wire.jsonl" {
+        // A wire transcript sits at a fixed depth:
+        // `<root>/wd_*/session_*/agents/<agent>/wire.jsonl`.
+        if path.file_name()?.to_string_lossy() != WIRE_FILE {
             return None;
         }
-        let main = path.parent()?;
-        let agents = main.parent()?;
-        if main.file_name()?.to_string_lossy() != "main"
-            || agents.file_name()?.to_string_lossy() != "agents"
-        {
+        let agent_dir = path.parent()?;
+        let agents = agent_dir.parent()?;
+        if agents.file_name()?.to_string_lossy() != AGENTS_DIR {
             return None;
         }
         let session_dir = agents.parent()?;
@@ -90,13 +95,15 @@ impl Adapter for Kimi {
         if !work_dir.file_name()?.to_string_lossy().starts_with("wd_")
             || !dirent_type(work_dir)?.is_dir()
             || !dirent_type(session_dir)?.is_dir()
+            || !dirent_type(path)?.is_file()
         {
             return None;
         }
-        let name = session_dir.file_name()?.to_string_lossy();
+        let session = session_dir.file_name()?.to_string_lossy();
+        let agent = agent_dir.file_name()?.to_string_lossy();
         // The work-dir index is the only place the absolute project path exists, so
         // resolving one file pays the same small read the scan pays once per root.
-        session_entry(work_dir, &name, &read_work_dir_index(&root))
+        agent_entry(work_dir, &session, &agent, &read_work_dir_index(&root))
     }
 
     fn parser(&self, ctx: ParserCtx) -> Box<dyn Parser> {
@@ -147,13 +154,37 @@ fn dirent_type(path: &Path) -> Option<fs::FileType> {
     fs::symlink_metadata(path).ok().map(|meta| meta.file_type())
 }
 
-/// The entry a scan yields for one directory inside a work directory: `session_*` only,
-/// and only once it holds a wire transcript, with the directory name as the session id
-/// and the project the index records for it. Shared with `entry_for` so one known path
-/// and a full scan cannot disagree about a file.
-fn session_entry(
+/// Every wire transcript one `session_*` directory holds: the main conversation and
+/// each subagent it spawned, in byte order. Shared with `entry_for` so one known
+/// path and a full scan cannot disagree about a file.
+fn session_entries(
     work_dir: &Path,
     name: &str,
+    index: &HashMap<String, String>,
+) -> Vec<SessionEntry> {
+    if !name.starts_with("session_") {
+        return Vec::new();
+    }
+    let mut entries = Vec::new();
+    for (agent, agent_type) in read_dirents(&work_dir.join(name).join(AGENTS_DIR)) {
+        if !agent_type.is_dir() {
+            continue;
+        }
+        if let Some(entry) = agent_entry(work_dir, name, &agent, index) {
+            entries.push(entry);
+        }
+    }
+    entries
+}
+
+/// The entry for one agent's wire transcript. The main agent keeps the session's own
+/// identifier so existing partitions, projections and labels stay addressed as they
+/// were; a subagent is `<session_*>.<agent>`, because its wire records carry no id of
+/// their own and the bare agent name (`agent-3`) would collide across sessions.
+fn agent_entry(
+    work_dir: &Path,
+    name: &str,
+    agent: &str,
     index: &HashMap<String, String>,
 ) -> Option<SessionEntry> {
     if !name.starts_with("session_") {
@@ -161,15 +192,20 @@ fn session_entry(
     }
     let file = work_dir
         .join(name)
-        .join("agents")
-        .join("main")
-        .join("wire.jsonl");
+        .join(AGENTS_DIR)
+        .join(agent)
+        .join(WIRE_FILE);
     if !file.exists() {
         return None;
     }
+    let session_id = if agent == MAIN_AGENT {
+        name.to_string()
+    } else {
+        format!("{name}.{agent}")
+    };
     Some(SessionEntry {
         file,
-        session_id: Some(name.to_string()),
+        session_id: Some(session_id),
         project: index.get(name).cloned(),
     })
 }
