@@ -17,6 +17,7 @@ is what proves idempotency through the product path rather than in a unit test.
 Prints the compiler verdict and one `PASS`/`FAIL` line per expectation.
 """
 
+import hashlib
 import json
 import os
 import pathlib
@@ -25,11 +26,15 @@ import subprocess
 import sys
 
 NONE = None
+ZERO = len("")
 HOME = pathlib.Path(os.path.expanduser("~"))
 TREE = HOME / "Documents" / "CodingProjects" / "Wisent" / "transcript-lake"
 CARGO = HOME / ".cargo" / "bin" / "cargo"
 SCRATCH = HOME / ".cache" / "transcript-lake-masker"
 BUILD = HOME / ".cache" / "transcript-lake-build"
+# What the stream LaunchAgent actually runs, per
+# `transcript-lake/scripts/install-stream-service.sh`.
+INSTALLED = HOME / ".local" / "bin" / "transcript-lake"
 TIMEOUT = 3600
 KEEP = ("error", "warning", "Finished", "Compiling transcript-lake")
 
@@ -177,6 +182,18 @@ def replay(binary, tag, texts):
     return masked
 
 
+def check_expectations(label, masked):
+    """Compare one replay's output against every case, and count the failures."""
+    failures = ZERO
+    for (case, _, forbidden, required), got in zip(CASES, masked):
+        problems = [f"still present: {mark}" for mark in forbidden if mark in got]
+        problems += [f"missing: {mark}" for mark in required if mark not in got]
+        print(f"{'FAIL' if problems else 'PASS'} {label}{case}"
+              + ("; " + "; ".join(problems) if problems else ""))
+        failures += len(problems) > ZERO
+    return failures
+
+
 def main():
     if not TREE.is_dir():
         raise SystemExit(f"no transcript-lake checkout at {TREE}")
@@ -195,18 +212,22 @@ def main():
 
     texts = [text for _, text, _, _ in CASES]
     first = replay(binary, "first", texts)
-    failures = 0
-    for (label, _, forbidden, required), got in zip(CASES, first):
-        problems = [f"still present: {mark}" for mark in forbidden if mark in got]
-        problems += [f"missing: {mark}" for mark in required if mark not in got]
-        print(f"{'FAIL' if problems else 'PASS'} {label}" + ("; " + "; ".join(problems) if problems else ""))
-        failures += len(problems) > 0
+    failures = check_expectations("", first)
 
     second = replay(binary, "second", first)
     for (label, _, _, _), once, twice in zip(CASES, first, second):
         same = once == twice
         print(f"{'PASS' if same else 'FAIL'} idempotent:{label}")
         failures += not same
+
+    # The rules only protect the archive once the process that writes the archive
+    # carries them, so the deployed artifact is replayed against the same fixture.
+    if INSTALLED.is_file():
+        stamp = hashlib.sha256(INSTALLED.read_bytes()).hexdigest()[: len("a" * 16)]
+        print(f"installed {INSTALLED} sha256[:16]={stamp}")
+        failures += check_expectations("installed:", replay(INSTALLED, "installed", texts))
+    else:
+        print(f"installed {INSTALLED} absent; the stream service carries no build to check")
 
     print(f"failures {failures}")
     return 1 if failures else 0
