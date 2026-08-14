@@ -7,6 +7,7 @@ use std::fs::{self, File, OpenOptions};
 use std::io::{BufRead, BufReader, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 
 use serde::Serialize;
@@ -31,6 +32,20 @@ const TEXT_CAP: usize = 65536;
 const BATCH_EVENTS: usize = 512;
 /// How deep masking descends into `extra` before a value becomes null.
 const EXTRA_DEPTH: i32 = 4;
+
+/// Set by the foreground process's SIGINT and SIGTERM handlers. Catch-up observes
+/// it between source files, so a stop request during a large backfill is honoured
+/// at the next cursor boundary instead of hours later: on this machine the first
+/// backfill of previously undiscovered subagent transcripts was four thousand
+/// files, and an operator who asks a service to stop should not have to choose
+/// between waiting and killing it mid-batch.
+pub static STOP: AtomicBool = AtomicBool::new(false);
+
+/// Whether a clean stop has been requested.
+pub fn stopping() -> bool {
+    STOP.load(Ordering::SeqCst)
+}
+
 const PART_DIGEST_LEN: usize = 12;
 const READ_BUFFER: usize = 64 * 1024;
 
@@ -682,6 +697,9 @@ fn catch_up_locked(data_dir: &Path) -> Result<Value> {
         let before = total_hits(&writer.masker.counts());
         for root in adapter.roots(&home) {
             for entry in adapter.list_sessions(&root) {
+                if stopping() {
+                    break;
+                }
                 discovered += 1;
                 let meta = match fs::metadata(&entry.file) {
                     Ok(meta) => meta,
@@ -727,7 +745,9 @@ fn catch_up_locked(data_dir: &Path) -> Result<Value> {
         tally.masked_hits = total_hits(&writer.masker.counts()) - before;
         per_runtime.insert(adapter.runtime().to_string(), serde_json::to_value(tally)?);
     }
-    if hook_sources.segment_mode {
+    // A stop request skips the hook segments too: they are the same kind of work
+    // and the next start picks them up from their own cursors.
+    if hook_sources.segment_mode && !stopping() {
         let before = total_hits(&writer.masker.counts());
         writer.defer_segment_sync(true);
         let report =
@@ -757,8 +777,9 @@ fn catch_up_locked(data_dir: &Path) -> Result<Value> {
         "durationMs": started.elapsed().as_millis() as u64,
         "filesDiscovered": discovered,
         "filesStreamed": touched,
-        "partial": failures > 0,
+        "partial": failures > 0 || stopping(),
         "failures": failures,
+        "stopped": stopping(),
     }))
 }
 

@@ -2,7 +2,7 @@
 use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::Ordering;
 use std::sync::mpsc::{channel, RecvTimeoutError};
 use std::time::Duration;
 
@@ -113,10 +113,11 @@ fn log(json: bool, kind: &str, details: &[(&str, Value)]) {
     }
 }
 
-static STOP: AtomicBool = AtomicBool::new(false);
-
+/// One flag for the whole process: the loop below and the catch-up inside
+/// `crate::stream` both observe it, so a stop request during a backfill is honoured
+/// at the next cursor boundary rather than after every remaining file.
 extern "C" fn on_stop_signal(_signal: i32) {
-    STOP.store(true, Ordering::SeqCst);
+    crate::stream::STOP.store(true, Ordering::SeqCst);
 }
 
 /// Ask for a clean stop on SIGINT and SIGTERM instead of the default kill, so
@@ -291,7 +292,7 @@ pub fn stream(rest: &[String]) -> Result<i32> {
         }),
     )?;
 
-    while !STOP.load(Ordering::SeqCst) {
+    while !crate::stream::stopping() {
         let first = match receiver.recv_timeout(TICK) {
             Ok(path) => path,
             Err(RecvTimeoutError::Timeout) => continue,
