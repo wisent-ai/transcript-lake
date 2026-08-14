@@ -21,13 +21,18 @@ Behaviour worth knowing before running it:
   must still parse as JSON or the whole file is refused.
 - `--apply` takes the same exclusive writer lease `stream.lock` that the streamer
   takes for a commit, so a rewrite cannot interleave with an append.
+- Counting comes first and is reported per literal, because a literal fed from a
+  list is not necessarily a secret: a short or common value would rewrite
+  unrelated evidence. A literal found in more than `--max-files` files is refused
+  rather than applied, so a mistake in the list costs a report instead of the
+  archive.
 - The literal never appears in a command line, in output, or in this file: it is
   read from a file or from standard input, and only its length and fingerprint are
   reported.
 
 Usage:
   scrub-known-secret.py --secret-file <path|-> [--data-dir <lake>] [--apply]
-                        [--remove-secret-file]
+                        [--max-files <n>] [--remove-secret-file]
 """
 
 import hashlib
@@ -51,9 +56,13 @@ LEASE_PAUSE_SECONDS = 0.5
 NDJSON_SUFFIXES = (".ndjson", ".jsonl")
 JSON_SUFFIXES = (".json",)
 SKIP_DIR_NAMES = ("stream.lock",)
+# A secret occurs in the conversations that used it. A value present in more files
+# than this is either not a secret or so pervasive that replacing it would destroy
+# evidence, and either way it must be looked at rather than applied.
+MAX_FILES_DEFAULT = len("a" * 1024)
 USAGE = (
     "usage: scrub-known-secret.py --secret-file <path|-> [--data-dir <lake>] "
-    "[--apply] [--remove-secret-file]"
+    "[--apply] [--max-files <n>] [--remove-secret-file]"
 )
 
 
@@ -157,9 +166,29 @@ def structural_check(path, text):
     return broken
 
 
-def scrub_file(path, replacements, apply_changes):
-    """Replace every literal in one file. Returns (lines_changed, occurrences,
-    broken_lines); nothing is written when the rewrite would not parse."""
+def count_file(path, literals):
+    """How many times each literal occurs in one file, and how many lines carry
+    one. Absent literals are omitted, so an empty result means untouched."""
+    text = path.read_text(encoding="utf-8")
+    found = {}
+    for literal in literals:
+        occurrences = text.count(literal)
+        if occurrences:
+            found[literal] = occurrences
+    if not found:
+        return found, ZERO
+    # Lines, not `splitlines`: partition lines are newline-delimited and real
+    # transcript text contains U+2028, which `splitlines` would also split on.
+    lines = sum(
+        1 for line in text.split("\n") if any(literal in line for literal in found)
+    )
+    return found, lines
+
+
+def rewrite_file(path, replacements):
+    """Replace the accepted literals in one file. Returns (lines_changed,
+    occurrences, broken_lines); nothing is written when the rewrite would not
+    parse, so a file is either wholly scrubbed or wholly untouched."""
     original = path.read_text(encoding="utf-8")
     updated = original
     occurrences = ZERO
@@ -174,65 +203,120 @@ def scrub_file(path, replacements, apply_changes):
     broken = structural_check(path, updated)
     if broken:
         return lines_changed, occurrences, broken
-    if apply_changes:
-        # Same directory, so the replacement is atomic on this filesystem, and
-        # the mode is carried over: a reader either sees the whole old file or
-        # the whole new one, never a partially scrubbed line.
-        temp = path.with_name(f"{path.name}.scrub-{os.getpid()}-{uuid.uuid4()}")
-        with open(temp, "w", encoding="utf-8") as handle:
-            handle.write(updated)
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.chmod(temp, os.stat(path).st_mode & 0o7777)
-        os.replace(temp, path)
+    # Same directory, so the replacement is atomic on this filesystem, and the
+    # mode is carried over: a reader either sees the whole old file or the whole
+    # new one, never a partially scrubbed line.
+    temp = path.with_name(f"{path.name}.scrub-{os.getpid()}-{uuid.uuid4()}")
+    with open(temp, "w", encoding="utf-8") as handle:
+        handle.write(updated)
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.chmod(temp, os.stat(path).st_mode & 0o7777)
+    os.replace(temp, path)
     return lines_changed, occurrences, []
+
+
+def lake_files(data_dir):
+    """Every regular file the Lake owns, minus the lease directory."""
+    for path in sorted(data_dir.rglob("*")):
+        if any(part in SKIP_DIR_NAMES for part in path.parts):
+            continue
+        if path.is_file():
+            yield path
+
+
+def option(argv, name, fallback):
+    for index, item in enumerate(argv):
+        if item == name and index + 1 < len(argv):
+            return argv[index + 1]
+    return fallback
 
 
 def main(argv):
     apply_changes = "--apply" in argv
     remove_after = "--remove-secret-file" in argv
-    source = NONE
+    source = option(argv, "--secret-file", NONE)
+    max_files = int(option(argv, "--max-files", MAX_FILES_DEFAULT))
     data_dir = pathlib.Path(
-        os.environ.get("LAKE_DATA") or (pathlib.Path.home() / ".transcript-lake")
-    )
-    for index, item in enumerate(argv):
-        if item == "--secret-file" and index + 1 < len(argv):
-            source = argv[index + 1]
-        if item == "--data-dir" and index + 1 < len(argv):
-            data_dir = pathlib.Path(argv[index + 1]).expanduser()
+        option(
+            argv,
+            "--data-dir",
+            os.environ.get("LAKE_DATA") or str(pathlib.Path.home() / ".transcript-lake"),
+        )
+    ).expanduser()
     if source is NONE:
         raise SystemExit(USAGE)
     if not data_dir.is_dir():
         raise SystemExit(f"no Lake at {data_dir}")
 
     literals = read_literals(source, remove_after)
-    replacements = [(literal, marker(literal)) for literal in literals]
     print(f"lake {data_dir}")
     print(f"mode {'apply' if apply_changes else 'preview (default; pass --apply to write)'}")
-    for literal, replacement in replacements:
-        print(f"literal {fingerprint(literal)} -> {replacement}")
+    print(f"literals {len(literals)}  max files per literal {max_files}")
 
+    # Pass one counts. Nothing is written yet, which is what lets a literal be
+    # refused on its own measurements rather than after the damage.
+    scanned = ZERO
+    unreadable = ZERO
+    hits = {}
+    file_lines_found = {}
+    per_literal_files = {literal: ZERO for literal in literals}
+    per_literal_occurrences = {literal: ZERO for literal in literals}
+    for path in lake_files(data_dir):
+        scanned += 1
+        try:
+            found, lines = count_file(path, literals)
+        except (OSError, UnicodeDecodeError):
+            unreadable += 1
+            continue
+        if not found:
+            continue
+        hits[path] = found
+        file_lines_found[path] = lines
+        for literal, occurrences in found.items():
+            per_literal_files[literal] += 1
+            per_literal_occurrences[literal] += occurrences
+
+    accepted = []
+    over_cap = []
+    for literal in literals:
+        files = per_literal_files[literal]
+        occurrences = per_literal_occurrences[literal]
+        verdict = "absent"
+        if files > max_files:
+            verdict = "REFUSED over cap"
+            over_cap.append(literal)
+        elif files:
+            verdict = "accepted"
+            accepted.append(literal)
+        print(f"literal {fingerprint(literal)} files={files} occurrences={occurrences}"
+              f" -> {marker(literal)} {verdict}")
+
+    replacements = [(literal, marker(literal)) for literal in accepted]
+    targets = [path for path, found in hits.items() if any(item in found for item in accepted)]
+    print(f"files scanned {scanned}")
+    print(f"files skipped as unreadable or binary {unreadable}")
+    print(f"files {'to change' if not apply_changes else 'to rewrite'} {len(targets)}")
+
+    files_changed = ZERO
+    lines_changed = ZERO
+    occurrences = ZERO
+    refused = []
     lease = NONE
-    if apply_changes:
+    if apply_changes and targets:
         lease = acquire_lease(data_dir)
         print(f"lease held {lease[0]}")
     try:
-        scanned = ZERO
-        unreadable = ZERO
-        files_changed = ZERO
-        lines_changed = ZERO
-        occurrences = ZERO
-        refused = []
-        for path in sorted(data_dir.rglob("*")):
-            if not path.is_file() or any(part in SKIP_DIR_NAMES for part in path.parts):
+        for path in targets:
+            if not apply_changes:
+                print(f"  would rewrite {path.relative_to(data_dir)}"
+                      f" lines={file_lines_found[path]}"
+                      f" occurrences={sum(hits[path].get(item, ZERO) for item in accepted)}")
                 continue
-            scanned += 1
             try:
-                file_lines, file_hits, broken = scrub_file(path, replacements, apply_changes)
+                file_lines, file_hits, broken = rewrite_file(path, replacements)
             except (OSError, UnicodeDecodeError):
                 unreadable += 1
-                continue
-            if file_hits == ZERO:
                 continue
             if broken:
                 refused.append((path, broken))
@@ -240,20 +324,24 @@ def main(argv):
             files_changed += 1
             lines_changed += file_lines
             occurrences += file_hits
-            print(f"  {'rewrote' if apply_changes else 'would rewrite'} {path.relative_to(data_dir)}"
+            print(f"  rewrote {path.relative_to(data_dir)}"
                   f" lines={file_lines} occurrences={file_hits}")
     finally:
         if lease is not NONE:
             release_lease(*lease)
     for path, broken in refused:
         print(f"  REFUSED {path.relative_to(data_dir)}: rewrite would not parse at lines {broken}")
-    print(f"files scanned {scanned}")
-    print(f"files skipped as unreadable or binary {unreadable}")
-    print(f"files {'changed' if apply_changes else 'to change'} {files_changed}")
-    print(f"lines {'changed' if apply_changes else 'to change'} {lines_changed}")
-    print(f"occurrences {'replaced' if apply_changes else 'to replace'} {occurrences}")
+    if apply_changes:
+        print(f"files changed {files_changed}")
+        print(f"lines changed {lines_changed}")
+        print(f"occurrences replaced {occurrences}")
+    else:
+        print(f"lines to change {sum(file_lines_found[path] for path in targets)}")
+        print(f"occurrences to replace "
+              f"{sum(sum(hits[path].get(item, ZERO) for item in accepted) for path in targets)}")
+    print(f"literals refused over cap {len(over_cap)}")
     print(f"files refused {len(refused)}")
-    return 1 if refused else 0
+    return 1 if refused or over_cap else 0
 
 
 sys.exit(main(sys.argv[1:]))
