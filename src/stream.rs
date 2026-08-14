@@ -507,7 +507,7 @@ fn checkpoint(
 }
 
 fn total_hits(counts: &crate::redact::MaskCounts) -> u64 {
-    counts.token + counts.entropy + counts.assignment
+    counts.token + counts.entropy + counts.assignment + counts.credential
 }
 
 /// Where closed hook segments are published for pickup.

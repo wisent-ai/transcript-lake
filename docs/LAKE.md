@@ -122,8 +122,20 @@ canonicalizes every event in a source delta.
 - `<class>` is one of `token` (provider-credential-shaped strings: a short
   lowercase prefix of two to seven letters, a dash, then twenty or more
   characters from the letter, digit, underscore, dash alphabet), `entropy`
-  (dense runs of forty or more base-sixty-four-like characters), or
-  `assignment` (an uppercase NAME, an equals sign, then a long value).
+  (dense runs of forty or more base-sixty-four-like characters),
+  `assignment` (an uppercase NAME, an equals sign, then a long value), or
+  `credential` (a value carried by syntax that only ever carries a secret).
+- The first three classes recognise a value that looks like a secret. The
+  `credential` class instead recognises the syntax around it, so an ordinary
+  human password — short, lowercase, a dictionary word — is masked too:
+  `echo "<value>" | sudo -S`, an `expect` script answering a password prompt
+  with `send "<value>\r"`, `--password <value>` and the credential-taking tools
+  that spell it `-p<value>`, a JSON or object key named after a secret
+  (`"login_password": "<value>"`), and a browser form-fill descriptor
+  (`{"type":"password","val":"<value>"}`). Only the value is replaced: the
+  command or key that carried it stays readable, because the shape is evidence
+  and carries nothing private. A value that is a shell variable, a command
+  substitution, or an existing marker is left alone.
 - `<length>` is the original length, so downstream analysis can still reason
   about size without seeing content.
 - `<fingerprint>` is the first eight hex characters of a SHA digest of the
@@ -134,6 +146,17 @@ canonicalizes every event in a source delta.
 - Masking happens after parsing and before any byte reaches a partition or Oko
   projection file, so no unmasked text is written to `LAKE_DATA`.
 - Per-class hit counts are emitted with each successful stream commit.
+- Masking protects new events only. A literal that was committed before its
+  shape was recognised stays in the partitions, so
+  `scripts/scrub-known-secret.py --secret-file <path|-> [--apply]` is the
+  supported way to remove one after the fact: preview by default, the same
+  `[masked:credential:…]` spelling as the masker, the events writer lease held
+  while it rewrites, every changed line re-parsed as JSON before the file is
+  replaced, and no other byte touched. It is idempotent, and the literal is read
+  from a file or standard input so it never reaches a command line.
+- `scripts/check-masker.py` compiles this tree and replays a credential fixture
+  through `rebuild`, twice, which is how masking rules and their idempotency are
+  verified on a host where the sandbox cannot build.
 
 ## Querying with DuckDB
 
