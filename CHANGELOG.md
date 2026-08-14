@@ -34,6 +34,7 @@ All user-visible changes are recorded here. Transcript Lake uses Semantic Versio
 - Oko token telemetry, goals, stats, and transcript rendering now consume normalized Lake rows without discarding provider identity or token usage.
 - Explicit Oko reindex requests return non-zero status instead of presenting degraded work as success.
 - Closed Tama segments now use the same real-time masking and projection path as transcript files, with content-matched acknowledgements and cursor-safe retry.
+- Session files already open when `stream` starts now receive direct vnode watches, so long-lived OMP and Jeden conversations continue reaching their Oko projection without waiting for a restart catch-up.
 
 ### Removed
 

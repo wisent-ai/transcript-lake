@@ -226,6 +226,7 @@ pub fn stream(rest: &[String]) -> Result<i32> {
         ));
     }
     let (sender, receiver) = channel();
+    let source_sender = sender.clone();
     let mut watcher = notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
         if let Ok(event) = event {
             for path in event.paths {
@@ -245,7 +246,7 @@ pub fn stream(rest: &[String]) -> Result<i32> {
             })?;
     }
     install_stop_handlers();
-    crate::live::start(&data_dir)?;
+    crate::live::start(&data_dir, source_sender)?;
     let started_at = now_iso();
     write_stream_state(
         &data_dir,

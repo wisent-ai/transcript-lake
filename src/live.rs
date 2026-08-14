@@ -2,14 +2,15 @@
 //!
 //! The stream command owns this socket. Canonical events are masked before they
 //! reach this module; clients never receive vendor transcript bytes.
-use std::collections::{BTreeMap, BTreeSet};
-use std::fs;
+use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::fs::{self, File};
 use std::io::Write;
+use std::os::fd::{AsRawFd, RawFd};
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::mpsc::{sync_channel, SyncSender};
+use std::sync::mpsc::{sync_channel, Sender, SyncSender};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::thread;
 
@@ -42,12 +43,24 @@ struct Hub {
     data_dir: PathBuf,
     state: Mutex<HubState>,
     presence_queue: i32,
+    source_sender: Sender<PathBuf>,
+}
+
+#[derive(Default)]
+struct ProcessSources {
+    hashes: BTreeSet<String>,
+    paths: BTreeSet<PathBuf>,
+}
+
+struct SourceWatch {
+    _file: File,
+    path: PathBuf,
 }
 
 /// Start the process-local Unix socket before source catch-up begins. A client
 /// can therefore obtain presence immediately even while historical cursor gaps
 /// are still being closed.
-pub fn start(data_dir: &Path) -> Result<()> {
+pub fn start(data_dir: &Path, source_sender: Sender<PathBuf>) -> Result<()> {
     if HUB.get().is_some() {
         return Ok(());
     }
@@ -58,8 +71,12 @@ pub fn start(data_dir: &Path) -> Result<()> {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
         Err(error) => return Err(error.into()),
     }
-    let listener = UnixListener::bind(&socket_path)
-        .map_err(|error| Error(format!("live stream could not bind {}: {error}", socket_path.display())))?;
+    let listener = UnixListener::bind(&socket_path).map_err(|error| {
+        Error(format!(
+            "live stream could not bind {}: {error}",
+            socket_path.display()
+        ))
+    })?;
     fs::set_permissions(&socket_path, fs::Permissions::from_mode(0o600))?;
 
     let presence_queue = unsafe { libc::kqueue() };
@@ -73,6 +90,7 @@ pub fn start(data_dir: &Path) -> Result<()> {
     let durable = read_state(data_dir);
     let hub = Arc::new(Hub {
         data_dir: data_dir.to_path_buf(),
+        source_sender,
         presence_queue,
         state: Mutex::new(HubState {
             durable,
@@ -113,7 +131,10 @@ pub fn publish_events(data_dir: &Path, events: &[Value]) {
 
 impl Hub {
     fn publish(&self, events: Vec<Value>, active: Option<BTreeSet<String>>) {
-        let mut state = self.state.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         if let Some(active) = active {
             if active == state.durable.active_source_hashes {
                 return;
@@ -126,13 +147,18 @@ impl Hub {
             return;
         }
         let line = envelope("delta", &state.durable, events);
-        state.subscribers.retain(|subscriber| subscriber.try_send(line.clone()).is_ok());
+        state
+            .subscribers
+            .retain(|subscriber| subscriber.try_send(line.clone()).is_ok());
     }
 
     fn subscribe(&self, stream: UnixStream) {
         let (sender, receiver) = sync_channel::<String>(SUBSCRIBER_BUFFER);
         {
-            let mut state = self.state.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            let mut state = self
+                .state
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             let snapshot = envelope("snapshot", &state.durable, Vec::new());
             if sender.try_send(snapshot).is_err() {
                 return;
@@ -173,65 +199,148 @@ fn accept_loop(listener: UnixListener, hub: Arc<Hub>) {
 }
 
 fn presence_loop(hub: Arc<Hub>) {
+    let mut source_watches = HashMap::<RawFd, SourceWatch>::new();
     loop {
         let processes = active_sources_by_process();
         let active = processes
             .values()
-            .flat_map(|hashes| hashes.iter().cloned())
+            .flat_map(|sources| sources.hashes.iter().cloned())
             .collect();
+        let active_paths = processes
+            .values()
+            .flat_map(|sources| sources.paths.iter().cloned())
+            .collect();
+        reconcile_source_watches(hub.presence_queue, &mut source_watches, &active_paths);
         hub.publish(Vec::new(), Some(active));
         for pid in processes.keys() {
             watch_process_exit(hub.presence_queue, *pid);
         }
 
-        let mut event = unsafe { std::mem::zeroed::<libc::kevent>() };
-        let count = unsafe {
-            libc::kevent(
-                hub.presence_queue,
-                std::ptr::null(),
-                0,
-                &mut event,
-                1,
-                std::ptr::null(),
-            )
-        };
-        if count < 0 {
-            crate::stream::warn(&format!(
-                "presence wait: {}",
-                std::io::Error::last_os_error()
-            ));
-            thread::yield_now();
+        loop {
+            let mut event = unsafe { std::mem::zeroed::<libc::kevent>() };
+            let count = unsafe {
+                libc::kevent(
+                    hub.presence_queue,
+                    std::ptr::null(),
+                    0,
+                    &mut event,
+                    1,
+                    std::ptr::null(),
+                )
+            };
+            if count < 0 {
+                crate::stream::warn(&format!(
+                    "presence wait: {}",
+                    std::io::Error::last_os_error()
+                ));
+                thread::yield_now();
+                continue;
+            }
+            if count == 0 {
+                continue;
+            }
+            if event.filter != libc::EVFILT_VNODE {
+                break;
+            }
+            let fd = event.ident as RawFd;
+            if let Some(source) = source_watches.get(&fd) {
+                let _ = hub.source_sender.send(source.path.clone());
+            }
+            let terminal = libc::NOTE_DELETE | libc::NOTE_RENAME | libc::NOTE_REVOKE;
+            if event.fflags & terminal != 0 {
+                source_watches.remove(&fd);
+                break;
+            }
         }
     }
 }
 
-fn active_sources_by_process() -> BTreeMap<i32, BTreeSet<String>> {
+fn active_sources_by_process() -> BTreeMap<i32, ProcessSources> {
     let output = Command::new("/usr/sbin/lsof")
         .args(["-F", "pn", "-c", "omp", "-c", "jeden"])
         .output();
-    let Ok(output) = output else { return BTreeMap::new() };
+    let Ok(output) = output else {
+        return BTreeMap::new();
+    };
     let text = String::from_utf8_lossy(&output.stdout);
-    let mut processes = BTreeMap::<i32, BTreeSet<String>>::new();
+    let mut processes = BTreeMap::<i32, ProcessSources>::new();
     let mut pid = None;
     for line in text.lines() {
         if let Some(raw) = line.strip_prefix('p') {
             pid = raw.parse().ok();
             continue;
         }
-        let Some(path) = line.strip_prefix('n') else { continue };
-        let is_session = path.contains("/.omp/agent/sessions/")
-            || path.contains("/.jeden/sessions/");
+        let Some(path) = line.strip_prefix('n') else {
+            continue;
+        };
+        let is_session =
+            path.contains("/.omp/agent/sessions/") || path.contains("/.jeden/sessions/");
         if !is_session || !path.ends_with(".jsonl") {
             continue;
         }
         let Some(pid) = pid else { continue };
-        let Some(stem) = Path::new(path).file_stem() else { continue };
-        processes.entry(pid).or_default().insert(format!(
-            "{:x}",
-            Sha256::digest(stem.to_string_lossy().as_bytes())
-        ));
+        let path = PathBuf::from(path);
+        let Some(stem) = path.file_stem() else {
+            continue;
+        };
+        let hash = format!("{:x}", Sha256::digest(stem.to_string_lossy().as_bytes()));
+        let sources = processes.entry(pid).or_default();
+        sources.paths.insert(path);
+        sources.hashes.insert(hash);
     }
     processes
+}
+
+fn reconcile_source_watches(
+    queue: RawFd,
+    watches: &mut HashMap<RawFd, SourceWatch>,
+    active: &BTreeSet<PathBuf>,
+) {
+    let stale = watches
+        .iter()
+        .filter_map(|(fd, source)| (!active.contains(&source.path)).then_some(*fd))
+        .collect::<Vec<RawFd>>();
+    for fd in stale {
+        let change = kernel_event(fd as usize, libc::EVFILT_VNODE, libc::EV_DELETE as u16, 0);
+        unsafe {
+            libc::kevent(queue, &change, 1, std::ptr::null_mut(), 0, std::ptr::null());
+        }
+        watches.remove(&fd);
+    }
+
+    let watched = watches
+        .values()
+        .map(|source| source.path.clone())
+        .collect::<BTreeSet<PathBuf>>();
+    for path in active.difference(&watched) {
+        let Ok(file) = File::open(path) else { continue };
+        let fd = file.as_raw_fd();
+        let flags = (libc::EV_ADD | libc::EV_ENABLE | libc::EV_CLEAR) as u16;
+        let notes = libc::NOTE_WRITE
+            | libc::NOTE_EXTEND
+            | libc::NOTE_ATTRIB
+            | libc::NOTE_RENAME
+            | libc::NOTE_DELETE
+            | libc::NOTE_REVOKE;
+        let change = kernel_event(fd as usize, libc::EVFILT_VNODE, flags, notes);
+        let result =
+            unsafe { libc::kevent(queue, &change, 1, std::ptr::null_mut(), 0, std::ptr::null()) };
+        if result < 0 {
+            crate::stream::warn(&format!(
+                "source watch {}: {}",
+                path.display(),
+                std::io::Error::last_os_error()
+            ));
+            continue;
+        }
+        watches.insert(
+            fd,
+            SourceWatch {
+                _file: file,
+                path: path.clone(),
+            },
+        );
+    }
 }
 
 fn register_presence_wake(queue: i32) -> Result<()> {
@@ -241,16 +350,8 @@ fn register_presence_wake(queue: i32) -> Result<()> {
         (libc::EV_ADD | libc::EV_CLEAR) as u16,
         0,
     );
-    let result = unsafe {
-        libc::kevent(
-            queue,
-            &change,
-            1,
-            std::ptr::null_mut(),
-            0,
-            std::ptr::null(),
-        )
-    };
+    let result =
+        unsafe { libc::kevent(queue, &change, 1, std::ptr::null_mut(), 0, std::ptr::null()) };
     if result < 0 {
         return Err(Error(format!(
             "presence stream could not register wake event: {}",
@@ -263,14 +364,7 @@ fn register_presence_wake(queue: i32) -> Result<()> {
 fn wake_presence(queue: i32) {
     let change = kernel_event(PRESENCE_WAKE, libc::EVFILT_USER, 0, libc::NOTE_TRIGGER);
     unsafe {
-        libc::kevent(
-            queue,
-            &change,
-            1,
-            std::ptr::null_mut(),
-            0,
-            std::ptr::null(),
-        );
+        libc::kevent(queue, &change, 1, std::ptr::null_mut(), 0, std::ptr::null());
     }
 }
 
@@ -282,14 +376,7 @@ fn watch_process_exit(queue: i32, pid: i32) {
         libc::NOTE_EXIT,
     );
     unsafe {
-        libc::kevent(
-            queue,
-            &change,
-            1,
-            std::ptr::null_mut(),
-            0,
-            std::ptr::null(),
-        );
+        libc::kevent(queue, &change, 1, std::ptr::null_mut(), 0, std::ptr::null());
     }
 }
 
