@@ -1,8 +1,12 @@
 //! Adapter for Oh My Pi (omp) agent session transcripts.
 //!
-//! Source layout: `HOME/.omp/agent/sessions/<encoded-cwd>/<stamp>_<uuid>.jsonl`;
-//! a sibling directory with the same stem holds non-transcript artifacts and
-//! is skipped. Typed lines verified on real files from this machine:
+//! Source layout: `HOME/.omp/agent/sessions/<encoded-cwd>/<stamp>_<uuid>.jsonl`
+//! for the top-level conversation, plus `<stamp>_<uuid>/<AgentName>.jsonl` for
+//! every subagent that conversation delegated to, nested one level deeper again
+//! when a subagent delegates (`<Agent>/<Agent>.<Child>.jsonl`). The session
+//! directory also holds non-transcript artifacts (`*.bash.log`, `*.md`,
+//! `local/`, `url-search/`, `*.jsonl.tombstone`); only `.jsonl` files are
+//! transcripts. Typed lines verified on real files from this machine:
 //!   session (id, cwd, version), title / title_change (title, updatedAt),
 //!   model_change (model), thinking_level_change (thinkingLevel),
 //!   message (`{ id, parentId, timestamp, message: { role, content } }`) with
@@ -23,6 +27,10 @@ use crate::types::{Adapter, Parser, ParserCtx, RawEvent, SessionEntry};
 const TEXT_CAP: usize = 65536;
 const PENDING_CAP: usize = 64;
 const JSONL_EXT: &str = ".jsonl";
+/// Directory levels a walk may descend inside one session directory. Subagent
+/// nesting is real, but a tree this deep is a symlink loop rather than a
+/// conversation.
+const NESTED_DEPTH_MAX: usize = 8;
 
 pub struct Omp;
 
@@ -49,33 +57,44 @@ impl Adapter for Omp {
         };
         let mut sessions = Vec::new();
         for (name, file_type) in entries {
-            if !file_type.is_file() {
-                continue;
-            }
-            if let Some(session) = session_entry(root, &name) {
-                sessions.push(session);
+            if file_type.is_file() {
+                if let Some(session) = session_entry(root, &name) {
+                    sessions.push(session);
+                }
+            } else if file_type.is_dir() {
+                // A session directory carries that conversation's subagent
+                // transcripts beside its artifacts. Skipping the directory
+                // wholesale omitted every subagent conversation from the archive
+                // while the top-level session looked complete.
+                collect_nested(&root.join(&name), root, NESTED_DEPTH_MAX, &mut sessions);
             }
         }
         sessions
     }
 
     fn entry_for(&self, path: &Path) -> Option<SessionEntry> {
-        let name = path.file_name()?.to_string_lossy();
-        let root = path.parent()?;
         let home = crate::util::home_dir();
-        // Every omp root is itself an encoded-cwd directory, so a transcript sits
-        // directly in one; anything nested deeper was never listed.
-        if !self
+        let root = self
             .roots(&home)
-            .iter()
-            .any(|known| known.as_path() == root)
-        {
-            return None;
-        }
+            .into_iter()
+            .find(|known| path.starts_with(known))?;
         if !dirent_type(path)?.is_file() {
             return None;
         }
-        session_entry(root, &name)
+        let relative = path.strip_prefix(&root).ok()?;
+        // Directory levels between the root and this file: zero for the session
+        // transcript itself, one for a subagent, more for nested delegation. The
+        // same bound as the scan, so a notification can never introduce a file
+        // the scan would not list.
+        let levels = relative.components().count() - 1;
+        if levels == 0 {
+            let name = path.file_name()?.to_string_lossy();
+            return session_entry(&root, &name);
+        }
+        if levels > NESTED_DEPTH_MAX {
+            return None;
+        }
+        nested_entry(&root, path)
     }
 
     fn parser(&self, ctx: ParserCtx) -> Box<dyn Parser> {
@@ -127,6 +146,50 @@ fn session_entry(root: &Path, name: &str) -> Option<SessionEntry> {
     Some(SessionEntry {
         file: root.join(name),
         session_id: Some(session_id.to_string()),
+        project: None,
+    })
+}
+
+/// Every `.jsonl` transcript inside one session directory, in byte order per
+/// level, so the walk order stays observable the way `read_dirents` promises.
+/// Non-transcript artifacts differ by extension (`.log`, `.md`, `.txt`,
+/// `.jsonl.tombstone`), so the extension alone separates them.
+fn collect_nested(dir: &Path, root: &Path, levels: usize, out: &mut Vec<SessionEntry>) {
+    let Some(entries) = read_dirents(dir) else {
+        return;
+    };
+    for (name, file_type) in entries {
+        let path = dir.join(&name);
+        if file_type.is_file() {
+            if let Some(entry) = nested_entry(root, &path) {
+                out.push(entry);
+            }
+        } else if file_type.is_dir() && levels > 1 {
+            collect_nested(&path, root, levels - 1, out);
+        }
+    }
+}
+
+/// The entry for a subagent transcript. The identifier is a fallback only: every
+/// omp transcript opens with a `session` record and the parser prefers that id,
+/// so this exists to keep two agent files apart if one ever lacks it — the bare
+/// agent name would collide across conversations, `<uuid>.<Agent>` cannot.
+fn nested_entry(root: &Path, file: &Path) -> Option<SessionEntry> {
+    let relative = file.strip_prefix(root).ok()?;
+    let mut parts: Vec<String> = relative
+        .components()
+        .map(|part| part.as_os_str().to_string_lossy().to_string())
+        .collect();
+    let name = parts.pop()?;
+    let stem = name.strip_suffix(JSONL_EXT)?;
+    let session_dir = parts.first()?;
+    let owner = match session_dir.find('_') {
+        Some(at) => &session_dir[at + 1..],
+        None => session_dir.as_str(),
+    };
+    Some(SessionEntry {
+        file: file.to_path_buf(),
+        session_id: Some(format!("{owner}.{stem}")),
         project: None,
     })
 }

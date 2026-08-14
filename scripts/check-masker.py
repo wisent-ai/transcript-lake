@@ -182,6 +182,116 @@ def replay(binary, tag, texts):
     return masked
 
 
+def omp_records(session_uuid, turns):
+    """A minimal omp transcript: the title and session records every real file
+    opens with, then one user turn per text."""
+    records = [
+        {"type": "title", "v": 1, "title": "", "updatedAt": "2026-08-14T12:00:00.000Z"},
+        {
+            "type": "session",
+            "version": 3,
+            "id": session_uuid,
+            "timestamp": "2026-08-14T12:00:00.000Z",
+            "cwd": "/Users/fixture/project",
+        },
+    ]
+    for index, text in enumerate(turns):
+        records.append(
+            {
+                "type": "message",
+                "id": f"m{index}",
+                "parentId": None,
+                "timestamp": f"2026-08-14T12:{index + 1:02d}:00.000Z",
+                "message": {"role": "user", "content": [{"type": "text", "text": text}]},
+            }
+        )
+    return "\n".join(json.dumps(record) for record in records) + "\n"
+
+
+def replay_omp(binary):
+    """A conversation that delegated: the session transcript, one subagent
+    transcript beside it, one nested subagent below that, and the artifacts a
+    real session directory carries. Returns the failure count.
+
+    The subagent files are the point: they were discovered by nothing before, so
+    every delegated conversation was missing from the archive."""
+    root = SCRATCH / "omp"
+    if root.exists():
+        shutil.rmtree(root)
+    sessions = root / "home" / ".omp" / "agent" / "sessions" / "-Users-fixture-project"
+    stamp = "2026-08-14T12-00-00-000Z_019fca5a-7e44-7000-91f2-e84076f6e07e"
+    directory = sessions / stamp
+    (directory / "ChildAgent").mkdir(parents=True)
+    (sessions / f"{stamp}.jsonl").write_text(
+        omp_records("019fca5a-7e44-7000-91f2-e84076f6e07e", ["top-level turn"]),
+        encoding="utf-8",
+    )
+    (directory / "LakeAgent.jsonl").write_text(
+        omp_records(
+            "01a001d5-58dc-7000-b4c2-b44723e418d8",
+            [f'ssh host \'echo "{SECRET}" | sudo -S true\''],
+        ),
+        encoding="utf-8",
+    )
+    (directory / "ChildAgent" / "LakeAgent.ChildAgent.jsonl").write_text(
+        omp_records("01a001d5-9999-7000-b4c2-b44723e418d8", ["nested delegated turn"]),
+        encoding="utf-8",
+    )
+    # Artifacts that share the directory and must stay out of the archive.
+    (directory / "17.bash-original.log").write_text("not a transcript\n", encoding="utf-8")
+    (directory / "LakeAgent.md").write_text("# report\n", encoding="utf-8")
+    (directory / "Retired.jsonl.tombstone").write_text("{}\n", encoding="utf-8")
+
+    current = root / "current"
+    current.mkdir(parents=True, exist_ok=True)
+    target = root / "replayed"
+    proc = subprocess.run(
+        [str(binary), "rebuild", "--to", str(target), "--source", "omp"],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=TIMEOUT,
+        env={
+            **os.environ,
+            "HOME": str(root / "home"),
+            "LAKE_DATA": str(current),
+            "PATH": "/usr/bin:/bin",
+        },
+    )
+    if proc.returncode != ZERO:
+        print(proc.stdout.strip()[: len("a" * 400)])
+        print(proc.stderr.strip()[: len("a" * 400)])
+        raise SystemExit(f"omp replay exit {proc.returncode}")
+    summary = json.loads(proc.stdout)
+    print(f"replay omp: {json.dumps(summary, sort_keys=True)[: len('a' * 300)]}")
+    rows = []
+    for part in sorted((target / "events").rglob("part-*.ndjson")):
+        for line in part.read_text(encoding="utf-8").splitlines():
+            if line.strip():
+                rows.append(json.loads(line))
+    sessions_seen = sorted({row["session_id"] for row in rows})
+    texts = " ".join(row["text"] for row in rows)
+    marker = f"[masked:credential:{len(SECRET)}:"
+    checks = [
+        ("three transcripts ingested", summary["perRuntime"]["omp"]["files"] == len("aaa")),
+        ("subagent session present", "01a001d5-58dc-7000-b4c2-b44723e418d8" in sessions_seen),
+        ("nested subagent session present", "01a001d5-9999-7000-b4c2-b44723e418d8" in sessions_seen),
+        ("top-level session still present", "019fca5a-7e44-7000-91f2-e84076f6e07e" in sessions_seen),
+        ("subagent credential masked", marker in texts),
+        ("subagent secret gone", SECRET not in texts),
+        ("artifacts ingested as nothing", "not a transcript" not in texts and "# report" not in texts),
+    ]
+    failures = ZERO
+    for label, good in checks:
+        print(f"{'PASS' if good else 'FAIL'} omp:{label}")
+        failures += not good
+    print(f"  omp sessions in the replayed Lake: {sessions_seen}")
+    for row in rows:
+        if marker in row["text"]:
+            print("  masked | " + row["text"].replace("\n", "\\n")[: len("a" * 250)])
+    return failures
+
+
 def check_expectations(label, masked):
     """Compare one replay's output against every case, and count the failures."""
     failures = ZERO
@@ -219,6 +329,10 @@ def main():
         same = once == twice
         print(f"{'PASS' if same else 'FAIL'} idempotent:{label}")
         failures += not same
+
+    # Delegated conversations are transcripts too: the same fixture proves they
+    # are discovered and that the credential class applies to them.
+    failures += replay_omp(binary)
 
     # The rules only protect the archive once the process that writes the archive
     # carries them, so the deployed artifact is replayed against the same fixture.

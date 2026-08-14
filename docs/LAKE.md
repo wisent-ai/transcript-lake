@@ -61,10 +61,16 @@ Source formats, as verified on this machine:
   Envelope lines `{timestamp, type, payload}` covering session metadata,
   turn context, user and agent messages, usage counts, and response items
   (message, reasoning, custom tool call, custom tool call output).
-- **omp** — `~/.omp/agent/sessions/<encoded-cwd>/<stamp>_<id>.jsonl`. Typed
-  lines: session header, message (role plus content blocks with text and tool
-  parts), compaction, custom message, model change. Non-JSONL artifacts in
-  the same tree are skipped.
+- **omp** — `~/.omp/agent/sessions/<encoded-cwd>/<stamp>_<id>.jsonl` for the
+  top-level conversation, and `<stamp>_<id>/<AgentName>.jsonl` for every
+  subagent it delegated to, nested one level deeper again when a subagent
+  delegates (`<Agent>/<Agent>.<Child>.jsonl`). Each of those files opens with its
+  own `session` record, so a delegated conversation becomes its own session in
+  the Lake, keyed by its own identifier and cwd. Typed lines: session header,
+  message (role plus content blocks with text and tool parts), compaction,
+  custom message, model change. The session directory also holds artifacts —
+  `*.bash.log`, `*.md`, `local/`, `url-search/`, `*.jsonl.tombstone` — and only
+  `.jsonl` files are read.
 - **droid** — `~/.factory/sessions/<encoded-cwd>/<uuid>.jsonl` with
   `<uuid>.settings.json` sidecars. The first line is the session start
   record; sidecars contribute meta events only.
