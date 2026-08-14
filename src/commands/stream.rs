@@ -245,6 +245,7 @@ pub fn stream(rest: &[String]) -> Result<i32> {
             })?;
     }
     install_stop_handlers();
+    crate::live::start(&data_dir)?;
     let started_at = now_iso();
     write_stream_state(
         &data_dir,

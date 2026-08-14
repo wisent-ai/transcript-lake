@@ -293,6 +293,33 @@ fn export_line(event: &Value, runtime: &str, fingerprint: &str) -> Value {
     );
     Value::Object(row)
 }
+/// The Oko-compatible row sent to live consumers, plus the canonical export
+/// path a reconnect uses for a full snapshot.
+pub(crate) fn live_row(data_dir: &Path, event: &Value) -> Option<Value> {
+    if !accepted(event) {
+        return None;
+    }
+    let runtime = row_runtime(event, "");
+    let session_id = event.get("session_id")?.as_str()?;
+    let session_hash = hash_text(&session_key(&runtime, session_id));
+    let event_id = fingerprint(event, &runtime);
+    let mut row = export_line(event, &runtime, &event_id);
+    if let Value::Object(fields) = &mut row {
+        fields.insert(
+            "session_file".to_string(),
+            Value::String(
+                session_file(
+                    &data_dir.join("exports").join("oko"),
+                    &runtime,
+                    &session_hash,
+                )
+                .to_string_lossy()
+                .to_string(),
+            ),
+        );
+    }
+    Some(row)
+}
 
 fn atomic_write(file: &Path, content: &str) -> Result<()> {
     if let Some(parent) = file.parent() {
@@ -766,15 +793,15 @@ fn merge_incremental_session(
 /// The real-time stream calls this before advancing a source cursor, so Oko
 /// never waits for a second partition scan. Recovery export remains available
 /// to reconstruct the projection from authoritative Lake partitions.
-pub(crate) fn project_events(data_dir: &Path, events: Vec<Value>) -> Result<()> {
+pub(crate) fn project_events(data_dir: &Path, events: &[Value]) -> Result<()> {
     let output_root = data_dir.join("exports").join("oko");
     let mut sessions: Vec<IncrementalSession> = Vec::new();
     let mut index: HashMap<String, usize> = HashMap::new();
     for event in events {
-        if !accepted(&event) {
+        if !accepted(event) {
             continue;
         }
-        let runtime = row_runtime(&event, "");
+        let runtime = row_runtime(event, "");
         if runtime.is_empty() || runtime == crate::types::HOOKS {
             continue;
         }
@@ -792,10 +819,10 @@ pub(crate) fn project_events(data_dir: &Path, events: Vec<Value>) -> Result<()> 
                 sessions.len() - 1
             }
         };
-        let event_id = fingerprint(&event, &runtime);
+        let event_id = fingerprint(event, &runtime);
         sessions[slot]
             .rows
-            .push(export_line(&event, &runtime, &event_id));
+            .push(export_line(event, &runtime, &event_id));
     }
     for session in &sessions {
         merge_incremental_session(session, &output_root)?;

@@ -8,6 +8,7 @@ mod duck;
 mod hook_segments;
 mod labels;
 mod oko_export;
+mod live;
 mod paths;
 mod redact;
 mod stream;

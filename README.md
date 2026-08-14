@@ -84,13 +84,24 @@ flowchart LR
     B --> C[Runtime adapter]
     C --> D[Masking boundary]
     D --> E[Canonical NDJSON partition]
-    D --> G[Per-session Oko projection]
-    E --> F[Durable source cursor]
+    E --> G[Per-session Oko projection]
+    G --> I[Local snapshot and delta stream]
+    I --> F[Durable source cursor]
+    P[Runtime source ownership] --> I
 ```
 
-Raw vendor text exists only on the source side of the masking boundary. A filesystem notification carries the changed path directly to its adapter; the stream resumes at that file's newline-aligned cursor, masks `text` and every string in `extra`, appends canonical events, updates affected Oko session files, and only then advances the cursor.
+Raw vendor text exists only on the source side of the masking boundary. A filesystem notification carries the changed path directly to its adapter; the stream resumes at that file's newline-aligned cursor, masks `text` and every string in `extra`, appends canonical events, updates affected Oko session files, publishes the committed masked rows locally, and only then advances the cursor.
 
-`LAKE_DATA/cursors.json` is the durable resume state. Daily NDJSON partitions are authoritative Lake evidence; Parquet and Oko files are rebuildable projections. Cursor and projection metadata use atomic replacement, and transcript partitions are append-only.
+`LAKE_DATA/cursors.json` is the durable source resume state. Daily NDJSON partitions are authoritative Lake evidence; Parquet and Oko files are rebuildable projections. Cursor and projection metadata use atomic replacement, and transcript partitions are append-only.
+
+The same `stream` process owns `LAKE_DATA/live.sock` with mode `0600`. Each
+newline-delimited subscriber receives exactly one `snapshot`, followed by
+ordered `delta` envelopes. Both carry `revision`, `activeSourceHashes`, and
+`events`; revisions and presence survive restart in `live-state.json`.
+Event deltas use the masked `oko-import-v1` fields plus `session_file`, the
+projection path used for full reconnect recovery. A bounded subscriber that
+cannot keep up is disconnected rather than delaying canonical ingestion; its
+next connection starts from a fresh snapshot.
 
 See [the core workflow contract](docs/CORE.md) and [the data and architecture contract](docs/LAKE.md) for state transitions, schemas, masking behavior, paths, and recovery semantics.
 
@@ -127,7 +138,7 @@ Start the foreground stream:
 transcript-lake --data-dir "$HOME/.transcript-lake" stream
 ```
 
-The process reacts to source writes immediately; it has no polling interval, quiet-period timer, full-root refresh, or child command. Each successful source delta writes its canonical partition and affected Oko sessions before committing the byte cursor.
+The process reacts to source writes immediately; it has no quiet-period timer, full-root refresh, or projection polling loop. Each successful source delta writes its canonical partition and affected Oko sessions, publishes the local live delta, and only then commits the byte cursor.
 
 For an always-on local installation, `scripts/install-stream-service.sh` installs the release binary and a KeepAlive LaunchAgent. Vendor transcripts remain read-only, and `clean` still previews removal of rebuildable artifacts only.
 

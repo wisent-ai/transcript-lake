@@ -249,7 +249,8 @@ impl Writer {
                 .open(dir.join(part_name))?;
             file.write_all(payload.as_bytes())?;
         }
-        crate::oko_export::project_events(&self.data_dir, projections)?;
+        crate::oko_export::project_events(&self.data_dir, &projections)?;
+        crate::live::publish_events(&self.data_dir, &projections);
         Ok(())
     }
 }
