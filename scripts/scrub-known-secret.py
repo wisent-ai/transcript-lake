@@ -45,6 +45,7 @@ import json
 import os
 import pathlib
 import re
+import subprocess
 import sys
 import time
 import uuid
@@ -52,11 +53,17 @@ import uuid
 NONE = None
 ZERO = len("")
 FP_LEN = len("a" * 8)
-# The streamer publishes a commit in well under a second, so a lease it holds
-# right now is gone within a handful of retries; a lease still held after this
-# many attempts belongs to a long operation and must not be stolen.
-LEASE_ATTEMPTS = len("a" * 20)
+# How long to wait for the writer lease before giving up. Ten seconds was
+# enough while the only other writer was a streamer publishing a commit per
+# batch; it is not enough during a backfill, where `catch_up` holds the lease
+# for as long as the walk takes and a scheduled scrub would then do nothing,
+# every hour, for the whole backfill. Waiting is correct and stealing is not:
+# a rewrite and a commit must never touch one partition at once. The default
+# sits under the scrub unit's hourly interval so at most one run waits at a
+# time.
+LEASE_WAIT_SECONDS = float(os.environ.get("SCRUB_LEASE_WAIT_SECONDS", 50 * 60))
 LEASE_PAUSE_SECONDS = 0.5
+LEASE_ATTEMPTS = max(len("a" * 20), int(LEASE_WAIT_SECONDS / LEASE_PAUSE_SECONDS))
 # Per-line JSON for the append-only stores, one JSON document for the rest. A
 # suffix that is neither is rewritten without a structural claim.
 NDJSON_SUFFIXES = (".ndjson", ".jsonl")
@@ -105,6 +112,29 @@ def process_identity(pid):
     return text or NONE
 
 
+
+def owner_is_alive(owner):
+    """Whether the claim's process still exists, by the same identity the Lake
+    records: pid plus its start time, so a recycled pid is not mistaken for the
+    original holder. A claim whose process is gone is abandoned, not held, and
+    leaving it in place would stop every future run -- which is exactly what a
+    streamer stopped mid-backfill leaves behind."""
+    if not isinstance(owner, dict):
+        return False
+    pid = owner.get("pid")
+    if not isinstance(pid, int):
+        return True
+    try:
+        os.kill(pid, ZERO)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    recorded = owner.get("started")
+    running = process_identity(pid)
+    return recorded is NONE or running is NONE or recorded == running
+
+
 def acquire_lease(data_dir):
     """The Lake's own exclusive writer lease: build the claim privately, publish
     it with one rename. Deliberately never steals a live claim -- stealing it
@@ -129,6 +159,24 @@ def acquire_lease(data_dir):
             for leftover in prepared.iterdir():
                 leftover.unlink()
             prepared.rmdir()
+            # A claim whose process no longer exists is abandoned, not held:
+            # the Lake's own Rust acquirer removes it, and this must agree, or a
+            # streamer stopped mid-backfill would lock every later scrub out
+            # forever. A live claim is always waited for, never taken.
+            incumbent = NONE
+            try:
+                incumbent = json.loads((lock_path / "owner.json").read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                incumbent = NONE
+            if lock_path.exists() and not owner_is_alive(incumbent):
+                try:
+                    for leftover in lock_path.iterdir():
+                        leftover.unlink()
+                    lock_path.rmdir()
+                    print(f"cleared abandoned lease {json.dumps(incumbent)}")
+                    continue
+                except OSError:
+                    pass
             time.sleep(LEASE_PAUSE_SECONDS)
     held = NONE
     try:
@@ -245,6 +293,48 @@ def lake_files(data_dir, since):
         yield path
 
 
+def candidate_files(data_dir, literals, since):
+    """The subset of Lake files that could contain any literal.
+
+    A vault-sourced run carries hundreds of literals, and Python's `re` walks a
+    seven-gigabyte archive against a several-hundred-branch alternation at a
+    pace measured in hours -- a standing hourly repair that never finishes is
+    not a repair. `grep -F` does the same search with a C multi-pattern matcher
+    in minutes, so it decides WHICH files to open and the Python pass, which is
+    the part that must be exact and idempotent, then runs over those alone.
+
+    Falls back to every file when grep is unavailable or reports an error other
+    than "no matches", because a fast path that silently narrows the sweep would
+    be worse than a slow one.
+    """
+    everything = list(lake_files(data_dir, since))
+    if not literals:
+        return everything
+    patterns = "\n".join(literals)
+    try:
+        found = subprocess.run(
+            # -I skips binary files and -s swallows unreadable ones: without
+            # them a single odd file turns the whole prefilter into exit 2, the
+            # fallback engages, and the run silently becomes the hour-long walk
+            # this exists to avoid.
+            ["/usr/bin/grep", "-F", "-l", "-r", "-I", "-s", "-f", "-", str(data_dir)],
+            input=patterns,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except OSError as error:
+        print(f"prefilter unavailable ({error}); scanning every file")
+        return everything
+    if found.returncode not in (ZERO, len("a")):
+        detail = (found.stderr or "").strip().splitlines()[-1:] or ["no detail"]
+        print(f"prefilter refused (exit {found.returncode}: {detail[0][:120]}); scanning every file")
+        return everything
+    named = {pathlib.Path(line) for line in found.stdout.splitlines() if line.strip()}
+    print(f"prefilter kept {len(named)} of {len(everything)} files")
+    return [path for path in everything if path in named]
+
+
 def option(argv, name, fallback):
     for index, item in enumerate(argv):
         if item == name and index + 1 < len(argv):
@@ -303,7 +393,7 @@ def scrub(data_dir, literals, apply_changes, max_files, since):
     per_literal_files = {literal: ZERO for literal in literals}
     per_literal_occurrences = {literal: ZERO for literal in literals}
     pattern = scanner(literals)
-    for path in lake_files(data_dir, since):
+    for path in candidate_files(data_dir, literals, since):
         scanned += 1
         try:
             found, lines = count_file(path, pattern)
