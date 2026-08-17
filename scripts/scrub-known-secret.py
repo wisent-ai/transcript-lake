@@ -63,6 +63,12 @@ FP_LEN = len("a" * 8)
 # time.
 LEASE_WAIT_SECONDS = float(os.environ.get("SCRUB_LEASE_WAIT_SECONDS", 50 * 60))
 LEASE_PAUSE_SECONDS = 0.5
+# How many literals go into one `grep -F` pass, and how long one pass may take.
+# Small batches keep grep on its fast path; the timeout means a pathological
+# pattern set degrades to the slow Python walk instead of holding the writer
+# lease for hours.
+PREFILTER_CHUNK = len("a" * 24)
+PREFILTER_TIMEOUT = 600
 LEASE_ATTEMPTS = max(len("a" * 20), int(LEASE_WAIT_SECONDS / LEASE_PAUSE_SECONDS))
 # Per-line JSON for the append-only stores, one JSON document for the rest. A
 # suffix that is neither is rewritten without a structural claim.
@@ -310,28 +316,39 @@ def candidate_files(data_dir, literals, since):
     everything = list(lake_files(data_dir, since))
     if not literals:
         return everything
-    patterns = "\n".join(literals)
-    try:
-        found = subprocess.run(
-            # -I skips binary files and -s swallows unreadable ones: without
-            # them a single odd file turns the whole prefilter into exit 2, the
-            # fallback engages, and the run silently becomes the hour-long walk
-            # this exists to avoid.
-            ["/usr/bin/grep", "-F", "-l", "-r", "-I", "-s", "-f", "-", str(data_dir)],
-            input=patterns,
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-    except OSError as error:
-        print(f"prefilter unavailable ({error}); scanning every file")
-        return everything
-    if found.returncode not in (ZERO, len("a")):
-        detail = (found.stderr or "").strip().splitlines()[-1:] or ["no detail"]
-        print(f"prefilter refused (exit {found.returncode}: {detail[0][:120]}); scanning every file")
-        return everything
-    named = {pathlib.Path(line) for line in found.stdout.splitlines() if line.strip()}
-    print(f"prefilter kept {len(named)} of {len(everything)} files")
+    named = set()
+    ordered = sorted(literals)
+    # Chunked on purpose. `grep -F` with a couple of hundred patterns leaves its
+    # fast multi-pattern path on this platform: measured here, two literals over
+    # the seven-gigabyte archive took 147 seconds while the whole vault list ran
+    # for nearly three hours without finishing -- and it holds the writer lease
+    # the whole time, so ingestion stops with it. A handful of small passes read
+    # the same bytes from the page cache and finish in minutes.
+    for start in range(ZERO, len(ordered), PREFILTER_CHUNK):
+        chunk = ordered[start : start + PREFILTER_CHUNK]
+        try:
+            found = subprocess.run(
+                # -I skips binary files and -s swallows unreadable ones: without
+                # them a single odd file turns the whole prefilter into exit 2,
+                # the fallback engages, and the run silently becomes the walk
+                # this exists to avoid.
+                ["/usr/bin/grep", "-F", "-l", "-r", "-I", "-s", "-f", "-", str(data_dir)],
+                input="\n".join(chunk),
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=PREFILTER_TIMEOUT,
+            )
+        except (OSError, subprocess.TimeoutExpired) as error:
+            print(f"prefilter unavailable ({error}); scanning every file")
+            return everything
+        if found.returncode not in (ZERO, len("a")):
+            detail = (found.stderr or "").strip().splitlines()[-1:] or ["no detail"]
+            print(f"prefilter refused (exit {found.returncode}: {detail[0][:120]}); scanning every file")
+            return everything
+        named.update(pathlib.Path(line) for line in found.stdout.splitlines() if line.strip())
+    print(f"prefilter kept {len(named)} of {len(everything)} files"
+          f" using {(len(ordered) + PREFILTER_CHUNK - 1) // PREFILTER_CHUNK} pass(es)")
     return [path for path in everything if path in named]
 
 
@@ -348,6 +365,12 @@ def main(argv):
     source = option(argv, "--secret-file", NONE)
     max_files = int(option(argv, "--max-files", MAX_FILES_DEFAULT))
     since = float(option(argv, "--since", ZERO))
+    # A standing repair must be bounded. Without this the vault-sourced run held
+    # the writer lease for eleven hours on a seven-gigabyte archive, which stops
+    # ingestion for as long as it runs -- worse than the secrets it removes. Zero
+    # means unbounded, for a deliberate one-off.
+    deadline_seconds = float(option(argv, "--deadline-seconds", ZERO))
+    start_after = option(argv, "--start-after", "")
     data_dir = pathlib.Path(
         option(
             argv,
@@ -375,15 +398,36 @@ def main(argv):
         lease = acquire_lease(data_dir)
         print(f"lease held {lease[0]}")
     try:
-        return scrub(data_dir, literals, apply_changes, max_files, since)
+        return scrub(
+            data_dir,
+            literals,
+            apply_changes,
+            max_files,
+            since,
+            deadline_seconds,
+            start_after,
+        )
     finally:
         if lease is not NONE:
             release_lease(*lease)
 
 
-def scrub(data_dir, literals, apply_changes, max_files, since):
+def scrub(
+    data_dir,
+    literals,
+    apply_changes,
+    max_files,
+    since,
+    deadline_seconds=ZERO,
+    start_after="",
+):
     """Count every literal, then rewrite what was accepted. The caller owns the
-    lease when this writes."""
+    lease when this writes.
+
+    `deadline_seconds` bounds the pass and `start_after` resumes it, so a
+    standing repair covers a large archive in several short runs instead of one
+    that holds the writer lease until somebody notices ingestion has stopped.
+    """
     # Pass one counts. Nothing is written yet, which is what lets a literal be
     # refused on its own measurements rather than after the damage.
     scanned = ZERO
@@ -393,7 +437,16 @@ def scrub(data_dir, literals, apply_changes, max_files, since):
     per_literal_files = {literal: ZERO for literal in literals}
     per_literal_occurrences = {literal: ZERO for literal in literals}
     pattern = scanner(literals)
-    for path in candidate_files(data_dir, literals, since):
+    started = time.monotonic()
+    resume_after = ""
+    reached_end = True
+    for path in sorted(candidate_files(data_dir, literals, since)):
+        if start_after and str(path) <= start_after:
+            continue
+        if deadline_seconds and time.monotonic() - started > deadline_seconds:
+            resume_after = str(path)
+            reached_end = False
+            break
         scanned += 1
         try:
             found, lines = count_file(path, pattern)
@@ -407,7 +460,9 @@ def scrub(data_dir, literals, apply_changes, max_files, since):
         for literal, occurrences in found.items():
             per_literal_files[literal] += 1
             per_literal_occurrences[literal] += occurrences
-
+    if start_after:
+        print(f"resumed after {start_after}")
+    print("coverage " + ("complete" if reached_end else f"partial, resume after {resume_after}"))
     accepted = []
     over_cap = []
     for literal in literals:
