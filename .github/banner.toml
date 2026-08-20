@@ -1,11 +1,13 @@
 [automation]
 managed = true
-source_fingerprint = "8812d94799d49ca2"
+source_fingerprint = "afaaf3527e9e6acc"
 category = "agent"
+copy_status = "approved"
+approved_in = "019fe3db-84a1-7000-bf79-c5455aefd43f@2026-08-09T23:59:29Z"
 
 [banner]
-title = "Archive agent conversations privately."
-description = "Privacy-masked local transcript store with incremental updates, SQL inspection, and Oko import."
+title = "Transcript Lake: All the Knowledge from Your AI Agent Conversations, Organized"
+description = ""
 product = "Wisent"
 url = "wisent.com"
 theme = "dark"
