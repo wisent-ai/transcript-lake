@@ -29,6 +29,8 @@ No catalog example is billable, network-facing at runtime, or credentialed. Rele
 
 | Actor | Outcome | Interface | Preconditions | Risk | Canonical example |
 |---|---|---|---|---|---|
+| Evaluator | Prove a native live append without private data | CLI/synthetic files | Isolated invented fixture | Local mutation | [Synthetic live append](synthetic/live-append.md) |
+| Evaluator | Audit all masking classes and a derived mirror | CLI/files/DuckDB | Isolated invented fixture; DuckDB for compact | Read-only plus optional derived mutation | [Synthetic masking audit](synthetic/masking-audit.md) |
 | New operator | Install and create the first live archive | CLI | Clean supported host; local sessions optional | Local mutation, provider-facing | [First local archive](getting-started/first-local-archive.md) |
 | Operator | Read safe zero-state guidance and product identity | CLI | Installed product | Read-only | [Inspect zero state](core/inspect-zero-state.md) |
 | Operator | Tour the complete installed command surface | CLI | Installed product; optional tools per command | Mixed, explicitly staged | [CLI tour](core/cli-tour.md) |
@@ -75,4 +77,8 @@ No catalog example is billable, network-facing at runtime, or credentialed. Rele
 - [Integration contracts](../docs/INTEGRATIONS.md)
 - [Release policy](../docs/RELEASES.md)
 - [Architecture and data model](../docs/LAKE.md)
+- [Executed synthetic quick start](../docs/quick-start.md)
+- [Masking guarantees](../docs/masking-guarantees.md)
+- [CLI reference](../docs/cli-reference.md)
+- [Operator runbook](../docs/runbook.md)
 

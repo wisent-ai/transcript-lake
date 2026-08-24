@@ -7,6 +7,7 @@ All user-visible changes are recorded here. Transcript Lake uses Semantic Versio
 ### Added
 
 - Public product contract, release identity, onboarding, operational documentation, integration contracts, and canonical examples.
+- Full source-grounded documentation corpus: product overview, executed synthetic quick start, core concepts, ingestion and CLI references, masking guarantees, architecture, configuration, operator runbook, and two synthetic evidence walkthroughs. `kronika.sync.json` now covers every corpus page.
 - Public CLI now covers path discovery, source discovery, health checks, safe rebuild, bounded sessions/events/statistics/hooks, Oko/Lake signals, structured output, filtered compaction, and preview-first derived cleanup.
 - `transcript-lake search <text>` runs a bounded, newest-first, case-insensitive literal substring match over masked event text, with optional runtime, session, and type filters, so common text lookup no longer requires operator SQL. LIKE wildcards in the term are escaped and always match literally.
 - `transcript-lake label add|list|aspects` records operator-owned session labels as aspect/value pairs (latest assignment per session and aspect wins in reads) in an append-only store beneath `LAKE_DATA/labels`, exposed to SQL through the canonical `labels` DuckDB view. Label writes do not take the events writer lease and never block the live stream.

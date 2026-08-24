@@ -92,7 +92,7 @@ Raw vendor text exists only on the source side of the masking boundary. A filesy
 
 `LAKE_DATA/cursors.json` is the durable resume state. Daily NDJSON partitions are authoritative Lake evidence; Parquet and Oko files are rebuildable projections. Cursor and projection metadata use atomic replacement, and transcript partitions are append-only.
 
-See [the core workflow contract](docs/CORE.md) and [the data and architecture contract](docs/LAKE.md) for state transitions, schemas, masking behavior, paths, and recovery semantics.
+Start with [what Transcript Lake is](docs/what-is-transcript-lake.md) and the [executed synthetic quick start](docs/quick-start.md). The [core workflow contract](docs/CORE.md), [data contract](docs/LAKE.md), [architecture guide](docs/architecture.md), and [ingestion reference](docs/ingestion-reference.md) define state transitions, schemas, masking, paths, and recovery.
 
 ## Quick start
 
@@ -131,7 +131,7 @@ The process reacts to source writes immediately; it has no polling interval, qui
 
 For an always-on local installation, `scripts/install-stream-service.sh` installs the release binary and a KeepAlive LaunchAgent. Vendor transcripts remain read-only, and `clean` still previews removal of rebuildable artifacts only.
 
-Continue with the [CLI tour](examples/core/cli-tour.md), [full onboarding guide](docs/ONBOARDING.md), and [canonical examples catalog](examples/README.md).
+Continue with the [complete CLI reference](docs/cli-reference.md), [masking guarantees](docs/masking-guarantees.md), [operator runbook](docs/runbook.md), [full onboarding guide](docs/ONBOARDING.md), and [canonical examples catalog](examples/README.md).
 
 ## Primary interfaces
 
