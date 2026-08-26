@@ -54,13 +54,14 @@ BUILT=$("$BINARY" --version)
     fail "built binary reports $BUILT, manifest declares $VERSION"
 
 # The binary embeds sql/, so the archive carries it only for the
-# TRANSCRIPT_LAKE_SQL override; docs and examples ship from the same revision.
+# TRANSCRIPT_LAKE_SQL override. Product documentation is published at
+# https://transcript-lake.wisent.com/docs/.
 STAGE="$DIST/$NAME"
 rm -rf "$STAGE"
 mkdir -p "$STAGE"
 cp "$BINARY" "$STAGE/$PRODUCT"
-cp "$ROOT/LICENSE" "$ROOT/README.md" "$ROOT/CHANGELOG.md" "$STAGE/"
-cp -R "$ROOT/sql" "$ROOT/docs" "$ROOT/examples" "$STAGE/"
+cp "$ROOT/LICENSE" "$ROOT/README.md" "$STAGE/"
+cp -R "$ROOT/sql" "$STAGE/"
 tar -C "$DIST" -czf "$DIST/$ARCHIVE" "$NAME"
 rm -rf "$STAGE"
 

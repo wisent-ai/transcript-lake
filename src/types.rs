@@ -8,7 +8,7 @@ use serde_json::{Map, Value};
 pub const HOOKS: &str = "hooks";
 pub const SUPPORTED_SOURCES: [&str; 6] = ["claude", "codex", "omp", "droid", "kimi", "hooks"];
 
-/// The canonical event types, in the order docs/LAKE.md lists them.
+/// The canonical event types, in the order the Lake contract lists them.
 pub const EVENT_TYPES: [&str; 7] = [
     "user",
     "assistant",
