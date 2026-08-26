@@ -1,7 +1,7 @@
 //! Error type, process helpers, and the small output primitives every command
 //! shares. The error carries one operator-facing sentence; `main` prefixes it
 //! with `error: ` exactly as the previous implementation did, because the
-//! documented failure paths in docs/ and examples/ quote those strings.
+//! website's documented failure paths quote those strings.
 use std::env;
 use std::ffi::OsStr;
 use std::fmt;
