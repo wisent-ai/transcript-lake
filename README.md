@@ -92,7 +92,7 @@ Raw vendor text exists only on the source side of the masking boundary. A filesy
 
 `LAKE_DATA/cursors.json` is the durable resume state. Daily NDJSON partitions are authoritative Lake evidence; Parquet and Oko files are rebuildable projections. Cursor and projection metadata use atomic replacement, and transcript partitions are append-only.
 
-Start with [what Transcript Lake is](docs/what-is-transcript-lake.md) and the [executed synthetic quick start](docs/quick-start.md). The [core workflow contract](docs/CORE.md), [data contract](docs/LAKE.md), [architecture guide](docs/architecture.md), and [ingestion reference](docs/ingestion-reference.md) define state transitions, schemas, masking, paths, and recovery.
+Start with [what Transcript Lake is](https://transcript-lake.wisent.com/docs/what-is-transcript-lake/) and the [executed synthetic quick start](https://transcript-lake.wisent.com/docs/quick-start/). The [core workflow contract](https://transcript-lake.wisent.com/docs/core/), [data contract](https://transcript-lake.wisent.com/docs/lake/), [architecture guide](https://transcript-lake.wisent.com/docs/architecture/), and [ingestion reference](https://transcript-lake.wisent.com/docs/ingestion-reference/) define state transitions, schemas, masking, paths, and recovery.
 
 ## Quick start
 
@@ -131,7 +131,7 @@ The process reacts to source writes immediately; it has no polling interval, qui
 
 For an always-on local installation, `scripts/install-stream-service.sh` installs the release binary and a KeepAlive LaunchAgent. Vendor transcripts remain read-only, and `clean` still previews removal of rebuildable artifacts only.
 
-Continue with the [complete CLI reference](docs/cli-reference.md), [masking guarantees](docs/masking-guarantees.md), [operator runbook](docs/runbook.md), [full onboarding guide](docs/ONBOARDING.md), and [canonical examples catalog](examples/README.md).
+Continue with the [complete CLI reference](https://transcript-lake.wisent.com/docs/cli-reference/), [masking guarantees](https://transcript-lake.wisent.com/docs/masking-guarantees/), [operator runbook](https://transcript-lake.wisent.com/docs/runbook/), [full onboarding guide](https://transcript-lake.wisent.com/docs/onboarding/), and [canonical examples catalog](https://transcript-lake.wisent.com/docs/examples/).
 
 ## Primary interfaces
 
@@ -155,18 +155,18 @@ The CLI is the canonical human and automation interface.
 | Projection recovery | `rebuild-oko [--reindex]`, `oko-refresh` | Reconstruct the Oko projection or explicitly reindex it |
 | Derived cleanup | `clean [--target <parquet|oko|all>] [--apply]` | Dry-run by default; removes rebuildable data only with `--apply` |
 
-Canonical event and adapter interfaces are machine contracts documented in [the architecture contract](docs/LAKE.md). Every supported operation maps to [one canonical example](examples/README.md).
+Canonical event and adapter interfaces are machine contracts documented in [the architecture contract](https://transcript-lake.wisent.com/docs/lake/). Every supported operation maps to [one canonical example](https://transcript-lake.wisent.com/docs/examples/).
 
 ## Operational model
 
 - **Configuration:** global `--data-dir <path>` selects the state root for one invocation; `LAKE_DATA` remains the automation default. `OKO_CLI` optionally selects the Oko executable. Unset values use documented local defaults; there are no credential fallbacks.
 - **State ownership:** vendor runtimes own source transcripts; Transcript Lake alone owns `LAKE_DATA`; Oko owns its SQLite index and imports a derived Lake export read-only.
 - **Credentials:** core streaming needs none. Transcript contents may contain credentials, so masking occurs before durable Lake writes. Do not share a Lake directory as though it were anonymized data.
-- **Upgrades:** use an immutable release once available. State layout compatibility, rollback, and release channels are defined in [release policy](docs/RELEASES.md).
+- **Upgrades:** use an immutable release once available. State layout compatibility, rollback, and release channels are defined in [release policy](https://transcript-lake.wisent.com/docs/releases/).
 - **Observability:** `paths`, `sources`, `doctor`, `status --json`, and stream logs expose configuration, availability, freshness, counts, and failures.
 - **Recovery:** the supervised stream resumes from durable byte cursors; a truncation, same-size rewrite, or damaged cursor is rejected, and `rebuild --to <empty-path>` reconstructs a separate Lake without mutating the current one.
 - **Retention:** no automatic authoritative deletion is performed. `clean` handles only rebuildable Parquet and Oko artifacts, previews by default, and requires `--apply`.
-- **Integrations:** capability, dependency, failure, and removal contracts are in [integration contracts](docs/INTEGRATIONS.md).
+- **Integrations:** capability, dependency, failure, and removal contracts are in [integration contracts](https://transcript-lake.wisent.com/docs/integrations/).
 
 ## Project status and support
 
