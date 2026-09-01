@@ -1,6 +1,38 @@
 {
   "schema_version": 1,
   "product": "transcript-lake",
-  "releases": false,
-  "reason": "The README states there is not yet a supported immutable release and that the development channel is installed from a source checkout."
+  "releases": true,
+  "version_source": {
+    "kind": "regex",
+    "path": "Cargo.toml",
+    "pattern": "(?m)^version\\s*=\\s*\"(?<version>[0-9]+\\.[0-9]+\\.[0-9]+(?:-[0-9A-Za-z.-]+)?)\"\\s*$"
+  },
+  "platforms": {
+    "darwin-arm64": {
+      "runner_platform": "darwin-arm64",
+      "build": {
+        "argv": [
+          "cargo",
+          "build",
+          "--manifest-path",
+          "Cargo.toml",
+          "--locked",
+          "--release",
+          "--bin",
+          "transcript-lake",
+          "--target",
+          "aarch64-apple-darwin",
+          "--target-dir",
+          ".wisent-output/target"
+        ]
+      },
+      "stage": {
+        "target/aarch64-apple-darwin/release/transcript-lake": "bin/transcript-lake"
+      }
+    }
+  },
+  "runtime": {
+    "binary": "transcript-lake",
+    "launcher": "transcript-lake"
+  }
 }
