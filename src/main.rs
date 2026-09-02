@@ -26,6 +26,7 @@ pub const USAGE: &str = concat!(
     "Usage: transcript-lake [--data-dir <path>] <command> [flags]\n",
     "\n",
     "Start safely:\n",
+    "  transcript-lake onboarding                    walk the first-use journey\n",
     "  transcript-lake paths                         show every local product path\n",
     "  transcript-lake sources                       discover supported transcript stores\n",
     "  transcript-lake status                        inspect Lake and stream state\n",
@@ -99,6 +100,7 @@ pub fn command_help(name: &str) -> Option<&'static str> {
         "rebuild-oko" => "rebuild-oko [--reindex]\n  Reconstruct every Oko session projection from authoritative Lake partitions.",
         "oko-refresh" => "oko-refresh\n  Invoke the compatible oko-cli transcript reindex command.",
         "clean" => "clean [--target <parquet|oko|all>] [--apply] [--json]\n  Preview by default; --apply removes rebuildable derived data only.",
+        "onboarding" => "onboarding [--reset] [--yes] [--json]\n  Walk the published first-use journey this binary ships, one screen at a time, recording progress for this machine outside the Lake.\n  The journey completes when a real query over the Lake returns rows; until then it reports what is still missing and how to resume.\n  --reset discards the recorded attempt and replays the journey from its entry screen; --yes answers the Enter prompts; --json emits the whole walk as one object and never prompts.",
         "help" => "help [command]\n  Show general guidance or the exact syntax for one command.",
         _ => return None,
     })
@@ -141,6 +143,7 @@ fn dispatch(command: &str, rest: &[String]) -> Result<i32> {
         "rebuild-oko" => commands::derived::rebuild_oko(rest),
         "oko-refresh" => commands::derived::oko_refresh(rest),
         "clean" => commands::derived::clean(rest),
+        "onboarding" => commands::onboarding::onboarding(rest),
         "help" => cmd_help(rest),
         _ => unreachable!("dispatch called with an unrouted command"),
     }

@@ -121,6 +121,8 @@ transcript-lake doctor
 transcript-lake --data-dir "$HOME/.transcript-lake" status
 ```
 
+`transcript-lake onboarding` walks the first-use journey this repository ships in `onboarding_first_use.json`: what the archive is, what masking guarantees before anything is stored, what one supervised stream does, and finally one real query over the canonical views whose returned rows are the first result (`lake_query_rows_returned`). Progress is recorded per machine under `~/.local/state/transcript-lake/onboarding.json`, outside `LAKE_DATA`; `--reset` discards it and replays the journey.
+
 Start the foreground stream:
 
 ```sh
@@ -140,6 +142,7 @@ The CLI is the canonical human and automation interface.
 | Operation | Interface | Observable result |
 |---|---|---|
 | Guidance and identity | `transcript-lake help [command]`, `--version` | Exact syntax, safety guidance, or canonical version |
+| First use | `onboarding [--reset] [--yes] [--json]` | The published first-run journey walked screen by screen; completes when a real query returns rows |
 | Paths and discovery | `paths`, `sources` | Resolved state/integration paths and available runtime stores |
 | Health | `doctor [--json]` | Cursor, source, DuckDB, and Oko checks with meaningful exit status |
 | Real-time stream | `stream [--json]` | Long-running event-driven source tail with direct Lake and Oko commits |

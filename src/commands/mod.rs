@@ -4,5 +4,6 @@ pub mod derived;
 pub mod goal;
 pub mod inspect;
 pub mod label;
+pub mod onboarding;
 pub mod read;
 pub mod stream;
