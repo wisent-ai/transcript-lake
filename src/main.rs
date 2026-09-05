@@ -10,6 +10,7 @@ mod labels;
 mod oko_export;
 mod paths;
 mod redact;
+mod sources;
 mod stream;
 mod types;
 mod util;
@@ -29,6 +30,7 @@ pub const USAGE: &str = concat!(
     "  transcript-lake onboarding                    walk the first-use journey\n",
     "  transcript-lake paths                         show every local product path\n",
     "  transcript-lake sources                       discover supported transcript stores\n",
+    "  transcript-lake adopt --source <runtime> --root <path>  ingest and select one discovered source\n",
     "  transcript-lake status                        inspect Lake and stream state\n",
     "\n",
     "Stream and recover:\n",
@@ -38,6 +40,7 @@ pub const USAGE: &str = concat!(
     "Discover and inspect:\n",
     "  paths [--json]                                resolved state and integration paths\n",
     "  sources [--json]                              source availability and file counts\n",
+    "  adopt --source <runtime> --root <path> [--json] validate, ingest, and select a source\n",
     "  doctor [--json]                               state and dependency health checks\n",
     "  status [--json]                               partitions, cursors, stream, Oko\n",
     "\n",
@@ -82,6 +85,7 @@ pub fn command_help(name: &str) -> Option<&'static str> {
     Some(match name {
         "paths" => "paths [--json]\n  Print resolved Lake, derived-data, Tama, DuckDB, and Oko paths.",
         "sources" => "sources [--json]\n  Discover supported runtime roots and count candidate transcript files.",
+        "adopt" => "adopt --source <claude|codex|omp|droid|kimi> --root <discovered-root> [--json]\n  Validate every complete source record, ingest through the canonical masking/cursor/Oko boundary, then persist this root as the selected source. Repeating the same source resumes by native file identity and reports unchanged files.",
         "doctor" => "doctor [--json]\n  Check cursor integrity, source discovery, and optional dependency presence.",
         "status" => "status [--json]\n  Show partitions, cursor freshness, live stream state, and Oko freshness.",
         "stream" => "stream [--json]\n  Follow supported source files continuously and project each append directly into the Lake and Oko.",
@@ -100,7 +104,7 @@ pub fn command_help(name: &str) -> Option<&'static str> {
         "rebuild-oko" => "rebuild-oko [--reindex]\n  Reconstruct every Oko session projection from authoritative Lake partitions.",
         "oko-refresh" => "oko-refresh\n  Invoke the compatible oko-cli transcript reindex command.",
         "clean" => "clean [--target <parquet|oko|all>] [--apply] [--json]\n  Preview by default; --apply removes rebuildable derived data only.",
-        "onboarding" => "onboarding [--reset] [--yes] [--json]\n  Walk the published first-use journey this binary ships, one screen at a time, recording progress for this machine outside the Lake.\n  The journey completes when a real query over the Lake returns rows; until then it reports what is still missing and how to resume.\n  --reset discards the recorded attempt and replays the journey from its entry screen; --yes answers the Enter prompts; --json emits the whole walk as one object and never prompts.",
+        "onboarding" => "onboarding [--source <runtime> --root <discovered-root>] [--skip-source] [--reset] [--yes] [--json]\n  Discover supported roots and optionally adopt one through the canonical ingestion boundary before querying the resulting Lake.\n  Without --source/--root the source step reports the exact adopt command; --skip-source leaves an empty usable Lake and does not claim first success.\n  --reset discards the recorded attempt and replays the journey from its entry screen; --yes answers the Enter prompts; --json emits the whole walk as one object and never prompts.",
         "help" => "help [command]\n  Show general guidance or the exact syntax for one command.",
         _ => return None,
     })
@@ -125,6 +129,7 @@ fn dispatch(command: &str, rest: &[String]) -> Result<i32> {
     match command {
         "paths" => commands::inspect::paths(rest),
         "sources" => commands::inspect::sources(rest),
+        "adopt" => commands::adopt::adopt(rest),
         "doctor" => commands::inspect::doctor(rest),
         "status" => commands::inspect::status(rest),
         "stream" => commands::stream::stream(rest),

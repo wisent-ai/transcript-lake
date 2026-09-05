@@ -1,1 +1,88 @@
-{"analytics_contract":{"completion_event":"onboarding_completed","contract_version":"1","exposure_event":"onboarding_step_viewed","first_success_event":"onboarding_first_success_observed","primary_action_event":"onboarding_step_completed","surface":"cli_first_use"},"entry_screen_id":"promise","experiment_contract":null,"first_success_fact":"lake_query_rows_returned","journey_id":"first-use","journey_version":"2026-09-01.1","product_id":"transcript-lake","published_at":"2026-09-01T00:00:00Z","schema_version":1,"screens":[{"actions":["continue"],"body_key":"transcript-lake.onboarding.promise.body","completion_evidence":null,"entry_conditions":null,"fallback_screen_id":null,"presentation":{"body":"Every coding agent on this machine writes its conversations somewhere different, in its own format, and nobody reopens those terminals. Transcript Lake follows Claude Code, Codex, OMP, Droid and Kimi as they write and keeps one local archive of every session, turn, tool call and token count.","renderer":"promise","title":"Nothing you ever told an AI is lost again"},"required":true,"screen_id":"promise","screen_kind":"promise","title_key":"transcript-lake.onboarding.promise.title","transitions":[{"next_screen_id":"masking-boundary","priority":10,"reason_code":"canonical_progression"}]},{"actions":["continue"],"body_key":"transcript-lake.onboarding.masking-boundary.body","completion_evidence":null,"entry_conditions":null,"fallback_screen_id":null,"presentation":{"body":"Names, keys and paths are replaced on the way in, so the archive is safe to keep. Nothing leaves this machine: the Lake lives under LAKE_DATA (default ~/.transcript-lake), vendor transcript stores are only ever read, and daily NDJSON partitions are append-only.","command":"transcript-lake paths","renderer":"explanation","title":"Masked before anything is stored"},"required":true,"screen_id":"masking-boundary","screen_kind":"explanation","title_key":"transcript-lake.onboarding.masking-boundary.title","transitions":[{"next_screen_id":"stream-capture","priority":10,"reason_code":"canonical_progression"}]},{"actions":["continue"],"body_key":"transcript-lake.onboarding.stream-capture.body","completion_evidence":{"fact":"lake_partitions_observed","kind":"fact","operator":"eq","value":true},"entry_conditions":null,"fallback_screen_id":null,"presentation":{"body":"One supervised process is the whole ingest: each source append is masked, appended to today's partition and projected to Oko before its byte cursor moves, so a restart resumes where it stopped. This step is satisfied once the Lake holds partitions of your own transcripts.","command":"transcript-lake stream","renderer":"first_action","title":"Follow your agents as they write"},"required":true,"screen_id":"stream-capture","screen_kind":"first_action","title_key":"transcript-lake.onboarding.stream-capture.title","transitions":[{"next_screen_id":"first-query","priority":10,"reason_code":"canonical_progression"}]},{"actions":["complete"],"body_key":"transcript-lake.onboarding.first-query.body","completion_evidence":{"fact":"lake_query_rows_returned","kind":"fact","operator":"eq","value":true},"entry_conditions":null,"fallback_screen_id":null,"presentation":{"body":"Plain SQL over the canonical DuckDB views - events, sessions, tools_daily, tokens_daily, hook_decisions - answers who solved this before, what a project cost in tokens, how long the work really took. The first rows returned are evidence no closed terminal could reconstruct.","command":"transcript-lake query \"SELECT runtime, count(*) AS events FROM events GROUP BY runtime\"","renderer":"first_success","title":"Ask the archive a question"},"required":true,"screen_id":"first-query","screen_kind":"first_success","title_key":"transcript-lake.onboarding.first-query.title","transitions":[]}],"source_revision":"transcript-lake-first-use-2026-09-01.1"}
+{
+  "schema_version": 1,
+  "product_id": "transcript-lake",
+  "journey_id": "first-use",
+  "journey_version": "2026-09-05.1",
+  "entry_screen_id": "promise",
+  "first_success_fact": "lake_query_rows_returned",
+  "published_at": "2026-09-05T00:00:00Z",
+  "source_revision": "transcript-lake-source-adoption-2026-09-05.1",
+  "screens": [
+    {
+      "screen_id": "promise",
+      "screen_kind": "promise",
+      "title_key": "transcript-lake.onboarding.promise.title",
+      "body_key": "transcript-lake.onboarding.promise.body",
+      "required": true,
+      "actions": ["continue"],
+      "transitions": [
+        {
+          "next_screen_id": "adopt-source",
+          "reason_code": "canonical_progression",
+          "priority": 10
+        }
+      ],
+      "presentation": {
+        "renderer": "promise",
+        "title": "Keep the conversations you already have",
+        "body": "Transcript Lake can begin with an existing Claude Code, Codex, omp, Factory Droid, or Kimi transcript store. It reads the selected vendor root without changing it, masks credential-shaped text, and persists provider-neutral events under the Lake data root."
+      }
+    },
+    {
+      "screen_id": "adopt-source",
+      "screen_kind": "first_action",
+      "title_key": "transcript-lake.onboarding.adopt-source.title",
+      "body_key": "transcript-lake.onboarding.adopt-source.body",
+      "required": true,
+      "completion_evidence": {
+        "kind": "fact",
+        "fact": "transcript_source_adopted",
+        "operator": "eq",
+        "value": true
+      },
+      "actions": ["adopt_source", "skip"],
+      "transitions": [
+        {
+          "next_screen_id": "first-query",
+          "reason_code": "source_accepted",
+          "priority": 10
+        }
+      ],
+      "presentation": {
+        "renderer": "source_picker",
+        "title": "Choose one discovered transcript source",
+        "body": "The root is validated completely before Lake mutation. Complete malformed JSON refuses the adoption; a final line still being written is left pending. The canonical stream then masks and commits the source using each vendor file path and native runtime session id, so repeating the same adoption resumes by cursor and reports unchanged files instead of duplicating events.",
+        "command": "transcript-lake onboarding --source <runtime> --root <discovered-path>"
+      }
+    },
+    {
+      "screen_id": "first-query",
+      "screen_kind": "first_success",
+      "title_key": "transcript-lake.onboarding.first-query.title",
+      "body_key": "transcript-lake.onboarding.first-query.body",
+      "required": true,
+      "completion_evidence": {
+        "kind": "fact",
+        "fact": "lake_query_rows_returned",
+        "operator": "eq",
+        "value": true
+      },
+      "actions": ["complete"],
+      "transitions": [],
+      "presentation": {
+        "renderer": "first_success",
+        "title": "Ask the archive its first question",
+        "body": "The journey finishes only when DuckDB returns at least one row from the masked events the selected source contributed. Source selection alone is not completion.",
+        "command": "transcript-lake query \"SELECT runtime, count(*) AS events, count(DISTINCT session_id) AS sessions FROM events GROUP BY runtime ORDER BY events DESC\""
+      }
+    }
+  ],
+  "analytics_contract": {
+    "contract_version": "1",
+    "surface": "cli_first_use",
+    "exposure_event": "onboarding_step_viewed",
+    "primary_action_event": "onboarding_step_completed",
+    "completion_event": "onboarding_completed",
+    "first_success_event": "onboarding_first_success_observed"
+  }
+}

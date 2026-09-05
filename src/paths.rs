@@ -31,6 +31,8 @@ pub struct LakePaths {
     pub data_dir: PathBuf,
     pub events: PathBuf,
     pub cursors: PathBuf,
+    #[serde(rename = "sourceRegistry")]
+    pub source_registry: PathBuf,
     #[serde(rename = "streamStatus")]
     pub stream_status: PathBuf,
     pub parquet: PathBuf,
@@ -51,6 +53,7 @@ pub fn lake_paths() -> LakePaths {
         events: data_dir.join("events"),
         cursors: data_dir.join("cursors.json"),
         stream_status: data_dir.join(STREAM_STATUS_FILE),
+        source_registry: data_dir.join(crate::sources::SOURCE_REGISTRY_FILE),
         parquet: data_dir.join("parquet"),
         oko_export: data_dir.join("exports").join("oko"),
         oko_staging: data_dir.join("staging").join("oko-export"),

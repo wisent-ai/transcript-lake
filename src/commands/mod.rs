@@ -1,5 +1,6 @@
 //! One module per command family. Every command takes the argument tail after
 //! the command name and returns the exit status the process should adopt.
+pub mod adopt;
 pub mod derived;
 pub mod goal;
 pub mod inspect;

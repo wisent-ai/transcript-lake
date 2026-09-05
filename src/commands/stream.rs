@@ -65,7 +65,16 @@ pub fn rebuild(rest: &[String]) -> Result<i32> {
 /// Stable directories watched recursively for source appends. Runtime-specific
 /// workspace directories may appear after startup, so the stream watches their
 /// persistent parents rather than a one-time enumeration of current children.
-fn source_roots() -> Vec<PathBuf> {
+fn source_roots(data_dir: &Path) -> Result<Vec<PathBuf>> {
+    if let Some(selected) = crate::sources::selected_source(data_dir)? {
+        if !selected.root.is_dir() {
+            return Err(Error(format!(
+                "selected source root is unavailable: {}",
+                selected.root.display()
+            )));
+        }
+        return Ok(vec![selected.root]);
+    }
     let home = home_dir();
     let mut roots = vec![
         home.join(".claude").join("projects"),
@@ -78,7 +87,7 @@ fn source_roots() -> Vec<PathBuf> {
     roots.retain(|root| root.exists());
     roots.sort();
     roots.dedup();
-    roots
+    Ok(roots)
 }
 
 /// One structured stream line: JSON when requested, otherwise timestamped
@@ -219,7 +228,7 @@ pub fn stream(rest: &[String]) -> Result<i32> {
     let json_output = parsed.flag("json");
     let data_dir = resolve_data_dir(None);
     remove_obsolete_summary(&data_dir)?;
-    let roots = source_roots();
+    let roots = source_roots(&data_dir)?;
     if roots.is_empty() {
         return Err(Error(
             "stream found no supported source roots on this machine".into(),

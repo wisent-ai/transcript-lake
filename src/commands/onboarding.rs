@@ -18,13 +18,13 @@ use uuid::Uuid;
 
 use crate::args::{parse_options, require_flags_only};
 use crate::duck::query_duck_json;
-use crate::paths::{partition_report, resolve_data_dir};
+use crate::paths::resolve_data_dir;
 use crate::util::{home_dir, machine_name, write_json, Error, Result};
 
 const PRODUCT_ID: &str = "transcript-lake";
 const JOURNEY_ID: &str = "first-use";
 const STATE_SCHEMA: &str = "transcript-lake.onboarding-state.v1";
-const PARTITIONS_FACT: &str = "lake_partitions_observed";
+const SOURCE_FACT: &str = "transcript_source_adopted";
 const FIRST_SUCCESS_FACT: &str = "lake_query_rows_returned";
 
 /// The published definition, embedded at build time from the file Echo's
@@ -38,8 +38,25 @@ const FIRST_QUERY: &str = "SELECT runtime, count(*) AS events, \
 count(DISTINCT session_id) AS sessions FROM events GROUP BY runtime ORDER BY events DESC";
 
 pub fn onboarding(rest: &[String]) -> Result<i32> {
-    let parsed = parse_options("onboarding", rest, &[], &["reset", "yes", "json"])?;
+    let parsed = parse_options(
+        "onboarding",
+        rest,
+        &["source", "root"],
+        &["reset", "yes", "json", "skip-source"],
+    )?;
     require_flags_only("onboarding", &parsed)?;
+    let source = parsed.value("source").map(str::to_string);
+    let root = parsed.value("root").map(str::to_string);
+    if source.is_some() != root.is_some() {
+        return Err(Error(
+            "onboarding requires --source and --root together".into(),
+        ));
+    }
+    if parsed.flag("skip-source") && source.is_some() {
+        return Err(Error(
+            "use either --source/--root or --skip-source".into(),
+        ));
+    }
     let json_output = parsed.flag("json");
     // Machine output has no reader to press Enter, so it never prompts.
     let unattended = parsed.flag("yes") || json_output;
@@ -65,25 +82,75 @@ pub fn onboarding(rest: &[String]) -> Result<i32> {
 
         match screen.get("screen_kind").and_then(Value::as_str) {
             Some("first_action") => {
-                let parts: u64 = partition_report(&resolve_data_dir(None))
-                    .iter()
-                    .map(|row| row.parts)
-                    .sum();
-                if parts == 0 {
-                    report.note("This Lake holds no partitions yet, so there is nothing to query.");
+                let data_dir = resolve_data_dir(None);
+                let mut selected = crate::sources::selected_source(&data_dir)?;
+                if parsed.flag("skip-source") {
+                    report.note(
+                        "Source adoption was skipped. Existing Lake state is unchanged, and no new first-success fact was recorded.",
+                    );
                     report.finish(
-                        "awaiting_stream",
+                        "skipped_source",
                         &state,
-                        "Start the stream, leave it running, then run: transcript-lake onboarding",
+                        "Run transcript-lake sources, then transcript-lake adopt --source <runtime> --root <path> whenever you want to seed or change this Lake.",
                     );
                     return report.emit();
                 }
+                if let (Some(runtime), Some(root)) = (source.as_deref(), root.as_deref()) {
+                    let adoption = crate::commands::adopt::adopt_source(
+                        runtime,
+                        std::path::Path::new(root),
+                        &data_dir,
+                    )?;
+                    report.note(&format!(
+                        "Selected {}: {} file(s) imported, {} unchanged, {} canonical event(s) imported.",
+                        adoption.get("sourceId").and_then(Value::as_str).unwrap_or_default(),
+                        adoption.get("imported").and_then(Value::as_u64).unwrap_or(0),
+                        adoption.get("unchanged").and_then(Value::as_u64).unwrap_or(0),
+                        adoption.get("eventsImported").and_then(Value::as_u64).unwrap_or(0),
+                    ));
+                    selected = crate::sources::selected_source(&data_dir)?;
+                } else if selected.is_none() {
+                    let sources = crate::commands::inspect::source_report()?;
+                    let candidates: Vec<String> = sources
+                        .iter()
+                        .filter(|candidate| candidate.available && candidate.mode == "transcripts")
+                        .flat_map(|candidate| {
+                            candidate.roots.iter().map(move |root| {
+                                format!("{}: {} ({} files)", candidate.runtime, root, candidate.files)
+                            })
+                        })
+                        .collect();
+                    if candidates.is_empty() {
+                        report.note("No supported transcript roots were discovered on this machine.");
+                        report.finish(
+                            "awaiting_source",
+                            &state,
+                            "Create work with Claude Code, Codex, omp, Factory Droid, or Kimi, then run: transcript-lake onboarding",
+                        );
+                    } else {
+                        for candidate in &candidates {
+                            report.note(&format!("Discovered {candidate}"));
+                        }
+                        report.finish(
+                            "awaiting_source_selection",
+                            &state,
+                            "Choose one discovered root, then run: transcript-lake onboarding --source <runtime> --root <path>",
+                        );
+                    }
+                    return report.emit();
+                }
+                let selected = selected.ok_or_else(|| {
+                    Error("source adoption returned without a persisted selection".into())
+                })?;
                 report.note(&format!(
-                    "This Lake holds {parts} masked partition files of your own transcripts."
+                    "This Lake follows {} at {} as {}.",
+                    selected.runtime,
+                    selected.root.display(),
+                    selected.id
                 ));
-                let evidence = fact(PARTITIONS_FACT);
+                let evidence = fact(SOURCE_FACT);
                 advance(&definition, &screen, &mut state, &evidence, &revision)?.ok_or_else(
-                    || Error("observed partitions do not satisfy the published journey".into()),
+                    || Error("an adopted source does not satisfy the published journey".into()),
                 )?;
             }
             Some("first_success") => {

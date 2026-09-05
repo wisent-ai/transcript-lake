@@ -596,6 +596,69 @@ pub fn replay(opts: ReplayOptions) -> Result<Value> {
     lease.close();
     summary
 }
+/// Ingest exactly one validated transcript root through the same writer,
+/// cursor, masking, and Oko projection boundary used by the live stream.
+pub fn ingest_source(data_dir: &Path, runtime: &str, root: &Path) -> Result<Value> {
+    let mut lease = open_writer_lease(data_dir)?;
+    let summary = ingest_source_locked(data_dir, runtime, root);
+    lease.close();
+    summary
+}
+
+fn ingest_source_locked(data_dir: &Path, runtime: &str, root: &Path) -> Result<Value> {
+    let started = Instant::now();
+    let adapter = crate::adapters::by_name(runtime)
+        .ok_or_else(|| Error(format!("transcript adapter unavailable: {runtime}")))?;
+    let entries = adapter.list_sessions(root);
+    let discovered = entries.len() as u64;
+    let mut cursors = Cursors::open(&data_dir.to_path_buf())?;
+    let mut writer = Writer::new(data_dir.to_path_buf(), machine_name());
+    let before = total_hits(&writer.masker.counts());
+    let mut tally = Tally::default();
+    for entry in entries {
+        let meta = fs::metadata(&entry.file).map_err(|error| {
+            Error(format!("stat failed for {}: {error}", entry.file.display()))
+        })?;
+        let key = entry.file.to_string_lossy().to_string();
+        if let Some(CursorRecord::Bytes(cursor)) = cursors.get(&key)? {
+            if cursor.mtime_ms == mtime_ms(&meta)
+                && cursor.size == meta.len()
+                && cursor.offset >= meta.len()
+            {
+                tally.skipped += 1;
+                continue;
+            }
+        }
+        stream_file(
+            &mut writer,
+            &mut cursors,
+            adapter.as_ref(),
+            &entry,
+            &meta,
+            false,
+            &mut tally,
+        )
+        .map_err(|error| Error(format!("{}: {error}", entry.file.display())))?;
+        tally.files += 1;
+    }
+    tally.masked_hits = total_hits(&writer.masker.counts()) - before;
+    cursors.flush()?;
+    let mut per_runtime = Map::new();
+    per_runtime.insert(runtime.to_string(), serde_json::to_value(&tally)?);
+    Ok(json!({
+        "perRuntime": Value::Object(per_runtime),
+        "maskCounts": writer.masker.counts(),
+        "durationMs": started.elapsed().as_millis() as u64,
+        "filesDiscovered": discovered,
+        "filesStreamed": tally.files,
+        "filesImported": tally.files,
+        "filesUnchanged": tally.skipped,
+        "eventsImported": tally.events,
+        "partial": false,
+        "failures": 0,
+    }))
+}
+
 
 /// Close source cursor gaps left while the service was stopped, then hand off
 /// to filesystem notifications. Adapters enumerate once at startup and their
@@ -609,6 +672,9 @@ pub fn catch_up(data_dir: &Path) -> Result<Value> {
 }
 
 fn catch_up_locked(data_dir: &Path) -> Result<Value> {
+    if let Some(selected) = crate::sources::selected_source(data_dir)? {
+        return ingest_source_locked(data_dir, &selected.runtime, &selected.root);
+    }
     let started = Instant::now();
     let home = home_dir();
     let hook_sources = crate::paths::hook_source_roots();
@@ -723,9 +789,16 @@ pub fn stream_paths(data_dir: &Path, paths: &[PathBuf]) -> Result<Value> {
 fn stream_paths_locked(data_dir: &Path, paths: &[PathBuf]) -> Result<Value> {
     let started = Instant::now();
     let home = home_dir();
+    let selected = crate::sources::selected_source(data_dir)?;
     let hook_sources = crate::paths::hook_source_roots();
-    let mut adapters = crate::adapters::all();
-    if !hook_sources.segment_mode && hook_sources.available {
+    let mut adapters = if let Some(source) = &selected {
+        vec![crate::adapters::by_name(&source.runtime).ok_or_else(|| {
+            Error(format!("transcript adapter unavailable: {}", source.runtime))
+        })?]
+    } else {
+        crate::adapters::all()
+    };
+    if selected.is_none() && !hook_sources.segment_mode && hook_sources.available {
         adapters.push(crate::hook_segments::hooks_adapter());
     }
     let mut cursors = Cursors::open(&data_dir.to_path_buf())?;
@@ -735,7 +808,7 @@ fn stream_paths_locked(data_dir: &Path, paths: &[PathBuf]) -> Result<Value> {
     let mut touched = 0u64;
 
     for path in paths {
-        if hook_sources.segment_mode && path.starts_with(&hook_sources.ready) {
+        if selected.is_none() && hook_sources.segment_mode && path.starts_with(&hook_sources.ready) {
             let tally = tallies.entry(HOOKS).or_default();
             let before = total_hits(&writer.masker.counts());
             let report = stream_hook_segment(path, data_dir, &mut cursors, &mut writer)?;
@@ -748,10 +821,14 @@ fn stream_paths_locked(data_dir: &Path, paths: &[PathBuf]) -> Result<Value> {
             continue;
         }
         let Some(adapter) = adapters.iter().find(|adapter| {
-            adapter
-                .roots(&home)
-                .iter()
-                .any(|root| path.starts_with(root))
+            if let Some(source) = &selected {
+                adapter.runtime() == source.runtime && path.starts_with(&source.root)
+            } else {
+                adapter
+                    .roots(&home)
+                    .iter()
+                    .any(|root| path.starts_with(root))
+            }
         }) else {
             continue;
         };

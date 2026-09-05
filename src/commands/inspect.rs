@@ -63,6 +63,9 @@ pub struct SourceRow {
     pub available: bool,
     pub mode: &'static str,
     pub roots: Vec<String>,
+    #[serde(rename = "sourceIds")]
+    pub source_ids: Vec<String>,
+    pub selected: bool,
     pub files: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
@@ -99,6 +102,8 @@ fn hooks_row() -> SourceRow {
                     mode: "error",
                     roots: Vec::new(),
                     files: 0,
+                    source_ids: Vec::new(),
+                    selected: false,
                     error: Some(error.to_string()),
                 }
             }
@@ -120,6 +125,8 @@ fn hooks_row() -> SourceRow {
             "legacy-log"
         },
         roots: display_roots(&hooks.roots),
+        source_ids: Vec::new(),
+        selected: false,
         files,
         error: None,
     }
@@ -127,8 +134,10 @@ fn hooks_row() -> SourceRow {
 
 /// Availability and candidate-file counts for every supported source, in the
 /// order used by the stream: every transcript adapter, then hooks.
-pub fn source_report() -> Vec<SourceRow> {
+pub fn source_report() -> Result<Vec<SourceRow>> {
     let home = home_dir();
+    let data_dir = crate::paths::resolve_data_dir(None);
+    let selected = crate::sources::selected_source(&data_dir)?;
     let mut rows = Vec::new();
     for adapter in crate::adapters::all() {
         let roots = adapter.roots(&home);
@@ -136,23 +145,34 @@ pub fn source_report() -> Vec<SourceRow> {
             .iter()
             .map(|root| adapter.list_sessions(root).len() as u64)
             .sum();
+        let canonical_roots: Vec<PathBuf> = roots
+            .iter()
+            .map(|root| fs::canonicalize(root).unwrap_or_else(|_| root.clone()))
+            .collect();
         rows.push(SourceRow {
             runtime: adapter.runtime().to_string(),
             available: !roots.is_empty(),
             mode: "transcripts",
             roots: display_roots(&roots),
+            source_ids: canonical_roots
+                .iter()
+                .map(|root| crate::sources::source_identity(adapter.runtime(), root))
+                .collect(),
+            selected: selected.as_ref().is_some_and(|source| {
+                source.runtime == adapter.runtime() && canonical_roots.contains(&source.root)
+            }),
             files,
             error: None,
         });
     }
     rows.push(hooks_row());
-    rows
+    Ok(rows)
 }
 
 pub fn sources(rest: &[String]) -> Result<i32> {
     let parsed = parse_options("sources", rest, &[], &["json"])?;
     require_flags_only("sources", &parsed)?;
-    let rows = source_report();
+    let rows = source_report()?;
     let status = i32::from(rows.iter().any(|row| row.error.is_some()));
     if parsed.flag("json") {
         write_json(&rows)?;
@@ -165,9 +185,21 @@ pub fn sources(rest: &[String]) -> Result<i32> {
             Some(error) => format!(" error={error}"),
             None => String::new(),
         };
-        writeln!(out, "{}: {state}, {} files{suffix}", row.runtime, row.files)?;
-        for root in &row.roots {
-            writeln!(out, "  {root}")?;
+        writeln!(
+            out,
+            "{}: {state}, {} files{}{}",
+            row.runtime,
+            row.files,
+            if row.selected { ", selected" } else { "" },
+            suffix
+        )?;
+        for (index, root) in row.roots.iter().enumerate() {
+            let identity = row.source_ids.get(index).map(String::as_str).unwrap_or("");
+            if identity.is_empty() {
+                writeln!(out, "  {root}")?;
+            } else {
+                writeln!(out, "  {root}  [{identity}]")?;
+            }
         }
     }
     Ok(status)
@@ -177,6 +209,8 @@ pub fn sources(rest: &[String]) -> Result<i32> {
 pub struct StatusReport {
     #[serde(rename = "dataDir")]
     pub data_dir: PathBuf,
+    #[serde(rename = "selectedSource", skip_serializing_if = "Option::is_none")]
+    pub selected_source: Option<crate::sources::AdoptedSource>,
     pub partitions: Vec<PartitionRow>,
     pub cursors: CursorStatus,
     pub stream: StreamStatus,
@@ -185,21 +219,22 @@ pub struct StatusReport {
 
 /// Everything `status` prints without touching DuckDB: partition inventory,
 /// cursor health, live stream state, and Oko freshness. Oko is optional.
-pub fn status_snapshot() -> StatusReport {
+pub fn status_snapshot() -> Result<StatusReport> {
     let paths = lake_paths();
-    StatusReport {
+    Ok(StatusReport {
+        selected_source: crate::sources::selected_source(&paths.data_dir)?,
         partitions: partition_report(&paths.data_dir),
         cursors: read_cursor_status(&paths.cursors),
         stream: read_stream_status(&paths.stream_status),
         oko: crate::oko_export::freshness(),
         data_dir: paths.data_dir,
-    }
+    })
 }
 
 pub fn status(rest: &[String]) -> Result<i32> {
     let parsed = parse_options("status", rest, &[], &["json"])?;
     require_flags_only("status", &parsed)?;
-    let report = status_snapshot();
+    let report = status_snapshot()?;
     let status = i32::from(report.cursors.state == "invalid" || report.stream.state == "invalid");
     if parsed.flag("json") {
         write_json(&report)?;
@@ -207,6 +242,17 @@ pub fn status(rest: &[String]) -> Result<i32> {
     }
     let mut out = std::io::stdout().lock();
     writeln!(out, "data dir: {}", report.data_dir.display())?;
+    if let Some(source) = &report.selected_source {
+        writeln!(
+            out,
+            "selected source: {} ({} at {})",
+            source.id,
+            source.runtime,
+            source.root.display()
+        )?;
+    } else {
+        writeln!(out, "selected source: none (stream discovery remains automatic)")?;
+    }
     if report.partitions.is_empty() {
         writeln!(out, "partitions: none (the stream has not recorded events)")?;
     }
@@ -283,7 +329,7 @@ pub fn doctor(rest: &[String]) -> Result<i32> {
     require_flags_only("doctor", &parsed)?;
     let paths = lake_paths();
     let cursors = read_cursor_status(&paths.cursors);
-    let sources = source_report();
+    let sources = source_report()?;
     let broken: Vec<&SourceRow> = sources.iter().filter(|row| row.error.is_some()).collect();
     let checks = vec![
         Check {

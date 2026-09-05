@@ -120,8 +120,24 @@ transcript-lake sources
 transcript-lake doctor
 transcript-lake --data-dir "$HOME/.transcript-lake" status
 ```
+Choose one root exactly as `sources` printed it and ingest the history already
+there:
 
-`transcript-lake onboarding` walks the first-use journey this repository ships in `onboarding_first_use.json`: what the archive is, what masking guarantees before anything is stored, what one supervised stream does, and finally one real query over the canonical views whose returned rows are the first result (`lake_query_rows_returned`). Progress is recorded per machine under `~/.local/state/transcript-lake/onboarding.json`, outside `LAKE_DATA`; `--reset` discards it and replays the journey.
+```sh
+transcript-lake adopt --source claude --root "$HOME/.claude/projects"
+```
+
+`adopt` opens every discovered candidate first and refuses a malformed complete
+JSON record before Lake mutation. A final line that its vendor is still writing
+stays pending. Accepted records pass through the ordinary masking, partition,
+cursor, and Oko-export writer. The selected source is persisted as
+`LAKE_DATA/sources.json`; its id is derived from the runtime and canonical root.
+Repeating the command uses each vendor file's durable cursor and reports files
+as `unchanged` rather than appending their events again. Existing adopted-source
+records are retained when a different root becomes selected.
+
+
+`transcript-lake onboarding` walks the first-use journey this repository ships in `onboarding_first_use.json`: it discovers existing supported roots, adopts an explicitly selected source through the same operation as `adopt`, and finally runs one real query over the canonical views. Run `transcript-lake onboarding --source <runtime> --root <discovered-path>` to perform the adoption from the walkthrough; `--skip-source` leaves an empty usable Lake and records no false success. Progress is recorded per machine under `~/.local/state/transcript-lake/onboarding.json`, outside `LAKE_DATA`; `--reset` discards it and replays the journey.
 
 Start the foreground stream:
 
@@ -142,8 +158,9 @@ The CLI is the canonical human and automation interface.
 | Operation | Interface | Observable result |
 |---|---|---|
 | Guidance and identity | `transcript-lake help [command]`, `--version` | Exact syntax, safety guidance, or canonical version |
-| First use | `onboarding [--reset] [--yes] [--json]` | The published first-run journey walked screen by screen; completes when a real query returns rows |
-| Paths and discovery | `paths`, `sources` | Resolved state/integration paths and available runtime stores |
+| First use | `onboarding [--source <runtime> --root <path>] [--skip-source] [--reset] [--yes] [--json]` | Discovers and adopts one real source; completes only when a real query returns rows |
+| Paths and discovery | `paths`, `sources` | Resolved paths, discovered runtime stores, stable source ids, and the selected source |
+| Source adoption | `adopt --source <runtime> --root <discovered-root> [--json]` | `adopted` or `unchanged`, source id, selected root, candidate/imported/unchanged/event counts, and zero conflicts/rejections |
 | Health | `doctor [--json]` | Cursor, source, DuckDB, and Oko checks with meaningful exit status |
 | Real-time stream | `stream [--json]` | Long-running event-driven source tail with direct Lake and Oko commits |
 | Safe recovery | `rebuild --to <empty-path> [--source <runtime>]` | Historical replay into a separate empty Lake |
@@ -162,7 +179,7 @@ Canonical event and adapter interfaces are machine contracts documented in [the 
 
 ## Operational model
 
-- **Configuration:** global `--data-dir <path>` selects the state root for one invocation; `LAKE_DATA` remains the automation default. `OKO_CLI` optionally selects the Oko executable. Unset values use documented local defaults; there are no credential fallbacks.
+- **Configuration:** global `--data-dir <path>` selects the state root for one invocation; `LAKE_DATA` remains the automation default. `LAKE_DATA/sources.json` retains every adopted source and names exactly one selected id; once present, `stream` watches and catches up only that root. `OKO_CLI` optionally selects the Oko executable. Unset values use documented local defaults; before any adoption the stream retains its legacy automatic discovery behavior.
 - **State ownership:** vendor runtimes own source transcripts; Transcript Lake alone owns `LAKE_DATA`; Oko owns its SQLite index and imports a derived Lake export read-only.
 - **Credentials:** core streaming needs none. Transcript contents may contain credentials, so masking occurs before durable Lake writes. Do not share a Lake directory as though it were anonymized data.
 - **Upgrades:** use an immutable release once available. State layout compatibility, rollback, and release channels are defined in [release policy](https://transcript-lake.wisent.com/docs/releases/).
