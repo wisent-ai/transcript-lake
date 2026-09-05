@@ -44,7 +44,7 @@ pub fn source_identity(runtime: &str, root: &Path) -> String {
     digest.update(runtime.as_bytes());
     digest.update([0]);
     digest.update(root.as_os_str().as_encoded_bytes());
-    let hash = format!("{digest:x}");
+    let hash = format!("{:x}", digest.finalize());
     format!("{runtime}:{}", &hash[..24])
 }
 
