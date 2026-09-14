@@ -131,6 +131,24 @@ fn conversation_role(event: &Value) -> Value {
     }
 }
 
+/// The operator's words again, under the key a vendor-shaped reader expects.
+///
+/// The quote checker the write gate runs takes `message.content` or
+/// `content` from the line and accepts the operator's quote only when it
+/// finds the quote there, so naming the speaker is not enough on its own: a
+/// user turn carries its text under that key too. An assistant turn, a tool
+/// call, a tool result and a thinking block do not, because no reader asks
+/// that question about them and these files are large.
+fn operator_content(event: &Value) -> Value {
+    match event.get("event_type").and_then(Value::as_str) {
+        Some("user") => match event.get("text") {
+            Some(Value::String(text)) => Value::String(text.clone()),
+            _ => Value::Null,
+        },
+        _ => Value::Null,
+    }
+}
+
 /// The exported row, in the field order Oko's importer reads.
 pub(crate) fn export_line(event: &Value, runtime: &str, fingerprint: &str) -> Value {
     let mut row = Map::new();
@@ -151,6 +169,7 @@ pub(crate) fn export_line(event: &Value, runtime: &str, fingerprint: &str) -> Va
         event.get("event_type").cloned().unwrap_or(Value::Null),
     );
     row.insert("role".to_string(), conversation_role(event));
+    row.insert("content".to_string(), operator_content(event));
     row.insert(
         "text".to_string(),
         match event.get("text") {
