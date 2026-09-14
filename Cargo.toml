@@ -32,3 +32,7 @@ notify = "8"
 opt-level = 3
 lto = "thin"
 strip = true
+
+[[test]]
+name = "show_out"
+path = "tests/show_out/main.rs"

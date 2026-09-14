@@ -3,23 +3,21 @@
 //! first; DuckDB renders its own table or `-json` output, so the exit status
 //! of the child is the exit status of the command. `show` is the exception: it
 //! reads rows back as JSON because it reconstructs a whole conversation and
-//! reports how much of it the limit cut.
-use std::io::Write;
+//! reports how much of it the limit cut. It lives in `read/show.rs`, which is
+//! where its `--out` destination and refusals are documented.
 
-use serde_json::{Map, Value};
+mod show;
+
+pub use show::show;
+
+use serde_json::Value;
 
 use crate::args::{
     bounded_integer, parse_options, require_flags_only, require_runtime, DEFAULT_DAYS,
-    DEFAULT_LIMIT, MAX_LIMIT, SHOW_LIMIT, SHOW_MAX_LIMIT,
+    DEFAULT_LIMIT, MAX_LIMIT,
 };
-use crate::duck::{query_duck_json, run_duck_query};
-use crate::types::EVENT_TYPES;
-use crate::util::{quote_sql, write_json, Error, Result};
-
-use super::inspect::js_string;
-
-/// The default `show` selection: the conversation itself, without tool noise.
-const SHOW_DEFAULT_TYPES: [&str; 2] = ["user", "assistant"];
+use crate::duck::run_duck_query;
+use crate::util::{quote_sql, Error, Result};
 
 /// `WHERE a AND b`, or nothing at all when no filter was requested.
 fn where_clause(conditions: &[String]) -> String {
@@ -163,149 +161,6 @@ pub fn search(rest: &[String]) -> Result<i32> {
         parsed.flag("json"),
         false,
     )
-}
-
-/// The `--include` selection for `show`: a comma-separated list of canonical
-/// event types, or `all`. Duplicates collapse and the given order is kept, so
-/// the `include:` header line reads back what the operator asked for.
-fn include_types(raw: Option<&str>) -> Result<Vec<String>> {
-    let Some(raw) = raw else {
-        return Ok(SHOW_DEFAULT_TYPES
-            .iter()
-            .map(|kind| kind.to_string())
-            .collect());
-    };
-    let wanted: Vec<String> = raw
-        .split(',')
-        .map(|part| part.trim().to_lowercase())
-        .filter(|part| !part.is_empty())
-        .collect();
-    if wanted.is_empty() {
-        return Err(Error(
-            "--include needs at least one event type or \"all\"".into(),
-        ));
-    }
-    if wanted.iter().any(|part| part == "all") {
-        return Ok(EVENT_TYPES.iter().map(|kind| kind.to_string()).collect());
-    }
-    let mut unique: Vec<String> = Vec::with_capacity(wanted.len());
-    for kind in wanted {
-        if !EVENT_TYPES.contains(&kind.as_str()) {
-            return Err(Error(format!(
-                "unknown event type \"{kind}\" (expected one of: {}, all)",
-                EVENT_TYPES.join(", ")
-            )));
-        }
-        if !unique.contains(&kind) {
-            unique.push(kind);
-        }
-    }
-    Ok(unique)
-}
-
-pub fn show(rest: &[String]) -> Result<i32> {
-    let parsed = parse_options("show", rest, &["include", "limit"], &["json"])?;
-    if parsed.positionals.len() != 1 {
-        return Err(Error(
-            "usage: transcript-lake show <session-id> [--include <types>] [--limit <n>] [--json]"
-                .into(),
-        ));
-    }
-    let session_id = parsed.positionals[0].trim().to_string();
-    if session_id.is_empty() {
-        return Err(Error("show requires a session id".into()));
-    }
-    let types = include_types(parsed.value("include"))?;
-    let limit = bounded_integer(parsed.value("limit"), "--limit", SHOW_LIMIT, SHOW_MAX_LIMIT)?;
-    let quoted_session = quote_sql(&session_id);
-    let identity = query_duck_json(&format!(
-        "SELECT runtime, project, first_ts, last_ts, user_msgs, assistant_msgs, tool_calls \
-         FROM sessions WHERE session_id = {quoted_session}"
-    ))?;
-    let Some(head) = identity.first() else {
-        return Err(Error(format!(
-            "unknown session \"{session_id}\": not present in the selected Lake \
-             (check the id or start the stream first)"
-        )));
-    };
-    let type_filter = format!(
-        " AND event_type IN ({})",
-        types
-            .iter()
-            .map(quote_sql)
-            .collect::<Vec<String>>()
-            .join(", ")
-    );
-    // The matched count comes from its own aggregate, so a --limit cut is
-    // always visible in the footer instead of silently truncating the record.
-    let counted = query_duck_json(&format!(
-        "SELECT count(*) AS matched FROM events WHERE session_id = {quoted_session}{type_filter}"
-    ))?;
-    let matched = json_i64(counted.first().and_then(|row| row.get("matched")));
-    let events = query_duck_json(&format!(
-        "SELECT ts, event_type, tool_name, model, coalesce(text, '') AS text FROM events \
-         WHERE session_id = {quoted_session}{type_filter} ORDER BY ts LIMIT {limit}"
-    ))?;
-    let rendered = events.len() as i64;
-    if parsed.flag("json") {
-        let field = |key: &str| head.get(key).cloned().unwrap_or(Value::Null);
-        let mut report = Map::new();
-        report.insert("session_id".to_string(), Value::String(session_id));
-        report.insert("runtime".to_string(), field("runtime"));
-        report.insert("project".to_string(), field("project"));
-        report.insert("first_ts".to_string(), field("first_ts"));
-        report.insert("last_ts".to_string(), field("last_ts"));
-        report.insert(
-            "include".to_string(),
-            Value::Array(types.into_iter().map(Value::String).collect()),
-        );
-        report.insert("matched".to_string(), Value::from(matched));
-        report.insert("rendered".to_string(), Value::from(rendered));
-        report.insert("events".to_string(), Value::Array(events));
-        write_json(&Value::Object(report))?;
-        return Ok(0);
-    }
-    let mut out = std::io::stdout().lock();
-    let project = match head.get("project") {
-        Some(Value::Null) | None => "unknown".to_string(),
-        other => js_string(other),
-    };
-    write!(
-        out,
-        "session {session_id} ({})\nproject: {project}\nspan: {} .. {}\nturns: {} user, {} assistant, {} tool calls\ninclude: {}\n",
-        js_string(head.get("runtime")),
-        js_string(head.get("first_ts")),
-        js_string(head.get("last_ts")),
-        js_string(head.get("user_msgs")),
-        js_string(head.get("assistant_msgs")),
-        js_string(head.get("tool_calls")),
-        types.join(","),
-    )?;
-    for event in &events {
-        let event_type = js_string(event.get("event_type"));
-        let tool = event.get("tool_name").and_then(Value::as_str).unwrap_or("");
-        let label = if tool.is_empty() {
-            event_type
-        } else {
-            format!("{event_type} {tool}")
-        };
-        write!(
-            out,
-            "\n[{}] {label}\n{}\n",
-            js_string(event.get("ts")),
-            js_string(event.get("text"))
-        )?;
-    }
-    let suffix = if rendered < matched {
-        " (raise --limit for the rest)"
-    } else {
-        ""
-    };
-    write!(
-        out,
-        "\nrendered {rendered} of {matched} matching events{suffix}\n"
-    )?;
-    Ok(0)
 }
 
 pub fn stats(rest: &[String]) -> Result<i32> {
