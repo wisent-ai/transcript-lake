@@ -10,6 +10,23 @@
   "platforms": {
     "darwin-arm64": {
       "runner_platform": "darwin-arm64",
+      "quality": [
+        {
+          "argv": [
+            "cargo",
+            "test",
+            "--locked",
+            "--test",
+            "source_rewrite",
+            "--test",
+            "oko_export_role",
+            "--test",
+            "show_out",
+            "--target-dir",
+            ".wisent-output/target"
+          ]
+        }
+      ],
       "build": {
         "argv": [
           "cargo",
