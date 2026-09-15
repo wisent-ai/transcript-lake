@@ -1,29 +1,38 @@
 -- transcript-lake / sql/views.sql
 -- Canonical DuckDB views over the masked NDJSON event partitions.
--- The caller (src/cli.mjs query) MUST run
+-- The caller (src/duck.rs) MUST run
 --   SET VARIABLE lake_data = '<data dir>';
 -- before sourcing this file. Views read the partition glob
 --   <lake_data>/events/runtime=<r>/date=<day>/part-<hash>.ndjson
 --
--- Empty-lake bootstrap: DuckDB binds a view at CREATE time and a glob that
--- matches zero files is an IO error, so this script first materialises a
--- zero-row stub file at a fixed scratch path, then points the reader at the
--- live glob whenever at least one partition file exists and at the stub
--- otherwise. Once any partition exists the views read the glob directly, so
--- partition files created later are visible without reloading this script.
+-- Empty stores bind a typed in-memory relation. Populated stores bind their
+-- live glob. Neither branch creates or overwrites a scratch file.
 
 SET VARIABLE lake_glob =
   coalesce(getvariable('lake_data'), '.') || '/events/*/*/*.ndjson';
 
-COPY (SELECT NULL AS placeholder WHERE false)
-  TO '/tmp/transcript-lake-empty-stub.ndjson' (FORMAT json);
+SET VARIABLE lake_event_columns = {
+  ts: 'TIMESTAMP',
+  runtime: 'VARCHAR',
+  machine: 'VARCHAR',
+  session_id: 'VARCHAR',
+  project: 'VARCHAR',
+  event_type: 'VARCHAR',
+  text: 'VARCHAR',
+  tool_name: 'VARCHAR',
+  model: 'VARCHAR',
+  tokens_in: 'BIGINT',
+  tokens_out: 'BIGINT',
+  extra: 'JSON'
+};
 
-SET VARIABLE lake_events_src = (
+SET VARIABLE lake_events_query = (
   SELECT CASE
-           WHEN count(*) >= CAST('1' AS BIGINT) THEN getvariable('lake_glob')
-           ELSE '/tmp/transcript-lake-empty-stub.ndjson'
-         END
-  FROM glob(getvariable('lake_glob'))
+    WHEN EXISTS (SELECT * FROM glob(getvariable('lake_glob'))) THEN
+      'SELECT * FROM read_ndjson_auto(getvariable(''lake_glob''), filename=true, ignore_errors=true, columns=getvariable(''lake_event_columns''))'
+    ELSE
+      'SELECT unnest(from_json(''{}'', to_json(getvariable(''lake_event_columns'')))), NULL::VARCHAR AS filename WHERE false'
+  END
 );
 
 -- The canonical event schema is frozen, so inference is disabled via an
@@ -34,25 +43,7 @@ CREATE OR REPLACE VIEW events AS
 SELECT
   ts, runtime, machine, session_id, project, event_type, text,
   tool_name, model, tokens_in, tokens_out, extra, filename
-FROM read_ndjson_auto(
-  getvariable('lake_events_src'),
-  filename = true,
-  ignore_errors = true,
-  columns = {
-    ts: 'TIMESTAMP',
-    runtime: 'VARCHAR',
-    machine: 'VARCHAR',
-    session_id: 'VARCHAR',
-    project: 'VARCHAR',
-    event_type: 'VARCHAR',
-    text: 'VARCHAR',
-    tool_name: 'VARCHAR',
-    model: 'VARCHAR',
-    tokens_in: 'BIGINT',
-    tokens_out: 'BIGINT',
-    extra: 'JSON'
-  }
-);
+FROM query(getvariable('lake_events_query'));
 
 -- One row per session: identity, span, message mix, summed usage counters.
 CREATE OR REPLACE VIEW sessions AS
@@ -180,32 +171,30 @@ ORDER BY s.last_ts DESC;
 -- appended by transcript-lake label add beneath <lake_data>/labels/.
 -- The store is append-only; re-labeling a session and aspect adds a row and
 -- the latest assignment wins in CLI reads, while this view exposes the full
--- history. Same empty-store stub and torn-final-line tolerance as events.
+-- history. Empty input and torn-final-line tolerance match the event view.
 SET VARIABLE lake_labels_glob =
   coalesce(getvariable('lake_data'), '.') || '/labels/*.ndjson';
 
-SET VARIABLE lake_labels_src = (
+SET VARIABLE lake_label_columns = {
+  ts: 'TIMESTAMP',
+  session_id: 'VARCHAR',
+  runtime: 'VARCHAR',
+  aspect: 'VARCHAR',
+  value: 'VARCHAR',
+  note: 'VARCHAR',
+  source: 'VARCHAR'
+};
+
+SET VARIABLE lake_labels_query = (
   SELECT CASE
-           WHEN count(*) >= CAST('1' AS BIGINT) THEN getvariable('lake_labels_glob')
-           ELSE '/tmp/transcript-lake-empty-stub.ndjson'
-         END
-  FROM glob(getvariable('lake_labels_glob'))
+    WHEN EXISTS (SELECT * FROM glob(getvariable('lake_labels_glob'))) THEN
+      'SELECT * FROM read_ndjson_auto(getvariable(''lake_labels_glob''), filename=true, ignore_errors=true, columns=getvariable(''lake_label_columns''))'
+    ELSE
+      'SELECT unnest(from_json(''{}'', to_json(getvariable(''lake_label_columns'')))), NULL::VARCHAR AS filename WHERE false'
+  END
 );
 
 CREATE OR REPLACE VIEW labels AS
 SELECT
   ts, session_id, runtime, aspect, value, note, source, filename
-FROM read_ndjson_auto(
-  getvariable('lake_labels_src'),
-  filename = true,
-  ignore_errors = true,
-  columns = {
-    ts: 'TIMESTAMP',
-    session_id: 'VARCHAR',
-    runtime: 'VARCHAR',
-    aspect: 'VARCHAR',
-    value: 'VARCHAR',
-    note: 'VARCHAR',
-    source: 'VARCHAR'
-  }
-);
+FROM query(getvariable('lake_labels_query'));

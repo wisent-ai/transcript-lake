@@ -15,6 +15,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
+#[cfg(target_os = "macos")]
+use sha2::{Digest, Sha256};
+
 const SESSION: &str = "01a0882d-0000-7000-8000-000000000001";
 
 fn scratch(label: &str) -> PathBuf {
@@ -52,10 +55,17 @@ fn seed_home(root: &Path) -> PathBuf {
     home
 }
 
+fn lake_binary() -> PathBuf {
+    std::env::var_os("TRANSCRIPT_LAKE_TEST_BIN")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(env!("CARGO_BIN_EXE_transcript-lake")))
+}
+
 fn lake(home: &Path, args: &[&str]) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_transcript-lake"))
+    Command::new(lake_binary())
         .args(args)
         .env("HOME", home)
+        .env_remove("TRANSCRIPT_LAKE_SQL")
         .output()
         .expect("run the product")
 }
@@ -202,5 +212,67 @@ fn a_destination_that_cannot_hold_a_record_is_refused_before_the_read() {
     assert!(
         !root.join("messages.txt").exists(),
         "a refused destination leaves no file behind"
+    );
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn readonly_queries_need_no_scratch_files() {
+    let root = scratch("readonly");
+    let home = root.join("home");
+    fs::create_dir_all(&home).unwrap();
+    let data_dir = root.join("absent-lake");
+    let binary = lake_binary();
+    let arguments = [
+        "--data-dir",
+        data_dir.to_str().unwrap(),
+        "query",
+        "--json",
+        "SELECT (SELECT count(*) FROM events) AS events, (SELECT count(*) FROM labels) AS labels",
+    ];
+    // The real reader may read files, but the OS refuses every file write.
+    // This catches a shared scratch-file dependency without touching /tmp.
+    let output = Command::new("/usr/bin/sandbox-exec")
+        .args(["-p", "(version 1)(allow default)(deny file-write*)"])
+        .arg(&binary)
+        .args(arguments)
+        .env("HOME", &home)
+        .env_remove("TRANSCRIPT_LAKE_SQL")
+        .output()
+        .expect("run the read-only product");
+    let revision = Command::new("git")
+        .args(["rev-parse", "HEAD"])
+        .current_dir(env!("CARGO_MANIFEST_DIR"))
+        .output()
+        .unwrap();
+    assert!(
+        revision.status.success(),
+        "record the tested source revision"
+    );
+    let receipt = serde_json::json!({
+        "source_revision": text(&revision.stdout).trim(),
+        "executable": binary,
+        "executable_sha256": format!("{:x}", Sha256::digest(fs::read(&binary).unwrap())),
+        "arguments": arguments,
+        "write_access": "denied by macOS sandbox",
+        "exit_status": output.status.code(),
+        "stdout": text(&output.stdout),
+        "stderr": text(&output.stderr),
+    });
+    fs::write(
+        root.join("receipt.json"),
+        serde_json::to_vec_pretty(&receipt).unwrap(),
+    )
+    .unwrap();
+    assert!(
+        output.status.success(),
+        "a SELECT must not need writable scratch: {}",
+        text(&output.stderr)
+    );
+    let rows: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(rows, serde_json::json!([{"events": 0, "labels": 0}]));
+    assert!(
+        !data_dir.exists(),
+        "a SELECT must not initialize an absent Lake"
     );
 }
