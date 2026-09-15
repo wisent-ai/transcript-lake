@@ -12,6 +12,7 @@
       "runner_platform": "darwin-arm64",
       "quality": [
         {
+          "name": "source-recovery-and-projections",
           "argv": [
             "cargo",
             "test",
@@ -48,8 +49,8 @@
       }
     }
   },
-  "runtime": {
-    "binary": "transcript-lake",
-    "launcher": "transcript-lake"
+  "promotion": {
+    "channels": ["candidate", "stable"],
+    "reconcile": false
   }
 }
