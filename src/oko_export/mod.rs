@@ -28,6 +28,7 @@ use sha2::{Digest, Sha256};
 
 use crate::util::{home_dir, Result};
 
+pub(crate) use row::fingerprint;
 pub use run::export_oko_with_reindex;
 pub use run::freshness::freshness;
 pub(crate) use run::project_events;

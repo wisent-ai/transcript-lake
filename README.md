@@ -63,7 +63,7 @@ Its value is one live parsing and masking boundary: every downstream consumer re
 - DuckDB CLI `1.5.x` is required only for SQL queries and Parquet compaction.
 - Oko and Tama are optional integrations. Core streaming remains usable without them.
 - Data remains local under `LAKE_DATA`, defaulting to `~/.transcript-lake`.
-- Historical reconstruction is explicit through `rebuild` into a separate empty Lake.
+- Historical reconstruction into a separate empty Lake is explicit through `rebuild`; ordinary source replacements are recovered automatically in the current Lake.
 
 ## Core use cases
 
@@ -88,9 +88,9 @@ flowchart LR
     E --> F[Durable source cursor]
 ```
 
-Raw vendor text exists only on the source side of the masking boundary. A filesystem notification carries the changed path directly to its adapter; the stream resumes at that file's newline-aligned cursor, masks `text` and every string in `extra`, appends canonical events, updates affected Oko session files, and only then advances the cursor.
+Raw vendor text exists only on the source side of the masking boundary. A filesystem notification carries the changed path directly to its adapter. The stream verifies the consumed prefix before resuming at the newline-aligned cursor. A replaced, truncated, or legacy source is replayed through masking; retained canonical occurrences are counted instead of appended again, and missing Oko rows are restored. Previously archived history is never deleted because a vendor rewrote its journal.
 
-`LAKE_DATA/cursors.json` is the durable resume state. Daily NDJSON partitions are authoritative Lake evidence; Parquet and Oko files are rebuildable projections. Cursor and projection metadata use atomic replacement, and transcript partitions are append-only.
+`LAKE_DATA/cursors.json` retains the consumed prefix's SHA-256 and the opened file's identity and timestamps alongside `mtimeMs`, `size`, and `offset`. Legacy three-field cursors migrate lazily on the next catch-up or source notification. Recovery keeps the old cursor until every complete source line has reached canonical partitions and Oko; an interrupted recovery repeats the same retained-occurrence comparison. Daily NDJSON partitions remain authoritative evidence, and Parquet and Oko files remain rebuildable projections.
 
 Start with [what Transcript Lake is](https://transcript-lake.wisent.com/docs/what-is-transcript-lake/) and the [executed synthetic quick start](https://transcript-lake.wisent.com/docs/quick-start/). The [core workflow contract](https://transcript-lake.wisent.com/docs/core/), [data contract](https://transcript-lake.wisent.com/docs/lake/), [architecture guide](https://transcript-lake.wisent.com/docs/architecture/), and [ingestion reference](https://transcript-lake.wisent.com/docs/ingestion-reference/) define state transitions, schemas, masking, paths, and recovery.
 
@@ -132,9 +132,10 @@ JSON record before Lake mutation. A final line that its vendor is still writing
 stays pending. Accepted records pass through the ordinary masking, partition,
 cursor, and Oko-export writer. The selected source is persisted as
 `LAKE_DATA/sources.json`; its id is derived from the runtime and canonical root.
-Repeating the command uses each vendor file's durable cursor and reports files
-as `unchanged` rather than appending their events again. Existing adopted-source
-records are retained when a different root becomes selected.
+Repeating an unchanged source is idempotent. Modified sources first verify their
+consumed prefix; replacements and legacy cursors recover missing history without
+duplicating retained occurrences. Existing adopted-source records are retained
+when a different root becomes selected.
 
 
 `transcript-lake onboarding` walks the first-use journey this repository ships in `onboarding_first_use.json`: it discovers existing supported roots, adopts an explicitly selected source through the same operation as `adopt`, and finally runs one real query over the canonical views. Run `transcript-lake onboarding --source <runtime> --root <discovered-path>` to perform the adoption from the walkthrough; `--skip-source` leaves an empty usable Lake and records no false success. Progress is recorded per machine under `~/.local/state/transcript-lake/onboarding.json`, outside `LAKE_DATA`; `--reset` discards it and replays the journey.
@@ -147,7 +148,7 @@ transcript-lake --data-dir "$HOME/.transcript-lake" stream
 
 The process reacts to source writes immediately; it has no polling interval, quiet-period timer, full-root refresh, or child command. Each successful source delta writes its canonical partition and affected Oko sessions before committing the byte cursor.
 
-For an always-on local installation, `scripts/install-stream-service.sh` installs the release binary and a KeepAlive LaunchAgent. Vendor transcripts remain read-only, and `clean` still previews removal of rebuildable artifacts only.
+For an always-on installation, declare the installed executable, `stream` arguments, and `LAKE_DATA` through [Stado's service lifecycle](https://stado.wisent.com/docs/walkthrough-service-repair). Stado's declared supervisor owns subsequent repairs; there is no repository installation script. Vendor transcripts remain read-only, and `clean` still previews removal of rebuildable artifacts only.
 
 Continue with the [complete CLI reference](https://transcript-lake.wisent.com/docs/cli-reference/), [masking guarantees](https://transcript-lake.wisent.com/docs/masking-guarantees/), [operator runbook](https://transcript-lake.wisent.com/docs/runbook/), [full onboarding guide](https://transcript-lake.wisent.com/docs/onboarding/), and [canonical examples catalog](https://transcript-lake.wisent.com/docs/examples/).
 
@@ -186,7 +187,7 @@ Canonical event and adapter interfaces are machine contracts documented in [the 
 - **Credentials:** core streaming needs none. Transcript contents may contain credentials, so masking occurs before durable Lake writes. Do not share a Lake directory as though it were anonymized data.
 - **Upgrades:** use an immutable release once available. State layout compatibility, rollback, and release channels are defined in [release policy](https://transcript-lake.wisent.com/docs/releases/).
 - **Observability:** `paths`, `sources`, `doctor`, `status --json`, and stream logs expose configuration, availability, freshness, counts, and failures.
-- **Recovery:** the supervised stream resumes from durable byte cursors; a truncation, same-size rewrite, or damaged cursor is rejected, and `rebuild --to <empty-path>` reconstructs a separate Lake without mutating the current one.
+- **Recovery:** the supervised stream verifies source prefixes, recovers rewrites and legacy cursors, and retains archived history. Invalid cursor state or corrupt canonical partitions are explicit refusals naming the failed state; `rebuild --to <empty-path>` reconstructs a separate Lake without mutating the current one. Recovery diagnostics name the source, reason, previous offset, and observed bytes; JSON summaries include replay counts.
 - **Retention:** no automatic authoritative deletion is performed. `clean` handles only rebuildable Parquet and Oko artifacts, previews by default, and requires `--apply`.
 - **Integrations:** capability, dependency, failure, and removal contracts are in [integration contracts](https://transcript-lake.wisent.com/docs/integrations/).
 

@@ -1,6 +1,6 @@
 [package]
 name = "transcript-lake"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2021"
 rust-version = "1.85"
 description = "Privacy-masked local event archive for coding-agent transcripts"
@@ -40,3 +40,7 @@ path = "tests/show_out/main.rs"
 [[test]]
 name = "oko_export_role"
 path = "tests/oko_export/role.rs"
+
+[[test]]
+name = "source_rewrite"
+path = "tests/source_rewrite/main.rs"
