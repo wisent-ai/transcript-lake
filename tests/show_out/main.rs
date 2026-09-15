@@ -259,11 +259,14 @@ fn readonly_queries_need_no_scratch_files() {
         "stdout": text(&output.stdout),
         "stderr": text(&output.stderr),
     });
-    fs::write(
-        root.join("receipt.json"),
-        serde_json::to_vec_pretty(&receipt).unwrap(),
-    )
-    .unwrap();
+    // Reports outlive scratch cleanup and are retained for every invocation.
+    let reports = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("target")
+        .join("query-reports");
+    fs::create_dir_all(&reports).unwrap();
+    let receipt_path = reports.join(format!("{}.json", uuid::Uuid::new_v4()));
+    fs::write(&receipt_path, serde_json::to_vec_pretty(&receipt).unwrap()).unwrap();
+    eprintln!("query receipt: {}", receipt_path.display());
     assert!(
         output.status.success(),
         "a SELECT must not need writable scratch: {}",
