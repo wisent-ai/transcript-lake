@@ -104,7 +104,7 @@ fn read_dirents(dir: &Path) -> Vec<(String, fs::FileType)> {
         Ok(iter) => iter,
         Err(error) => {
             // ENOENT and ENOTDIR: the tree moved under us.
-            if !matches!(error.raw_os_error(), Some(2) | Some(20)) {
+            if !matches!(error.kind(), std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory) {
                 eprintln!(
                     "stream: listSessions failed under {}: {error}",
                     dir.display()

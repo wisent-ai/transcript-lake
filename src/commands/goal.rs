@@ -27,6 +27,10 @@ const MODEL_SHA256: &str = "2512d7a455a50a16742b75d8fe38bf02b46b5d6b607f785be32a
 const MODEL_BYTES: u64 = 2_497_280_320;
 const MODEL_REVISION: &str = "d9ce79f106ead1176b74bb0d9fb875521ca712b1";
 const MODEL_SOURCE: &str = "model:jeden-goal-qwen3-4b-2512d7a4";
+/// A goal title is a short phrase: three to twelve words and at most a hundred characters.
+const GOAL_WORDS_MIN: usize = 3;
+const GOAL_WORDS_MAX: usize = 12;
+const GOAL_MAX_CHARS: usize = 100;
 const PROMPT_NAME: &str = "goal-system-prompt.md";
 const PROMPT_SHA256: &str = "6a42afdb497988d0e0281dabe230f2e256423432ffec2eb02f0d570d34ac4621";
 const REPOSITORY: &str = "lbartoszcze/jeden-goal-qwen3-4b";
@@ -244,7 +248,7 @@ fn parse_goal(output: &str) -> Result<Option<String>> {
         return Ok(None);
     }
     let words = goal.split_whitespace().count();
-    if !(3..=12).contains(&words) || goal.chars().count() > 100 {
+    if !(GOAL_WORDS_MIN..=GOAL_WORDS_MAX).contains(&words) || goal.chars().count() > GOAL_MAX_CHARS {
         return Err(Error(format!(
             "local goal model returned an invalid {words}-word title"
         )));

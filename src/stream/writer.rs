@@ -35,6 +35,11 @@ fn clip(mut text: String) -> String {
     text
 }
 
+/// `YYYY-MM-DD`: ten characters, a dash after the year and another after the month.
+const DATE_LEN: usize = 10;
+const YEAR_LEN: usize = 4;
+const MONTH_END: usize = 7;
+
 /// The date partition an event belongs to: the leading `YYYY-MM-DD` of its
 /// timestamp. An unusable timestamp lands in a visible catch-all partition,
 /// not dropped.
@@ -43,14 +48,14 @@ fn date_of(ts: Option<&str>) -> String {
         return "unknown".to_string();
     };
     let bytes = ts.as_bytes();
-    let shaped = bytes.len() >= 10
+    let shaped = bytes.len() >= DATE_LEN
         && bytes[..4].iter().all(u8::is_ascii_digit)
-        && bytes[4] == b'-'
+        && bytes[YEAR_LEN] == b'-'
         && bytes[5..7].iter().all(u8::is_ascii_digit)
-        && bytes[7] == b'-'
+        && bytes[MONTH_END] == b'-'
         && bytes[8..10].iter().all(u8::is_ascii_digit);
     if shaped {
-        ts[..10].to_string()
+        ts[..DATE_LEN].to_string()
     } else {
         "unknown".to_string()
     }

@@ -61,10 +61,13 @@ fn coerce_text(value: Option<&Value>) -> String {
     }
 }
 
+/// 2^53: whole numbers below it survive a double round trip, so they are published as integers.
+const MAX_EXACT_INTEGER: f64 = 9_007_199_254_740_992.0;
+
 /// Whole numbers are published as JSON integers, matching how the previous
 /// implementation serialized doubles that carry no fraction.
 pub(crate) fn number_value(raw: f64) -> Value {
-    if raw.is_finite() && raw.fract() == 0.0 && raw.abs() < 9007199254740992.0 {
+    if raw.is_finite() && raw.fract() == 0.0 && raw.abs() < MAX_EXACT_INTEGER {
         return Value::from(raw as i64);
     }
     Value::from(raw)
