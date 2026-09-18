@@ -424,7 +424,16 @@ impl OmpParser {
                 }
                 Some("toolCall") => {
                     self.flush_text(&mut events, &mut buffer, ts, text_type, &role);
-                    let mut event = self.make(ts, "tool_call", "");
+                    // The call's arguments are the row's text, as the claude
+                    // adapter writes a tool_use block's input: a reader of the
+                    // projection sees what the agent ran, not only that it ran
+                    // something. `arguments` came out of JSON parsing, so
+                    // serialization cannot fail.
+                    let args = match block.get("arguments") {
+                        Some(arguments) => serde_json::to_string(arguments).unwrap_or_default(),
+                        None => String::new(),
+                    };
+                    let mut event = self.make(ts, "tool_call", &args);
                     event.tool_name = match block.get("name") {
                         Some(Value::String(name)) => Some(name.clone()),
                         _ => None,

@@ -156,6 +156,28 @@ fn the_exported_row_names_who_spoke() {
     );
 }
 
+/// On 2026-09-18 every omp `tool_call` row in the operator's Lake carried an
+/// empty `text`: the adapter kept the tool's name and call id and dropped its
+/// arguments, so Oko's one-off repair detector, which reads the command an
+/// agent ran, saw nothing for any omp session - including the `skarbiec grant
+/// ensure` the operator had just asked about. The claude adapter had always
+/// written the input; the row now says what was run for omp too.
+#[test]
+fn the_exported_tool_call_carries_what_was_run() {
+    let (_home, data_dir) = adopted("arguments");
+    let rows = exported_rows(&data_dir);
+    let call = row_of(&rows, "tool_call");
+    assert_eq!(call["tool_name"], serde_json::json!("bash"));
+    assert_eq!(call["extra"]["call_id"], serde_json::json!("t1"));
+    let text = call["text"].as_str().expect("a tool call row carries text");
+    let arguments: Value = serde_json::from_str(text).expect("the text is the call's arguments as JSON");
+    assert_eq!(
+        arguments,
+        serde_json::json!({"command": "true"}),
+        "a reader of the projection sees what the agent ran, not only that it ran something"
+    );
+}
+
 /// The check the write gate performs, against the file Oko would index: find
 /// the line carrying the quote, and accept it only when that line says a user
 /// wrote it and holds the words in `content`. This failed for every session

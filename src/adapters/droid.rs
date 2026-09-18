@@ -451,7 +451,13 @@ impl TranscriptParser {
                 }
                 Some("tool_use") => {
                     self.flush_text(&mut events, &mut buffer, ts, text_type, &role);
-                    let mut event = self.make(ts, "tool_call", "");
+                    // The same shape as the omp adapter's toolCall: the input
+                    // is the row's text, so a reader sees what was run.
+                    let args = match block.get("input") {
+                        Some(input) => serde_json::to_string(input).unwrap_or_default(),
+                        None => String::new(),
+                    };
+                    let mut event = self.make(ts, "tool_call", &args);
                     event.tool_name = match block.get("name") {
                         Some(Value::String(name)) => Some(name.clone()),
                         _ => None,
