@@ -56,17 +56,29 @@ impl Journey {
         let binary = std::env::var_os("TRANSCRIPT_LAKE_BIN")
             .map(PathBuf::from)
             .unwrap_or_else(|| PathBuf::from(env!("CARGO_BIN_EXE_transcript-lake")));
-        for (name, args) in [
-            ("revision.txt", vec!["rev-parse", "HEAD"]),
-            ("changes.patch", vec!["diff", "HEAD"]),
-        ] {
-            let result = Command::new("git")
-                .args(args)
-                .current_dir(env!("CARGO_MANIFEST_DIR"))
-                .output()
-                .unwrap();
-            assert!(result.status.success());
-            fs::write(root.join(name), result.stdout).unwrap();
+        // In a checkout the revision and the working changes are git's; under
+        // the release worker the source is a snapshot without `.git`, and the
+        // worker names the exact commit in WISENT_SOURCE_COMMIT with no
+        // working changes on top of it.
+        match std::env::var("WISENT_SOURCE_COMMIT") {
+            Ok(commit) if !commit.trim().is_empty() => {
+                fs::write(root.join("revision.txt"), format!("{}\n", commit.trim())).unwrap();
+                fs::write(root.join("changes.patch"), "").unwrap();
+            }
+            _ => {
+                for (name, args) in [
+                    ("revision.txt", vec!["rev-parse", "HEAD"]),
+                    ("changes.patch", vec!["diff", "HEAD"]),
+                ] {
+                    let result = Command::new("git")
+                        .args(args)
+                        .current_dir(env!("CARGO_MANIFEST_DIR"))
+                        .output()
+                        .unwrap();
+                    assert!(result.status.success());
+                    fs::write(root.join(name), result.stdout).unwrap();
+                }
+            }
         }
         fs::write(root.join("binary.sha256"), digest(&binary)).unwrap();
         println!("Source rewrite evidence: {}", root.display());

@@ -170,7 +170,8 @@ fn the_exported_tool_call_carries_what_was_run() {
     assert_eq!(call["tool_name"], serde_json::json!("bash"));
     assert_eq!(call["extra"]["call_id"], serde_json::json!("t1"));
     let text = call["text"].as_str().expect("a tool call row carries text");
-    let arguments: Value = serde_json::from_str(text).expect("the text is the call's arguments as JSON");
+    let arguments: Value =
+        serde_json::from_str(text).expect("the text is the call's arguments as JSON");
     assert_eq!(
         arguments,
         serde_json::json!({"command": "true"}),

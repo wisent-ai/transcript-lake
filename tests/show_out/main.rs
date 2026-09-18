@@ -240,17 +240,23 @@ fn readonly_queries_need_no_scratch_files() {
         .env_remove("TRANSCRIPT_LAKE_SQL")
         .output()
         .expect("run the read-only product");
-    let revision = Command::new("git")
-        .args(["rev-parse", "HEAD"])
-        .current_dir(env!("CARGO_MANIFEST_DIR"))
-        .output()
-        .unwrap();
-    assert!(
-        revision.status.success(),
-        "record the tested source revision"
-    );
+    // In a checkout the revision is git's; under the release worker the
+    // source is a snapshot without `.git`, and the worker names the exact
+    // commit it snapshotted in WISENT_SOURCE_COMMIT.
+    let revision = match std::env::var("WISENT_SOURCE_COMMIT") {
+        Ok(commit) if !commit.trim().is_empty() => commit,
+        _ => {
+            let output = Command::new("git")
+                .args(["rev-parse", "HEAD"])
+                .current_dir(env!("CARGO_MANIFEST_DIR"))
+                .output()
+                .unwrap();
+            assert!(output.status.success(), "record the tested source revision");
+            text(&output.stdout)
+        }
+    };
     let receipt = serde_json::json!({
-        "source_revision": text(&revision.stdout).trim(),
+        "source_revision": revision.trim(),
         "executable": binary,
         "executable_sha256": format!("{:x}", Sha256::digest(fs::read(&binary).unwrap())),
         "arguments": arguments,
