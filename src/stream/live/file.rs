@@ -4,8 +4,8 @@ use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
 
 use sha2::{Digest, Sha256};
 
-use super::source::Retained;
-use super::{
+use super::super::source::Retained;
+use super::super::{
     file_stem, hex_digest, warn, Tally, Writer, BATCH_EVENTS, PART_DIGEST_LEN, READ_BUFFER,
 };
 use crate::cursors::{ByteCursor, CursorRecord, Cursors, SourceCheckpoint};
@@ -29,7 +29,7 @@ fn verified_prefix(file: &mut File, offset: u64, expected: [u8; 32]) -> Result<O
     Ok((observed == expected).then_some(hash))
 }
 
-pub(super) fn stream_file(
+pub(in crate::stream) fn stream_file(
     writer: &mut Writer,
     cursors: &mut Cursors,
     adapter: &dyn Adapter,

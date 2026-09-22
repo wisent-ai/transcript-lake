@@ -4,16 +4,18 @@ mod adapters;
 mod args;
 mod commands;
 mod cursors;
-mod duck;
 mod hook_segments;
-mod labels;
+mod lake;
 mod oko_export;
-mod paths;
-mod redact;
-mod sources;
+mod record;
 mod stream;
-mod types;
 mod util;
+
+/// The Lake's own modules keep their familiar paths: `crate::paths`,
+/// `crate::duck`, `crate::sources`, `crate::types`, `crate::redact` and
+/// `crate::labels` are where every caller already looks for them.
+pub use lake::{duck, paths, sources};
+pub use record::{labels, redact, types};
 
 use std::process::ExitCode;
 

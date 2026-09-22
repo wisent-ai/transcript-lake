@@ -138,7 +138,7 @@ duplicating retained occurrences. Existing adopted-source records are retained
 when a different root becomes selected.
 
 
-`transcript-lake onboarding` walks the first-use journey this repository ships in `onboarding_first_use.json`: it discovers existing supported roots, adopts an explicitly selected source through the same operation as `adopt`, and finally runs one real query over the canonical views. Run `transcript-lake onboarding --source <runtime> --root <discovered-path>` to perform the adoption from the walkthrough; `--skip-source` leaves an empty usable Lake and records no false success. Progress is recorded per machine under `~/.local/state/transcript-lake/onboarding.json`, outside `LAKE_DATA`; `--reset` discards it and replays the journey.
+`transcript-lake onboarding` walks the first-use journey this repository ships in `assets/onboarding_first_use.json`: it discovers existing supported roots, adopts an explicitly selected source through the same operation as `adopt`, and finally runs one real query over the canonical views. Run `transcript-lake onboarding --source <runtime> --root <discovered-path>` to perform the adoption from the walkthrough; `--skip-source` leaves an empty usable Lake and records no false success. Progress is recorded per machine under `~/.local/state/transcript-lake/onboarding.json`, outside `LAKE_DATA`; `--reset` discards it and replays the journey.
 
 Start the foreground stream:
 

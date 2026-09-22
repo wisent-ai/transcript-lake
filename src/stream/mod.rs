@@ -11,12 +11,12 @@ use sha2::{Digest, Sha256};
 use crate::cursors::{open_writer_lease, CursorRecord, Cursors};
 use crate::util::{machine_name, Error, Result};
 
-mod file;
+
 mod live;
 mod replay;
 mod source;
 mod writer;
-use file::stream_file;
+use live::file::stream_file;
 pub use live::{catch_up, stream_paths};
 pub use replay::replay;
 use writer::Writer;

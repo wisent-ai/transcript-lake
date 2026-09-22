@@ -1,5 +1,9 @@
 //! Startup catch-up and filesystem-notification ingestion use one cursor contract.
-use super::{ingest_source_locked, stream_file, total_hits, warn, Tally, Writer};
+pub(super) mod file;
+
+use file::stream_file;
+
+use super::{ingest_source_locked, total_hits, warn, Tally, Writer};
 use crate::cursors::{open_writer_lease, CursorRecord, Cursors};
 use crate::hook_segments::{catch_up_closed_hook_segments, stream_hook_segment};
 use crate::types::HOOKS;
