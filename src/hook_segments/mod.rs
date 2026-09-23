@@ -32,7 +32,6 @@ pub struct SegmentReport {
     pub invalid: u64,
 }
 
-
 mod adapter;
 
 mod commit;
@@ -40,7 +39,6 @@ mod reading;
 mod segment;
 
 pub use adapter::hooks_adapter;
-
 
 use commit::{process_segment, Outcome};
 use reading::*;
@@ -154,9 +152,3 @@ pub fn catch_up_closed_hook_segments(
     }
     Ok(report)
 }
-
-/// Pseudo-adapter over the adaptive hook decision log, used when no closed-segment
-/// ready directory exists. Record shape, from the hooks-rotator telemetry writer:
-/// `{ ts (epoch millis), event, id, decision, ms, code, tool, timedOut, infra, reason }`.
-/// Downstream SQL relies on `extra.decision` / `extra.event` / `extra.infra` passing
-/// through unchanged.

@@ -2,12 +2,11 @@
 //! call and result among them, including a result that reports its own
 //! failure through a flag the driver read as JavaScript truthiness.
 
-use serde_json::{Map, Value};
+use serde_json::Value;
 
 use crate::types::RawEvent;
 
-use super::super::cap;
-
+use super::super::text_field;
 
 /// JS truthiness for the `result.isError` guard, which was a bare `if (result.isError)`.
 pub(super) fn is_truthy(value: &Value) -> bool {
@@ -22,7 +21,10 @@ pub(super) fn is_truthy(value: &Value) -> bool {
     }
 }
 
-pub(super) fn map_message(msg: Option<&Value>, make: &dyn Fn(&str, &str) -> RawEvent) -> Vec<RawEvent> {
+pub(super) fn map_message(
+    msg: Option<&Value>,
+    make: &dyn Fn(&str, &str) -> RawEvent,
+) -> Vec<RawEvent> {
     let Some(msg) = msg.filter(|value| value.is_object()) else {
         return Vec::new();
     };

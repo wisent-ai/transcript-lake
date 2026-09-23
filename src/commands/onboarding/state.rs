@@ -14,9 +14,14 @@ use crate::util::{home_dir, machine_name, write_json, Error, Result};
 
 use super::*;
 
+/// Recorded progress for this machine, or a fresh attempt. `reset` discards
 /// what was recorded rather than resuming it, which is what replay means here:
 /// the walk starts again at the journey's entry screen.
-pub(super) fn load_or_start_state(definition: &Value, revision: &str, reset: bool) -> Result<Value> {
+pub(super) fn load_or_start_state(
+    definition: &Value,
+    revision: &str,
+    reset: bool,
+) -> Result<Value> {
     let path = state_path();
     if !reset && path.exists() {
         let existing: Value = serde_json::from_str(&fs::read_to_string(&path)?)?;
@@ -71,7 +76,9 @@ pub(super) fn subject_hash() -> String {
     let user = std::env::var("USER").unwrap_or_else(|_| "unknown-user".to_string());
     format!(
         "{:x}",
-        Sha256::digest(format!("transcript-lake-onboarding\0{user}\0{}", machine_name()).as_bytes())
+        Sha256::digest(
+            format!("transcript-lake-onboarding\0{user}\0{}", machine_name()).as_bytes()
+        )
     )
 }
 

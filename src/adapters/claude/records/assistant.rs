@@ -2,11 +2,11 @@
 //! and the token spend attached to it so a reply that only thought still
 //! reports what it cost.
 
-use serde_json::Value;
+use serde_json::{Map, Value};
 
 use crate::types::RawEvent;
 
-use super::super::{cap, text_field};
+use super::super::{num_field, text_field};
 
 pub(super) fn map_assistant(rec: &Value, make: &dyn Fn(&str, &str) -> RawEvent) -> Vec<RawEvent> {
     let Some(msg) = rec.get("message").filter(|value| value.is_object()) else {

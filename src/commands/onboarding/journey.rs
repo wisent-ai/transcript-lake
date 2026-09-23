@@ -17,7 +17,9 @@ pub(super) fn canonical_definition() -> Result<Value> {
         || definition.get("journey_id").and_then(Value::as_str) != Some(JOURNEY_ID)
         || definition.get("first_success_fact").and_then(Value::as_str) != Some(FIRST_SUCCESS_FACT)
     {
-        return Err(Error("canonical onboarding journey identity mismatch".into()));
+        return Err(Error(
+            "canonical onboarding journey identity mismatch".into(),
+        ));
     }
     let entry = string_field(&definition, "entry_screen_id")
         .ok_or_else(|| Error("canonical onboarding journey has no entry screen".into()))?;
@@ -37,7 +39,10 @@ pub(super) fn canonical_definition() -> Result<Value> {
             )));
         }
         if screen.get("screen_kind").and_then(Value::as_str).is_none()
-            || screen.get("presentation").and_then(Value::as_object).is_none()
+            || screen
+                .get("presentation")
+                .and_then(Value::as_object)
+                .is_none()
         {
             return Err(Error(format!(
                 "canonical onboarding screen is incomplete: {id}"
@@ -116,7 +121,9 @@ pub(super) fn evidence_satisfied(screen: &Value, evidence: &Map<String, Value>) 
     if rule.get("kind").and_then(Value::as_str) != Some("fact")
         || rule.get("operator").and_then(Value::as_str) != Some("eq")
     {
-        return Err(Error("unsupported canonical onboarding evidence rule".into()));
+        return Err(Error(
+            "unsupported canonical onboarding evidence rule".into(),
+        ));
     }
     let name = rule
         .get("fact")
@@ -174,5 +181,3 @@ pub(super) fn set(state: &mut Value, key: &str, value: Value) -> Result<()> {
 pub(super) fn string_field(value: &Value, key: &str) -> Option<String> {
     value.get(key).and_then(Value::as_str).map(str::to_string)
 }
-
-/// Recorded progress for this machine, or a fresh attempt. `reset` discards

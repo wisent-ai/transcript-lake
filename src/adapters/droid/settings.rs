@@ -5,6 +5,8 @@ use serde_json::{Map, Value};
 
 use crate::types::{Parser, ParserCtx, RawEvent};
 
+use super::prune;
+
 /// A sidecar is small and is not line-oriented: the lines are kept until the
 /// end of the file, where they are parsed once as one JSON document.
 pub(super) struct SettingsParser {

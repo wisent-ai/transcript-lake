@@ -6,7 +6,7 @@ use serde_json::{Map, Value};
 
 use crate::types::{Parser, ParserCtx, RawEvent};
 
-use super::{clip, epoch_iso, js_string, number, prune, text_of, PENDING_CAP};
+use super::{clip, epoch_iso, js_string, prune, text_of, PENDING_CAP};
 
 mod message;
 

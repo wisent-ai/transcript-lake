@@ -1,15 +1,15 @@
 //! What one message record contributes: its content blocks in order, the tool
 //! calls and results among them, and the token spend recorded beside them.
 
-use serde_json::{Map, Value};
+use serde_json::Value;
 
 use crate::types::RawEvent;
 
-use super::super::{clip, js_string, number, prune, text_of};
+use super::super::{js_string, number, prune, text_of};
 use super::OmpParser;
 
 impl OmpParser {
-    fn message_events(&self, rec: &Value, ts: Option<&String>) -> Vec<RawEvent> {
+    pub(super) fn message_events(&self, rec: &Value, ts: Option<&String>) -> Vec<RawEvent> {
         let Some(msg) = rec.get("message").filter(|value| value.is_object()) else {
             let mut event = self.make(ts, "meta", "");
             event.extra.insert("kind".into(), Value::from("message"));
@@ -118,5 +118,4 @@ impl OmpParser {
         }
         events
     }
-
 }

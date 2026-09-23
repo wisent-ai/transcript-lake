@@ -1,16 +1,15 @@
 //! What `doctor` checks, one named check at a time, and the verdict it prints
 //! when a check fails: what is wrong and the command that repairs it.
 
-use std::fs;
 use std::io::Write;
 use std::path::PathBuf;
 
 use serde::Serialize;
 
 use crate::args::{parse_options, require_flags_only};
-use crate::paths::lake_paths;
+use crate::paths::{lake_paths, read_cursor_status};
 
-use super::{source_report, status_snapshot, SourceRow};
+use super::{source_report, SourceRow};
 use crate::util::{write_json, Result};
 
 #[derive(Debug, Serialize)]

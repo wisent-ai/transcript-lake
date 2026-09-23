@@ -5,18 +5,19 @@
 use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::mpsc::{channel, RecvTimeoutError};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{channel, RecvTimeoutError};
 
 use notify::{RecursiveMode, Watcher};
 use serde_json::{json, Map, Value};
 
 use crate::args::{parse_options, require_flags_only};
-use crate::paths::{hook_source_roots, STREAM_STATUS_FILE};
+use crate::paths::{resolve_data_dir, STREAM_STATUS_FILE};
 use crate::util::{now_iso, Error, Result};
 
 use super::{source_roots, TICK};
 
+/// One structured stream line: JSON when requested, otherwise timestamped
 /// key=value text for service logs.
 pub(super) fn log(json: bool, kind: &str, details: &[(&str, Value)]) {
     let ts = now_iso();

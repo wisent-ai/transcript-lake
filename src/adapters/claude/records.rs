@@ -6,7 +6,7 @@ use serde_json::{Map, Value};
 
 use crate::types::{Parser, ParserCtx, RawEvent};
 
-use super::{cap, num_field, text_field};
+use super::{cap, text_field};
 
 pub(super) struct ClaudeParser {
     session_id: Option<String>,
@@ -205,7 +205,6 @@ fn persisted_output_path(text: &str) -> Option<String> {
     let reference = text[start..stop].trim();
     (!reference.is_empty()).then(|| reference.to_string())
 }
-
 
 mod assistant;
 

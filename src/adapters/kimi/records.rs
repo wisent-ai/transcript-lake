@@ -2,6 +2,8 @@
 //! project and timestamp it has seen so far, and what each record and content
 //! block contributes, down to the tool result that reports its own failure.
 
+use std::collections::HashMap;
+
 use serde_json::{Map, Value};
 
 use crate::types::{Parser, ParserCtx, RawEvent};

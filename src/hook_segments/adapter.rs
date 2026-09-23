@@ -11,6 +11,11 @@ use crate::types::{Adapter, Parser, ParserCtx, RawEvent, SessionEntry};
 
 use super::*;
 
+/// Pseudo-adapter over the adaptive hook decision log, used when no closed-segment
+/// ready directory exists. Record shape, from the hooks-rotator telemetry writer:
+/// `{ ts (epoch millis), event, id, decision, ms, code, tool, timedOut, infra, reason }`.
+/// Downstream SQL relies on `extra.decision` / `extra.event` / `extra.infra` passing
+/// through unchanged.
 pub fn hooks_adapter() -> Box<dyn Adapter> {
     Box::new(Hooks)
 }

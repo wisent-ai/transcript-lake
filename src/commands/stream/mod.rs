@@ -1,18 +1,13 @@
 //! Recovery replay and the real-time source stream.
-use std::collections::BTreeSet;
-use std::fs;
 use std::path::{Component, Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{channel, RecvTimeoutError};
 use std::time::Duration;
 
-use notify::{RecursiveMode, Watcher};
-use serde_json::{json, Map, Value};
+use serde_json::Value;
 
 use crate::args::{parse_options, require_flags_only, require_runtime};
-use crate::paths::{hook_source_roots, resolve_data_dir, STREAM_STATUS_FILE};
+use crate::paths::{hook_source_roots, resolve_data_dir};
 use crate::stream::{replay as run_replay, ReplayOptions};
-use crate::util::{absolute, home_dir, now_iso, write_json, Error, Result};
+use crate::util::{absolute, home_dir, write_json, Error, Result};
 
 /// How often the foreground loop wakes to observe a stop signal.
 pub(super) const TICK: Duration = Duration::from_millis(250);
@@ -90,9 +85,7 @@ pub(super) fn source_roots(data_dir: &Path) -> Result<Vec<PathBuf>> {
     Ok(roots)
 }
 
-/// One structured stream line: JSON when requested, otherwise timestamped
-
-mod service;
 mod predecessor;
+mod service;
 
 pub use service::stream;

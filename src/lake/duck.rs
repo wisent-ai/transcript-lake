@@ -12,8 +12,8 @@ use crate::paths::resolve_data_dir;
 use crate::util::{quote_sql, run_binary, Error, Result};
 
 /// The canonical views, embedded at build time from `sql/`.
-const VIEWS_SQL: &str = include_str!("../sql/views.sql");
-const SIGNALS_SQL: &str = include_str!("../sql/signals.sql");
+const VIEWS_SQL: &str = include_str!("../../sql/views.sql");
+const SIGNALS_SQL: &str = include_str!("../../sql/signals.sql");
 
 /// Read one embedded script, or its override from `TRANSCRIPT_LAKE_SQL`.
 ///

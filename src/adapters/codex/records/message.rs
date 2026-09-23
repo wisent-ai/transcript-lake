@@ -6,11 +6,11 @@ use serde_json::Value;
 
 use crate::types::RawEvent;
 
-use super::super::{cap, text_field};
+use super::super::text_field;
 use super::CodexParser;
 
 impl CodexParser {
-    fn map_message_item(&mut self, payload: &Value, ts: &str) -> Vec<RawEvent> {
+    pub(super) fn map_message_item(&mut self, payload: &Value, ts: &str) -> Vec<RawEvent> {
         let Some(role) = text_field(payload, "role") else {
             return Vec::new();
         };
