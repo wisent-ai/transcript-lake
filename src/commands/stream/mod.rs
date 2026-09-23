@@ -93,5 +93,6 @@ pub(super) fn source_roots(data_dir: &Path) -> Result<Vec<PathBuf>> {
 /// One structured stream line: JSON when requested, otherwise timestamped
 
 mod service;
+mod predecessor;
 
 pub use service::stream;

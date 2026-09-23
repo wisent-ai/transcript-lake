@@ -152,6 +152,7 @@ pub fn stream(rest: &[String]) -> Result<i32> {
     let parsed = parse_options("stream", rest, &[], &["json"])?;
     require_flags_only("stream", &parsed)?;
     let json_output = parsed.flag("json");
+    super::predecessor::retire();
     let data_dir = resolve_data_dir(None);
     remove_obsolete_summary(&data_dir)?;
     let roots = source_roots(&data_dir)?;
