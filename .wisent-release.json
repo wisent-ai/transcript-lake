@@ -10,24 +10,7 @@
   "platforms": {
     "darwin-arm64": {
       "runner_platform": "darwin-arm64",
-      "quality": [
-        {
-          "name": "source-recovery-and-projections",
-          "argv": [
-            "cargo",
-            "test",
-            "--locked",
-            "--test",
-            "source_rewrite",
-            "--test",
-            "oko_export_role",
-            "--test",
-            "show_out",
-            "--target-dir",
-            ".wisent-output/target"
-          ]
-        }
-      ],
+      "quality": [],
       "build": {
         "argv": [
           "cargo",
@@ -44,6 +27,12 @@
           ".wisent-output/target"
         ]
       },
+      "tests": [
+        {
+          "name": "source-recovery-and-projections",
+          "argv": ["cargo", "test", "--locked", "--test", "source_rewrite", "--test", "oko_export_role", "--test", "show_out", "--target-dir", ".wisent-output/target"]
+        }
+      ],
       "stage": {
         "target/aarch64-apple-darwin/release/transcript-lake": "bin/transcript-lake"
       }
