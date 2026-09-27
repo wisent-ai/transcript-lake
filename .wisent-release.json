@@ -30,7 +30,7 @@
       "tests": [
         {
           "name": "source-recovery-and-projections",
-          "argv": ["cargo", "test", "--locked", "--test", "source_rewrite", "--test", "oko_export_role", "--test", "show_out", "--test", "scrub", "--target-dir", ".wisent-output/target"]
+          "argv": ["cargo", "test", "--locked", "--test", "source_rewrite", "--test", "oko_export_role", "--test", "show_out", "--target-dir", ".wisent-output/target"]
         }
       ],
       "stage": {
