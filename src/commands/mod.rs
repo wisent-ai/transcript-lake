@@ -7,5 +7,4 @@ pub mod inspect;
 pub mod label;
 pub mod onboarding;
 pub mod read;
-pub mod scrub;
 pub mod stream;

@@ -44,7 +44,3 @@ path = "tests/oko_export/role.rs"
 [[test]]
 name = "source_rewrite"
 path = "tests/source_rewrite/main.rs"
-
-[[test]]
-name = "scrub"
-path = "tests/scrub/main.rs"
