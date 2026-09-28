@@ -217,15 +217,8 @@ pub fn signals(rest: &[String]) -> Result<i32> {
     let parsed = parse_options("signals", rest, &["report", "limit"], &["json"])?;
     require_flags_only("signals", &parsed)?;
     let view = match parsed.value("report").unwrap_or("freshness") {
-        "frustration" => "oko_frustration",
-        "overlap" => "hook_frustration_overlap",
-        "daily" => "hook_frustration_daily",
         "freshness" => "oko_lake_freshness",
-        _ => {
-            return Err(Error(
-                "--report must be frustration, overlap, daily, or freshness".into(),
-            ))
-        }
+        _ => return Err(Error("--report must be freshness".into())),
     };
     let limit = bounded_integer(parsed.value("limit"), "--limit", DEFAULT_LIMIT, MAX_LIMIT)?;
     // Signal views cross Oko with the Lake, so they are loaded on demand
