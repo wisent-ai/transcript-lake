@@ -107,6 +107,12 @@ fn map_user(rec: &Value, make: &dyn Fn(&str, &str) -> RawEvent) -> Vec<RawEvent>
     if rec.get("isSidechain") == Some(&Value::Bool(true)) {
         flag.insert("sidechain".into(), Value::Bool(true));
     }
+    // promptSource is who sent the turn: "sdk" when a program started it
+    // (`claude -p`, the SDK), so readers tell an automation's session from
+    // the operator's by what Claude Code recorded, not by the prompt's words.
+    if let Some(source) = rec.get("promptSource").and_then(Value::as_str) {
+        flag.insert("prompt_source".into(), Value::from(source));
+    }
     if rec.get("isMeta") == Some(&Value::Bool(true)) {
         event_type = "meta";
         flag.insert("kind".into(), Value::from("injected"));
