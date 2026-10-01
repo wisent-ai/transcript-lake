@@ -4,9 +4,12 @@
 
 use std::collections::BTreeSet;
 use std::fs;
+use std::io::Read;
+use std::os::fd::IntoRawFd;
+use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{channel, RecvTimeoutError};
+use std::sync::atomic::{AtomicI32, Ordering};
+use std::sync::mpsc::{channel, Sender};
 
 use notify::{RecursiveMode, Watcher};
 use serde_json::{json, Map, Value};
@@ -15,7 +18,14 @@ use crate::args::{parse_options, require_flags_only};
 use crate::paths::{resolve_data_dir, STREAM_STATUS_FILE};
 use crate::util::{now_iso, Error, Result};
 
-use super::{source_roots, TICK};
+use super::source_roots;
+
+/// What wakes the foreground loop: a changed source path or a stop signal.
+/// Both arrive on one channel, so the loop blocks on it with no tick.
+enum Wake {
+    Path(PathBuf),
+    Stop,
+}
 
 /// One structured stream line: JSON when requested, otherwise timestamped
 /// key=value text for service logs.
@@ -49,26 +59,47 @@ pub(super) fn log(json: bool, kind: &str, details: &[(&str, Value)]) {
     }
 }
 
-static STOP: AtomicBool = AtomicBool::new(false);
+/// Write end of the self-pipe the signal handler pokes; -1 until installed.
+static STOP_FD: AtomicI32 = AtomicI32::new(-1);
 
 extern "C" fn on_stop_signal(_signal: i32) {
-    STOP.store(true, Ordering::SeqCst);
+    extern "C" {
+        fn write(fd: i32, buffer: *const u8, count: usize) -> isize;
+    }
+    let fd = STOP_FD.load(Ordering::SeqCst);
+    if fd >= 0 {
+        let byte = 1u8;
+        // write(2) is async-signal-safe; nothing else runs in the handler.
+        unsafe {
+            write(fd, &byte, 1);
+        }
+    }
 }
 
 /// Ask for a clean stop on SIGINT and SIGTERM instead of the default kill, so
 /// the loop returns the success status a supervisor expects from a requested
-/// shutdown.
-pub(super) fn install_stop_handlers() {
+/// shutdown. The handler writes one byte to a socket pair; a reader thread
+/// turns it into `Wake::Stop` on the loop's own channel.
+fn install_stop_handlers(wake: Sender<Wake>) -> Result<()> {
     extern "C" {
         fn signal(signal: i32, handler: usize) -> usize;
     }
     const SIGINT: i32 = 2;
     const SIGTERM: i32 = 15;
+    let (mut reader, writer) = UnixStream::pair()
+        .map_err(|error| Error(format!("stream could not create its stop channel: {error}")))?;
+    STOP_FD.store(writer.into_raw_fd(), Ordering::SeqCst);
+    std::thread::spawn(move || {
+        let mut byte = [0u8; 1];
+        let _ = reader.read(&mut byte);
+        let _ = wake.send(Wake::Stop);
+    });
     let handler = on_stop_signal as extern "C" fn(i32) as usize;
     unsafe {
         signal(SIGINT, handler);
         signal(SIGTERM, handler);
     }
+    Ok(())
 }
 
 pub(super) fn write_stream_state(data_dir: &Path, state: &Value) -> Result<()> {
@@ -163,10 +194,11 @@ pub fn stream(rest: &[String]) -> Result<i32> {
         ));
     }
     let (sender, receiver) = channel();
+    let paths = sender.clone();
     let mut watcher = notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
         if let Ok(event) = event {
             for path in event.paths {
-                let _ = sender.send(path);
+                let _ = paths.send(Wake::Path(path));
             }
         }
     })
@@ -181,7 +213,7 @@ pub fn stream(rest: &[String]) -> Result<i32> {
                 ))
             })?;
     }
-    install_stop_handlers();
+    install_stop_handlers(sender)?;
     let started_at = now_iso();
     write_stream_state(
         &data_dir,
@@ -226,15 +258,19 @@ pub fn stream(rest: &[String]) -> Result<i32> {
         }),
     )?;
 
-    while !STOP.load(Ordering::SeqCst) {
-        let first = match receiver.recv_timeout(TICK) {
-            Ok(path) => path,
-            Err(RecvTimeoutError::Timeout) => continue,
-            Err(RecvTimeoutError::Disconnected) => break,
-        };
+    // Blocks until a path changes or a stop signal arrives; no tick.
+    while let Ok(Wake::Path(first)) = receiver.recv() {
         let mut pending = BTreeSet::new();
         pending.insert(first);
-        pending.extend(receiver.try_iter());
+        let mut stop = false;
+        for wake in receiver.try_iter() {
+            match wake {
+                Wake::Path(path) => {
+                    pending.insert(path);
+                }
+                Wake::Stop => stop = true,
+            }
+        }
         let paths: Vec<PathBuf> = pending.into_iter().collect();
         log(
             json_output,
@@ -245,6 +281,9 @@ pub fn stream(rest: &[String]) -> Result<i32> {
             ],
         );
         process_paths(json_output, &data_dir, &paths);
+        if stop {
+            break;
+        }
     }
     for root in &roots {
         let _ = watcher.unwatch(root);
