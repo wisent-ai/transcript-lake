@@ -7,6 +7,9 @@ description = "Privacy-masked local event archive for coding-agent transcripts"
 license = "MIT"
 repository = "https://github.com/wisent-ai/transcript-lake"
 publish = false
+# No test target is built until the operator approves one with
+# `tama tests approve`.
+autotests = false
 
 [[bin]]
 name = "transcript-lake"
@@ -32,15 +35,3 @@ notify = "8"
 opt-level = 3
 lto = "thin"
 strip = true
-
-[[test]]
-name = "show_out"
-path = "tests/show_out/main.rs"
-
-[[test]]
-name = "oko_export_role"
-path = "tests/oko_export/role.rs"
-
-[[test]]
-name = "source_rewrite"
-path = "tests/source_rewrite/main.rs"
