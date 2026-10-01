@@ -4,7 +4,8 @@
 //! A host ran several streamers: the hand-made
 //! `com.wisent.transcript-lake-stream`, the Stado-minted
 //! `com.wisent.compute.service.transcript-lake` from before the catalog named
-//! the unit, and an hourly secret scrub whose work is retired, not moved.
+//! the unit, the daily Claude transcript sweep `ai.wisent.claude-transcripts-push`
+//! and an hourly secret scrub whose work is retired, not moved.
 //! Only one streamer holds the writer lease at a time, so every other one
 //! kept a process and a watcher for nothing. Started by launchd as the
 //! declared unit, `stream` boots each predecessor out and removes its launch
@@ -18,10 +19,11 @@ pub(super) const DECLARED_UNIT: &str = "com.wisent.transcript-lake";
 /// The units whose work the declared service does or has retired: the
 /// catalog's retired units of Transcript Lake, in the same order.
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
-const PREDECESSORS: [&str; 3] = [
+const PREDECESSORS: [&str; 4] = [
     "com.wisent.compute.service.transcript-lake",
     "com.wisent.transcript-lake-stream",
     "com.wisent.transcript-lake-secret-scrub",
+    "ai.wisent.claude-transcripts-push",
 ];
 
 pub(super) fn retire() {
