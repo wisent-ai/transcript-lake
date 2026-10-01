@@ -156,6 +156,9 @@ fn dispatch(command: &str, rest: &[String]) -> Result<i32> {
     }
 }
 
+/// The exit status of an invocation that is itself wrong; failures exit 1.
+const EXIT_USAGE: i32 = 2;
+
 fn run() -> Result<i32> {
     let input: Vec<String> = std::env::args().skip(1).collect();
     let mut args: Vec<String> = Vec::new();
@@ -168,14 +171,19 @@ fn run() -> Result<i32> {
             index += 1;
             continue;
         }
+        // A malformed global flag is a usage error: say so and exit 2.
         if selected_data_dir.is_some() {
-            return Err(Error("duplicate global --data-dir".into()));
+            eprintln!("error: duplicate global --data-dir\n\n{USAGE}");
+            return Ok(EXIT_USAGE);
         }
         match input.get(index + 1) {
             Some(value) if !value.is_empty() && !value.starts_with("--") => {
                 selected_data_dir = Some(util::absolute(value).to_string_lossy().to_string());
             }
-            _ => return Err(Error("--data-dir requires a path".into())),
+            _ => {
+                eprintln!("error: --data-dir requires a path\n\n{USAGE}");
+                return Ok(EXIT_USAGE);
+            }
         }
         index += 2;
     }
@@ -201,7 +209,7 @@ fn run() -> Result<i32> {
     }
     if command_help(command).is_none() && command != "help" {
         eprintln!("error: unknown command: {command}\n\n{USAGE}");
-        return Ok(1);
+        return Ok(EXIT_USAGE);
     }
     dispatch(command, rest)
 }

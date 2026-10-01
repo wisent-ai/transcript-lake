@@ -176,6 +176,8 @@ The CLI is the canonical human and automation interface.
 | Projection recovery | `rebuild-oko [--reindex]`, `oko-refresh` | Reconstruct the Oko projection or explicitly reindex it |
 | Derived cleanup | `clean [--target <parquet|oko|all>] [--apply]` | Dry-run by default; removes rebuildable data only with `--apply` |
 
+An unknown command, a repeated global `--data-dir`, or a `--data-dir` without a path prints the error and the usage and exits 2; any other failure exits 1.
+
 Canonical event and adapter interfaces are machine contracts documented in [the architecture contract](https://transcript-lake.wisent.com/docs/lake/). Every supported operation maps to [one canonical example](https://transcript-lake.wisent.com/docs/examples/).
 
 ## Operational model
