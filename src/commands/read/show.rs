@@ -1,8 +1,8 @@
 //! One conversation, rendered whole — to the terminal or to a file.
 //!
-//! `show` reconstructs a session from the canonical views. It grew a `--out`
-//! path on 2026-09-11 because the operator asked for every message of a
-//! session in one file, and the only way to produce one was a shell
+//! `show` reconstructs a session from the canonical views. It has a `--out`
+//! path because every message of a session in one file used to be
+//! producible only through a shell
 //! redirection: the product printed, the shell saved. A redirection truncates
 //! the target before the command runs, so a refusal or a lost connection left
 //! an empty file behind and nobody could tell a complete record from a broken
@@ -84,7 +84,9 @@ fn destination(raw: Option<&str>) -> Result<Option<PathBuf>> {
             path.display()
         )));
     }
-    let parent = path.parent().filter(|parent| !parent.as_os_str().is_empty());
+    let parent = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty());
     if let Some(parent) = parent {
         if !parent.is_dir() {
             return Err(Error(format!(
@@ -102,12 +104,8 @@ fn write_record(path: &Path, body: &str) -> Result<u64> {
     let mut partial = path.as_os_str().to_owned();
     partial.push(".partial");
     let partial = PathBuf::from(partial);
-    fs::write(&partial, body).map_err(|error| {
-        Error(format!(
-            "cannot write {}: {error}",
-            partial.display()
-        ))
-    })?;
+    fs::write(&partial, body)
+        .map_err(|error| Error(format!("cannot write {}: {error}", partial.display())))?;
     fs::rename(&partial, path).map_err(|error| {
         let _ = fs::remove_file(&partial);
         Error(format!("cannot place {}: {error}", path.display()))

@@ -8,7 +8,7 @@
 //! truncation, or same-size rewrite rebuilds from all Lake partitions through
 //! bounded staging buffers. Session writes and cursor publication are atomic.
 //!
-//! This was one file of 1157 lines until 2026-09-12, and no edit could touch
+//! This was one file of over a thousand lines, and no edit could touch
 //! it: a source file over three hundred lines is refused here, so the export
 //! had become unmaintainable by the rule that guards every other file. The
 //! parts are unchanged and now sit where they belong - partition discovery in
