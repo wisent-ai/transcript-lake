@@ -113,7 +113,9 @@ fn map_user(rec: &Value, make: &dyn Fn(&str, &str) -> RawEvent) -> Vec<RawEvent>
     if let Some(source) = rec.get("promptSource").and_then(Value::as_str) {
         flag.insert("prompt_source".into(), Value::from(source));
     }
-    if rec.get("isMeta") == Some(&Value::Bool(true)) {
+    // A compaction summary (isCompactSummary) is the harness's text too.
+    let flagged = |name: &str| rec.get(name) == Some(&Value::Bool(true));
+    if flagged("isMeta") || flagged("isCompactSummary") {
         event_type = "meta";
         flag.insert("kind".into(), Value::from("injected"));
     }
