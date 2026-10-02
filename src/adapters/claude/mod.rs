@@ -2,8 +2,8 @@
 //!
 //! Frozen interface: `runtime`, `roots(home)`, `list_sessions(root)`, `parser(ctx)`.
 //! Adapters emit UNMASKED text (the stream masks) and never do IO in `on_line`.
-//! Contract: malformed lines are tolerated silently (no events). Verified against live
-//! files on this machine: record types user | assistant | system | summary carry
+//! Contract: malformed lines are tolerated silently (no events).
+//! Record types user | assistant | system | summary carry
 //! messages; permission-mode, file-history-snapshot, attachment, ai-title, last-prompt,
 //! queue-operation, progress and mode records are bookkeeping noise and are dropped.
 use std::fs;

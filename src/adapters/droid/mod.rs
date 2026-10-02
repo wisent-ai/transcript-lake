@@ -3,7 +3,7 @@
 //! Source layout: `HOME/.factory/sessions/<uuid>.jsonl` (legacy, flat) and
 //! `HOME/.factory/sessions/<encoded-cwd>/<uuid>.jsonl`, each with an optional
 //! `<uuid>.settings.json` sidecar (multi-line JSON: providerLock, tokenUsage).
-//! Record types verified across a wide sample of real files on this machine:
+//! Supported record types:
 //!   session_start — first line, no timestamp; legacy files carry only
 //!     `{ id, title, owner }`, newer ones add cwd / version / sessionTitle,
 //!   message — `{ id, timestamp, parentId, message: { role, content } }` with

@@ -3,7 +3,7 @@
 //!
 //! Frozen interface: `runtime`, `roots(home)`, `list_sessions(root)`, `parser(ctx)`.
 //! Adapters emit UNMASKED text (the stream masks) and never do IO in `on_line`.
-//! Shapes verified against the largest live wire files on this machine:
+//! Supported wire shapes:
 //!   metadata {protocol_version, app_version, created_at(epoch ms)}
 //!   config.update {profileName, systemPrompt}          -> meta only, prompt dropped
 //!   context.append_message {message:{role, content:[{type:'text', text}],
