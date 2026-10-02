@@ -169,7 +169,7 @@ The CLI is the canonical human and automation interface.
 | Sessions and events | `sessions [--interrupted]`, `events` | Filtered recent normalized records; `--interrupted` keeps only conversations left without an answer |
 | Text search | `search <text> [--runtime <r>] [--session <id>] [--type <t>] [--limit <n>] [--json]` | Newest-first literal substring matches over masked event text |
 | Conversation restore | `show <session-id> [--include <types>] [--limit <n>] [--out <path>] [--json]` | One conversation reconstructed oldest turn first, full masked text, with a rendered/matched footer; `--out` saves that record to a file itself, so nobody needs a shell redirection that truncates the target before the read even runs |
-| Session labels | `label add`, `label list`, `label aspects` | Operator-owned aspect/value annotations over sessions |
+| Session labels | `label add`, `label remove`, `label list`, `label aspects` | Operator-owned aspect/value annotations over sessions; `remove` withdraws one by appending a record with no value, so the history stays whole |
 | Statistics and signals | `stats`, `hooks`, `signals` | Usage aggregates, adaptive-hook decisions, and Oko/Lake correlations |
 | Advanced SQL | `query [--json] \"<sql>\"` | DuckDB result or actionable dependency error |
 | Compact | `compact [--source <runtime>] [--json]` | Per-runtime NDJSON-to-Parquet report |

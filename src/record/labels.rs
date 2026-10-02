@@ -28,14 +28,17 @@ static SOURCE_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(SOURCE_PATTERN).expect("source pattern"));
 
 /// One label assignment, serialized in the field order every existing
-/// labels.ndjson line uses.
+/// labels.ndjson line uses. A withdrawal is the same record with no
+/// `value`: appended like an assignment, it is the latest row for its
+/// session and aspect, and the reads that keep the latest row then see no
+/// assignment in force — the log stays append-only and the history whole.
 #[derive(Debug, Serialize)]
 pub struct LabelRecord {
     pub ts: String,
     pub session_id: String,
     pub runtime: String,
     pub aspect: String,
-    pub value: String,
+    pub value: Option<String>,
     pub note: Option<String>,
     pub source: String,
 }
@@ -92,13 +95,27 @@ pub fn label_record(
         session_id: session_id.to_string(),
         runtime: runtime.to_string(),
         aspect: aspect.to_string(),
-        value: value.to_string(),
+        value: Some(value.to_string()),
         note,
         source: if source.is_empty() {
             MANUAL.to_string()
         } else {
             source.to_string()
         },
+    }
+}
+
+/// The record that withdraws a session's label for one aspect.
+pub fn withdrawal_record(
+    session_id: &str,
+    runtime: &str,
+    aspect: &str,
+    note: Option<String>,
+    source: &str,
+) -> LabelRecord {
+    LabelRecord {
+        value: None,
+        ..label_record(session_id, runtime, aspect, "", note, source)
     }
 }
 

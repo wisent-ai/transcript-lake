@@ -168,10 +168,12 @@ LEFT JOIN final_request AS r ON r.runtime = t.runtime AND r.session_id = t.sessi
 ORDER BY s.last_ts DESC;
 
 -- Operator label store: one row per aspect/value assignment over a session,
--- appended by transcript-lake label add beneath <lake_data>/labels/.
--- The store is append-only; re-labeling a session and aspect adds a row and
--- the latest assignment wins in CLI reads, while this view exposes the full
--- history. Empty input and torn-final-line tolerance match the event view.
+-- appended by transcript-lake label add beneath <lake_data>/labels/, and one
+-- row with a NULL value per withdrawal, appended by transcript-lake label
+-- remove. The store is append-only; re-labeling a session and aspect adds a
+-- row and the latest row wins in CLI reads (a NULL value there means no
+-- assignment is in force), while this view exposes the full history. Empty
+-- input and torn-final-line tolerance match the event view.
 SET VARIABLE lake_labels_glob =
   coalesce(getvariable('lake_data'), '.') || '/labels/*.ndjson';
 
