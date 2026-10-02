@@ -73,7 +73,7 @@ Its value is one live parsing and masking boundary: every downstream consumer re
 | Analyst | Lake partitions exist | Cross-runtime session, tool, token, or hook evidence | Run `transcript-lake query "<sql>"` | Read-only over Lake data; requires local DuckDB |
 | Operator | NDJSON partitions consume too much scan time | Immutable additive Parquet mirrors | Run `transcript-lake compact` | Adds files; never deletes NDJSON partitions |
 | Oko operator | Oko must index multiple runtimes consistently | Stable per-session canonical JSONL | Keep the stream running | The projection changes in the same commit as canonical Lake events |
-| Maintainer | A projection must be reconstructed | Rebuildable per-session JSONL | Run `transcript-lake rebuild-oko` | Reads authoritative masked partitions; never touches vendor stores |
+| Maintainer | A projection must be reconstructed | Rebuildable per-session JSONL | Run `transcript-lake projection rebuild --target oko` | Reads authoritative masked partitions; never touches vendor stores |
 
 ## How the product works
 
@@ -173,7 +173,7 @@ The CLI is the canonical human and automation interface.
 | Statistics and signals | `stats`, `hooks`, `signals` | Usage aggregates, adaptive-hook decisions, and Oko/Lake correlations |
 | Advanced SQL | `query [--json] \"<sql>\"` | DuckDB result or actionable dependency error |
 | Compact | `compact [--source <runtime>] [--json]` | Per-runtime NDJSON-to-Parquet report |
-| Projection recovery | `rebuild-oko [--reindex]`, `oko-refresh` | Reconstruct the Oko projection or explicitly reindex it |
+| Projection recovery | `projection rebuild --target <consumer> [--reindex]`, `projection refresh --target <consumer>` | Reconstruct the projection one consumer imports, or hand it to that consumer's own CLI; `oko` is the one target today, and another is refused with the ones that exist |
 | Derived cleanup | `clean [--target <parquet|oko|all>] [--apply]` | Dry-run by default; removes rebuildable data only with `--apply` |
 
 An unknown command, a repeated global `--data-dir`, or a `--data-dir` without a path prints the error and the usage and exits 2; any other failure exits 1.
@@ -185,7 +185,7 @@ Canonical event and adapter interfaces are machine contracts documented in [the 
 - **Configuration:** global `--data-dir <path>` selects the state root for one invocation; `LAKE_DATA` remains the automation default. `LAKE_DATA/sources.json` retains every adopted source and names exactly one selected id; once present, `stream` watches and catches up only that root. `OKO_CLI` optionally selects the Oko executable. Unset values use documented local defaults; before any adoption the stream retains its legacy automatic discovery behavior.
 - **State ownership:** vendor runtimes own source transcripts; Transcript Lake alone owns `LAKE_DATA`; Oko owns its SQLite index and imports a derived Lake export read-only.
 - **SQL views:** loading `events` and `labels` creates no scratch file. Missing partitions expose the same column types with zero rows; reading them does not initialize an absent Lake. This does not restrict side effects explicitly requested by operator-supplied SQL.
-- **Projected row:** each line of `LAKE_DATA/exports/oko/runtime=<runtime>/<session>.jsonl` carries `lake_schema`, `uuid`, `ts`, `runtime`, `session_id`, `project`, `event_type`, `role`, `content`, `text`, `tool_name`, `model`, `tokens_in`, `tokens_out` and `extra`. `role` is `user` or `assistant` for the two speaking events and null for a tool call, a tool result, a thinking block and injected meta; `content` repeats an operator turn's words under the key a vendor-shaped reader expects, because a guard that verifies an operator quote accepts it only from a line that names the speaker and holds the words there. `rebuild-oko` rewrites every session with this shape.
+- **Projected row:** each line of `LAKE_DATA/exports/oko/runtime=<runtime>/<session>.jsonl` carries `lake_schema`, `uuid`, `ts`, `runtime`, `session_id`, `project`, `event_type`, `role`, `content`, `text`, `tool_name`, `model`, `tokens_in`, `tokens_out` and `extra`. `role` is `user` or `assistant` for the two speaking events and null for a tool call, a tool result, a thinking block and injected meta; `content` repeats an operator turn's words under the key a vendor-shaped reader expects, because a guard that verifies an operator quote accepts it only from a line that names the speaker and holds the words there. `projection rebuild --target oko` rewrites every session with this shape.
 - **Credentials:** core streaming needs none. Transcript contents may contain credentials, so masking occurs before durable Lake writes. Do not share a Lake directory as though it were anonymized data.
 - **Upgrades:** use an immutable release once available. State layout compatibility, rollback, and release channels are defined in [release policy](https://transcript-lake.wisent.com/docs/releases/).
 - **Observability:** `paths`, `sources`, `doctor`, `status --json`, and stream logs expose configuration, availability, freshness, counts, and failures.

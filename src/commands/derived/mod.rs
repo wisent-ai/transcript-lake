@@ -1,6 +1,8 @@
-//! Derived artifacts and the Oko handoff: Parquet mirrors, the canonical
-//! per-session export, the Oko reindex, and removal of rebuildable data.
-//! NDJSON partitions are authoritative and none of these commands delete them.
+//! Derived artifacts and the consumer projections: Parquet mirrors, the
+//! canonical per-session projection a consumer imports (Oko is the one
+//! projection target today, an adapter behind `projection`), and removal of
+//! rebuildable data. NDJSON partitions are authoritative and none of these
+//! commands delete them.
 use std::fs;
 use std::path::PathBuf;
 
@@ -87,38 +89,65 @@ pub fn compact(rest: &[String]) -> Result<i32> {
     Ok(exit_code)
 }
 
-/// Reconstruct the canonical per-session projection Oko imports, and
-/// optionally ask Oko to reindex it. The live stream owns incremental updates.
-pub fn rebuild_oko(rest: &[String]) -> Result<i32> {
-    let parsed = parse_options("rebuild-oko", rest, &[], &["reindex"])?;
-    require_flags_only("rebuild-oko", &parsed)?;
-    let reindex = parsed.flag("reindex");
-    let summary = oko_export::export_oko_with_reindex(true, reindex, &resolve_data_dir(None))?;
-    write_json(&summary)?;
-    let reindexed = summary.get("reindex").is_some_and(|report| {
-        report.get("ran").and_then(Value::as_bool).unwrap_or(false)
-            && report.get("status").and_then(Value::as_i64) == Some(0)
-    });
-    if reindex && !reindexed {
-        return Ok(1);
+/// The consumers a per-session projection is written for; `--target` names
+/// one and any other is refused with this list.
+const PROJECTION_TARGETS: &str = "oko";
+
+fn projection_target(parsed: &crate::args::Parsed, command: &str) -> Result<String> {
+    let target = parsed
+        .value("target")
+        .ok_or_else(|| Error(format!("{command} requires --target <{PROJECTION_TARGETS}>")))?;
+    if !PROJECTION_TARGETS.split(' ').any(|known| known == target) {
+        return Err(Error(format!(
+            "no projection target is named {target}; the targets are {PROJECTION_TARGETS}"
+        )));
     }
-    Ok(0)
+    Ok(target.to_string())
 }
 
-/// Hand the current export to Oko through its own CLI.
-pub fn oko_refresh(rest: &[String]) -> Result<i32> {
-    require_no_args("oko-refresh", rest)?;
-    let binary = std::env::var_os("OKO_CLI")
-        .map(PathBuf::from)
-        .filter(|path| !path.as_os_str().is_empty())
-        .or_else(|| find_on_path("oko-cli"));
-    let Some(binary) = binary else {
-        eprintln!(
-            "oko-cli is not on PATH; install Oko or set OKO_CLI, then run: oko-cli transcripts reindex"
-        );
-        return Ok(1);
+/// `projection <rebuild|refresh> --target <consumer>`: reconstruct the
+/// canonical per-session projection one consumer imports, or hand the
+/// current projection to that consumer through its own CLI. The live stream
+/// owns incremental updates.
+pub fn projection(rest: &[String]) -> Result<i32> {
+    let Some((verb, rest)) = rest.split_first() else {
+        return Err(Error("projection requires rebuild or refresh".to_string()));
     };
-    run_binary(&binary.to_string_lossy(), &["transcripts", "reindex"])
+    match verb.as_str() {
+        "rebuild" => {
+            let parsed = parse_options("projection rebuild", rest, &["target"], &["reindex"])?;
+            require_flags_only("projection rebuild", &parsed)?;
+            projection_target(&parsed, "projection rebuild")?;
+            let reindex = parsed.flag("reindex");
+            let summary = oko_export::export_oko_with_reindex(true, reindex, &resolve_data_dir(None))?;
+            write_json(&summary)?;
+            let reindexed = summary.get("reindex").is_some_and(|report| {
+                report.get("ran").and_then(Value::as_bool).unwrap_or(false)
+                    && report.get("status").and_then(Value::as_i64) == Some(0)
+            });
+            if reindex && !reindexed {
+                return Ok(1);
+            }
+            Ok(0)
+        }
+        "refresh" => {
+            let parsed = parse_options("projection refresh", rest, &["target"], &[])?;
+            require_flags_only("projection refresh", &parsed)?;
+            projection_target(&parsed, "projection refresh")?;
+            let binary = std::env::var_os("OKO_CLI")
+                .map(PathBuf::from)
+                .filter(|path| !path.as_os_str().is_empty())
+                .or_else(|| find_on_path("oko-cli"));
+            let Some(binary) = binary else {
+                eprintln!(
+                    "oko-cli is not on PATH; install Oko or set OKO_CLI, then run: oko-cli transcripts reindex"
+                );
+                return Ok(1);
+            };
+            run_binary(&binary.to_string_lossy(), &["transcripts", "reindex"])
+        }
+        other => Err(Error(format!("projection takes rebuild or refresh, not {other}"))),
+    }
 }
 
 /// Preview or remove derived data. Only rebuildable artifacts are ever
