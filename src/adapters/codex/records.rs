@@ -6,7 +6,7 @@ use serde_json::{Map, Value};
 
 use crate::types::{Parser, ParserCtx, RawEvent};
 
-use super::{cap, num_or_zero, text_field};
+use super::{num_or_zero, text_field};
 
 pub(super) struct CodexParser {
     session_id: Option<String>,
@@ -121,7 +121,7 @@ impl CodexParser {
             session_id: session_id.clone(),
             project: project.clone(),
             event_type: event_type.to_string(),
-            text: cap(text),
+            text: text.to_string(),
             ..RawEvent::default()
         }
     }

@@ -8,7 +8,7 @@ use serde_json::{Map, Value};
 
 use crate::types::{Parser, ParserCtx, RawEvent};
 
-use super::{cap, iso_from, num_or_zero, text_field};
+use super::{iso_from, num_or_zero, text_field};
 
 mod message;
 
@@ -62,7 +62,7 @@ impl KimiParser {
             session_id: session_id.clone(),
             project: project.clone(),
             event_type: event_type.to_string(),
-            text: cap(text),
+            text: text.to_string(),
             ..RawEvent::default()
         }
     }

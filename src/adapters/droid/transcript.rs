@@ -6,7 +6,7 @@ use serde_json::{Map, Value};
 
 use crate::types::{Parser, ParserCtx, RawEvent};
 
-use super::{clip, js_string, prune, text_of, PENDING_CAP};
+use super::{js_string, prune, text_of};
 
 pub(super) struct TranscriptParser {
     project: Option<String>,
@@ -50,7 +50,7 @@ impl Parser for TranscriptParser {
         self.pending.extend(events);
         // session_start carries no timestamp; hold events until the first
         // stamped record so its ts (and any late cwd) can be backfilled.
-        if self.last_ts.is_some() || self.pending.len() > PENDING_CAP {
+        if self.last_ts.is_some() {
             self.ready = true;
             return self.flush_pending();
         }
@@ -70,7 +70,7 @@ impl TranscriptParser {
             session_id: self.session_id.clone(),
             project: self.project.clone(),
             event_type: event_type.to_string(),
-            text: clip(text),
+            text: text.to_string(),
             ..RawEvent::default()
         }
     }

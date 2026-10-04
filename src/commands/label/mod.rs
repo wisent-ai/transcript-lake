@@ -5,9 +5,7 @@
 //! label nothing can ever join against.
 use serde_json::Value;
 
-use crate::args::{
-    bounded_integer, parse_options, require_flags_only, require_runtime, DEFAULT_LIMIT, MAX_LIMIT,
-};
+use crate::args::{limit_clause, parse_options, require_flags_only, require_runtime};
 use crate::duck::{query_duck_json, run_duck_query};
 use crate::labels::{
     append_label, label_record, normalize_aspect, normalize_label_value, normalize_note,
@@ -187,7 +185,7 @@ fn list(rest: &[String]) -> Result<i32> {
         &["json"],
     )?;
     require_flags_only("label list", &parsed)?;
-    let limit = bounded_integer(parsed.value("limit"), "--limit", DEFAULT_LIMIT, MAX_LIMIT)?;
+    let limit = limit_clause(parsed.value("limit"), "list every label")?;
     let mut where_clauses = Vec::new();
     if let Some(session) = parsed.value("session") {
         where_clauses.push(format!("session_id = {}", quote_sql(session)));
@@ -204,7 +202,7 @@ fn list(rest: &[String]) -> Result<i32> {
     run_duck_query(
         &format!(
             "SELECT ts, session_id, runtime, aspect, value, note, source FROM ({}) \
-             WHERE rn = CAST('1' AS BIGINT) AND value IS NOT NULL ORDER BY ts DESC LIMIT {limit}",
+             WHERE rn = CAST('1' AS BIGINT) AND value IS NOT NULL ORDER BY ts DESC{limit}",
             latest_labels_inner(&where_clauses)
         ),
         parsed.flag("json"),

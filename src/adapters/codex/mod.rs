@@ -16,8 +16,6 @@ use serde_json::Value;
 
 use crate::types::{Adapter, Parser, ParserCtx, SessionEntry};
 
-const TEXT_CAP: usize = 65536;
-
 /// Filenames look like `rollout-<ISO-stamp>-<uuid>.jsonl`; the uuid is the session id.
 static UUID_RE: std::sync::LazyLock<Regex> = std::sync::LazyLock::new(|| {
     Regex::new("(?i)[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}").expect("uuid pattern")
@@ -154,20 +152,6 @@ fn session_id_from_name(name: &str) -> String {
         Some(found) => found.as_str().to_string(),
         None => stem.to_string(),
     }
-}
-
-/// `String.prototype.slice(0, 65536)`, which counts UTF-16 code units. A cut that would
-/// land inside a surrogate pair stops before it rather than emitting a lone surrogate.
-pub(super) fn cap(value: &str) -> String {
-    let mut units = 0usize;
-    for (index, character) in value.char_indices() {
-        let width = character.len_utf16();
-        if units + width > TEXT_CAP {
-            return value[..index].to_string();
-        }
-        units += width;
-    }
-    value.to_string()
 }
 
 /// A JSON string field, when present and non-empty.

@@ -22,8 +22,6 @@ use serde_json::{Map, Value};
 
 use crate::types::{Adapter, Parser, ParserCtx, SessionEntry};
 
-pub(super) const TEXT_CAP: usize = 65536;
-pub(super) const PENDING_CAP: usize = 64;
 const JSONL_EXT: &str = ".jsonl";
 const SETTINGS_EXT: &str = ".settings.json";
 
@@ -143,18 +141,6 @@ fn decode_project(name: &str) -> Option<String> {
         return None;
     }
     Some(name.replace('-', "/"))
-}
-
-pub(super) fn clip(value: &str) -> String {
-    let mut units = 0usize;
-    for (index, character) in value.char_indices() {
-        let width = character.len_utf16();
-        if units + width > TEXT_CAP {
-            return value[..index].to_string();
-        }
-        units += width;
-    }
-    value.to_string()
 }
 
 pub(super) fn text_of(content: Option<&Value>) -> String {

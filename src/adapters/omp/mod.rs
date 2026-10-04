@@ -20,8 +20,6 @@ use serde_json::{Map, Value};
 
 use crate::types::{Adapter, Parser, ParserCtx, SessionEntry};
 
-pub(super) const TEXT_CAP: usize = 65536;
-pub(super) const PENDING_CAP: usize = 64;
 const JSONL_EXT: &str = ".jsonl";
 
 pub struct Omp;
@@ -122,18 +120,6 @@ fn session_entry(root: &Path, name: &str) -> Option<SessionEntry> {
         session_id: Some(session_id.to_string()),
         project: None,
     })
-}
-
-pub(super) fn clip(value: &str) -> String {
-    let mut units = 0usize;
-    for (index, character) in value.char_indices() {
-        let width = character.len_utf16();
-        if units + width > TEXT_CAP {
-            return value[..index].to_string();
-        }
-        units += width;
-    }
-    value.to_string()
 }
 
 pub(super) fn text_of(content: Option<&Value>) -> String {

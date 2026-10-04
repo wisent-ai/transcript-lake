@@ -6,7 +6,7 @@ use serde_json::{Map, Value};
 
 use crate::types::{Parser, ParserCtx, RawEvent};
 
-use super::{clip, epoch_iso, js_string, prune, text_of, PENDING_CAP};
+use super::{epoch_iso, js_string, prune, text_of};
 
 mod message;
 
@@ -52,9 +52,7 @@ impl Parser for OmpParser {
             return events;
         }
         self.pending.extend(events);
-        if rec.get("type").and_then(Value::as_str) == Some("session")
-            || self.pending.len() > PENDING_CAP
-        {
+        if rec.get("type").and_then(Value::as_str) == Some("session") {
             self.ready = true;
             return self.flush_pending();
         }
@@ -74,7 +72,7 @@ impl OmpParser {
             session_id: self.session_id.clone(),
             project: self.project.clone(),
             event_type: event_type.to_string(),
-            text: clip(text),
+            text: text.to_string(),
             ..RawEvent::default()
         }
     }

@@ -21,13 +21,8 @@ pub use live::{catch_up, stream_paths};
 pub use replay::replay;
 use writer::Writer;
 
-/// Text longer than this many UTF-16 units is cut, in `text` and in every
-/// string inside `extra`.
-const TEXT_CAP: usize = 65536;
 /// Events buffered before a partition append and a cursor checkpoint.
 const BATCH_EVENTS: usize = 512;
-/// How deep masking descends into `extra` before a value becomes null.
-const EXTRA_DEPTH: i32 = 4;
 const PART_DIGEST_LEN: usize = 12;
 const READ_BUFFER: usize = 64 * 1024;
 

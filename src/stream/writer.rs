@@ -1,6 +1,6 @@
 //! Masking, canonical partition commits and Oko projection publication.
 use super::source::Retained;
-use super::{file_stem, hex_digest, Tally, EXTRA_DEPTH, TEXT_CAP};
+use super::{file_stem, hex_digest, Tally};
 use crate::redact::Masker;
 use crate::types::{CanonicalEvent, EventSink, RawEvent, SegmentOutput, HOOKS};
 use crate::util::{Error, Result};
@@ -8,33 +8,6 @@ use serde_json::{Map, Value};
 use std::fs::{self, File, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
-/// Cut to the text cap counting UTF-16 units, which is what the previous
-/// implementation's `String.length` counted. A byte length within the cap can
-/// never exceed it in UTF-16 units, so the common case never scans the string.
-///
-/// One deliberate deviation, the only one measured across the ported corpus:
-/// when the cap lands mid astral character, `slice` left a lone high surrogate
-/// behind and serialized it as `\ud83d`, which is not valid Unicode and which
-/// a Rust `String` cannot hold. The character is kept out instead, so such a
-/// line is one character shorter than the previous implementation wrote.
-fn clip(mut text: String) -> String {
-    if text.len() <= TEXT_CAP {
-        return text;
-    }
-    let mut units = 0usize;
-    let mut end = text.len();
-    for (index, character) in text.char_indices() {
-        let width = character.len_utf16();
-        if units + width > TEXT_CAP {
-            end = index;
-            break;
-        }
-        units += width;
-    }
-    text.truncate(end);
-    text
-}
-
 /// `YYYY-MM-DD`: ten characters, a dash after the year and another after the month.
 const DATE_LEN: usize = 10;
 const YEAR_LEN: usize = 4;
@@ -61,34 +34,24 @@ fn date_of(ts: Option<&str>) -> String {
     }
 }
 
-/// Masks every string inside extra, to a small depth bound (extra stays
-/// small). Non-string leaves pass through untouched; JSON serialization later
-/// renders them exactly as the adapter emitted them.
-fn mask_deep(value: Value, masker: &mut Masker, depth: i32) -> Value {
+/// Masks every string inside extra, at every depth. Non-string leaves pass
+/// through untouched; JSON serialization later renders them exactly as the
+/// adapter emitted them.
+fn mask_deep(value: Value, masker: &mut Masker) -> Value {
     match value {
-        Value::String(text) => Value::String(clip(masker.mask(&text))),
-        Value::Array(items) => {
-            if depth <= 0 {
-                return Value::Null;
-            }
-            Value::Array(
-                items
-                    .into_iter()
-                    .map(|item| mask_deep(item, masker, depth - 1))
-                    .collect(),
-            )
-        }
-        Value::Object(fields) => {
-            if depth <= 0 {
-                return Value::Null;
-            }
-            Value::Object(
-                fields
-                    .into_iter()
-                    .map(|(key, item)| (key, mask_deep(item, masker, depth - 1)))
-                    .collect(),
-            )
-        }
+        Value::String(text) => Value::String(masker.mask(&text)),
+        Value::Array(items) => Value::Array(
+            items
+                .into_iter()
+                .map(|item| mask_deep(item, masker))
+                .collect(),
+        ),
+        Value::Object(fields) => Value::Object(
+            fields
+                .into_iter()
+                .map(|(key, item)| (key, mask_deep(item, masker)))
+                .collect(),
+        ),
         other => other,
     }
 }
@@ -112,12 +75,8 @@ impl Writer {
 
     fn canonicalize(&mut self, event: &RawEvent, runtime: &str) -> (CanonicalEvent, String) {
         let date = date_of(event.ts.as_deref());
-        let text = clip(self.masker.mask(&event.text));
-        let extra = mask_deep(
-            Value::Object(event.extra.clone()),
-            &mut self.masker,
-            EXTRA_DEPTH,
-        );
+        let text = self.masker.mask(&event.text);
+        let extra = mask_deep(Value::Object(event.extra.clone()), &mut self.masker);
         let canonical = CanonicalEvent {
             ts: event.ts.clone(),
             runtime: runtime.to_string(),
@@ -134,8 +93,6 @@ impl Writer {
             model: event.model.clone(),
             tokens_in: event.tokens_in,
             tokens_out: event.tokens_out,
-            // A depth bound can null the whole map only when extra is nested
-            // deeper than the bound, which the object itself never is.
             extra: match extra {
                 Value::Object(fields) => fields,
                 _ => Map::new(),

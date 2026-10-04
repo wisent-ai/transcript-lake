@@ -20,7 +20,7 @@ use std::path::{Path, PathBuf};
 use serde_json::{Map, Value};
 
 use super::json_i64;
-use crate::args::{bounded_integer, parse_options, SHOW_LIMIT, SHOW_MAX_LIMIT};
+use crate::args::{limit_clause, parse_options};
 use crate::commands::inspect::js_string;
 use crate::duck::query_duck_json;
 use crate::types::EVENT_TYPES;
@@ -127,7 +127,7 @@ pub fn show(rest: &[String]) -> Result<i32> {
         return Err(Error("show requires a session id".into()));
     }
     let types = include_types(parsed.value("include"))?;
-    let limit = bounded_integer(parsed.value("limit"), "--limit", SHOW_LIMIT, SHOW_MAX_LIMIT)?;
+    let limit = limit_clause(parsed.value("limit"), "show every event of the session")?;
     let target = destination(parsed.value("out"))?;
     let quoted_session = quote_sql(&session_id);
     let identity = query_duck_json(&format!(
@@ -156,7 +156,7 @@ pub fn show(rest: &[String]) -> Result<i32> {
     let matched = json_i64(counted.first().and_then(|row| row.get("matched")));
     let events = query_duck_json(&format!(
         "SELECT ts, event_type, tool_name, model, coalesce(text, '') AS text FROM events \
-         WHERE session_id = {quoted_session}{type_filter} ORDER BY ts LIMIT {limit}"
+         WHERE session_id = {quoted_session}{type_filter} ORDER BY ts{limit}"
     ))?;
     let rendered = events.len() as i64;
     if parsed.flag("json") {
@@ -221,7 +221,7 @@ pub fn show(rest: &[String]) -> Result<i32> {
         .map_err(|error| Error(error.to_string()))?;
     }
     let suffix = if rendered < matched {
-        " (raise --limit for the rest)"
+        " (omit --limit for the rest)"
     } else {
         ""
     };

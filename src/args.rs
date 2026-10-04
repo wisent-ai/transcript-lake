@@ -6,12 +6,6 @@ use std::collections::HashMap;
 use crate::types::SUPPORTED_SOURCES;
 use crate::util::{Error, Result};
 
-pub const DEFAULT_LIMIT: i64 = 20;
-pub const MAX_LIMIT: i64 = 500;
-pub const DEFAULT_DAYS: i64 = 7;
-pub const SHOW_LIMIT: i64 = 2000;
-pub const SHOW_MAX_LIMIT: i64 = 50000;
-
 #[derive(Debug, Default)]
 pub struct Parsed {
     values: HashMap<String, String>,
@@ -71,22 +65,27 @@ pub fn parse_options(
     Ok(parsed)
 }
 
-/// A bounded positive integer flag, or the fallback when the flag is absent.
-pub fn bounded_integer(
-    value: Option<&str>,
-    name: &str,
-    fallback: i64,
-    maximum: i64,
-) -> Result<i64> {
+/// A positive integer flag, or `None` when the flag is absent. Zero and
+/// anything that is not a positive integer are refused by name, with the
+/// sentence that says what omitting the flag does.
+pub fn optional_positive(value: Option<&str>, name: &str, omitted: &str) -> Result<Option<i64>> {
     let Some(value) = value else {
-        return Ok(fallback);
+        return Ok(None);
     };
     match value.parse::<i64>() {
-        Ok(parsed) if parsed >= 1 && parsed <= maximum => Ok(parsed),
+        Ok(parsed) if parsed >= 1 => Ok(Some(parsed)),
         _ => Err(Error(format!(
-            "{name} must be an integer from 1 to {maximum}"
+            "{name} must be a whole number of at least one; omit it to {omitted}"
         ))),
     }
+}
+
+/// The SQL `LIMIT` clause for an optional `--limit`: empty when the flag is
+/// absent, so every row is returned.
+pub fn limit_clause(value: Option<&str>, omitted: &str) -> Result<String> {
+    Ok(optional_positive(value, "--limit", omitted)?
+        .map(|limit| format!(" LIMIT {limit}"))
+        .unwrap_or_default())
 }
 
 /// Validate `--runtime`/`--source` against the supported runtimes.

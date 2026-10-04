@@ -166,15 +166,20 @@ The CLI is the canonical human and automation interface.
 | Real-time stream | `stream [--json]` | Long-running event-driven source tail with direct Lake and Oko commits |
 | Safe recovery | `rebuild --to <empty-path> [--source <runtime>]` | Historical replay into a separate empty Lake |
 | Inspect | `status [--json]` | Partition, cursor, stream-state, and Oko freshness inventory |
-| Sessions and events | `sessions [--interrupted]`, `events` | Filtered recent normalized records; `--interrupted` keeps only conversations left without an answer |
-| Text search | `search <text> [--runtime <r>] [--session <id>] [--type <t>] [--limit <n>] [--json]` | Newest-first literal substring matches over masked event text |
+| Sessions and events | `sessions [--interrupted] [--limit <n>]`, `events [--limit <n>]` | Every matching normalized record, newest first, each event with its whole masked text; `--limit` keeps the newest n and zero is refused; `--interrupted` keeps only conversations left without an answer |
+| Text search | `search <text> [--runtime <r>] [--session <id>] [--type <t>] [--limit <n>] [--json]` | Every newest-first literal substring match over masked event text, with the whole text; `--limit` keeps the newest n |
 | Conversation restore | `show <session-id> [--include <types>] [--limit <n>] [--out <path>] [--json]` | One conversation reconstructed oldest turn first, full masked text, with a rendered/matched footer; `--out` saves that record to a file itself, so nobody needs a shell redirection that truncates the target before the read even runs |
 | Session labels | `label add`, `label remove`, `label list`, `label aspects` | Operator-owned aspect/value annotations over sessions; `remove` withdraws one by appending a record with no value, so the history stays whole |
-| Statistics and signals | `stats`, `hooks`, `signals` | Usage aggregates, adaptive-hook decisions, and Oko/Lake correlations |
+| Statistics and signals | `stats [--days <n>]`, `hooks [--limit <n>]`, `signals [--limit <n>]` | Usage aggregates over the whole Lake (or the last n days), every adaptive-hook decision, and Oko/Lake correlations |
 | Advanced SQL | `query [--json] \"<sql>\"` | DuckDB result or actionable dependency error |
 | Compact | `compact [--source <runtime>] [--json]` | Per-runtime NDJSON-to-Parquet report |
 | Projection recovery | `projection rebuild --target <consumer> [--reindex]`, `projection refresh --target <consumer>` | Reconstruct the projection one consumer imports, or hand it to that consumer's own CLI; `oko` is the one target today, and another is refused with the ones that exist |
 | Derived cleanup | `clean [--target <parquet|oko|all>] [--apply]` | Dry-run by default; removes rebuildable data only with `--apply` |
+
+The Lake keeps each event's text and `extra` whole: no adapter cuts text to a
+length, masking reaches every depth of `extra`, and records read before a
+transcript's first timestamp are held until that timestamp or the end of the
+file, however many there are.
 
 An unknown command, a repeated global `--data-dir`, or a `--data-dir` without a path prints the error and the usage and exits 2; any other failure exits 1.
 

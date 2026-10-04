@@ -6,7 +6,7 @@ use serde_json::{Map, Value};
 
 use crate::types::{Parser, ParserCtx, RawEvent};
 
-use super::{cap, text_field};
+use super::text_field;
 
 pub(super) struct ClaudeParser {
     session_id: Option<String>,
@@ -62,7 +62,7 @@ impl ClaudeParser {
             session_id: session_id.clone(),
             project: project.clone(),
             event_type: event_type.to_string(),
-            text: cap(text),
+            text: text.to_string(),
             ..RawEvent::default()
         };
         match rec.get("type").and_then(Value::as_str) {
