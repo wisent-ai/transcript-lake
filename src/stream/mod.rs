@@ -21,8 +21,6 @@ pub use live::{catch_up, stream_paths};
 pub use replay::replay;
 use writer::Writer;
 
-/// Events buffered before a partition append and a cursor checkpoint.
-const BATCH_EVENTS: usize = 512;
 const PART_DIGEST_LEN: usize = 12;
 
 /// Parameters for an explicit recovery replay into an empty Lake.

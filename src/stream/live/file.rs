@@ -5,7 +5,7 @@ use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
 use sha2::{Digest, Sha256};
 
 use super::super::source::Retained;
-use super::super::{file_stem, hex_digest, warn, Tally, Writer, BATCH_EVENTS, PART_DIGEST_LEN};
+use super::super::{file_stem, hex_digest, warn, Tally, Writer, PART_DIGEST_LEN};
 use crate::cursors::{ByteCursor, CursorRecord, Cursors, SourceCheckpoint};
 use crate::types::{Adapter, ParserCtx, RawEvent, SessionEntry};
 use crate::util::{mtime_ms, Result};
@@ -97,7 +97,10 @@ pub(in crate::stream) fn stream_file(
             line = &line[..line.len() - 1];
         }
         batch.extend(parser.on_line(&String::from_utf8_lossy(line)));
-        if batch.len() >= BATCH_EVENTS {
+        // A batch is what one read from the source handed over: it is written
+        // and checkpointed when the reader's buffer is used up, so no event
+        // count is chosen here.
+        if !batch.is_empty() && reader.buffer().is_empty() {
             if recovering {
                 // Keep the pre-replay cursor until the whole source succeeds.
                 // A failed later batch must replay against retained history
