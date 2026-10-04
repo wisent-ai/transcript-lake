@@ -5,25 +5,15 @@ use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
 use sha2::{Digest, Sha256};
 
 use super::super::source::Retained;
-use super::super::{
-    file_stem, hex_digest, warn, Tally, Writer, BATCH_EVENTS, PART_DIGEST_LEN, READ_BUFFER,
-};
+use super::super::{file_stem, hex_digest, warn, Tally, Writer, BATCH_EVENTS, PART_DIGEST_LEN};
 use crate::cursors::{ByteCursor, CursorRecord, Cursors, SourceCheckpoint};
 use crate::types::{Adapter, ParserCtx, RawEvent, SessionEntry};
 use crate::util::{mtime_ms, Result};
 
 fn verified_prefix(file: &mut File, offset: u64, expected: [u8; 32]) -> Result<Option<Sha256>> {
     let mut hash = Sha256::new();
-    let mut remaining = offset;
-    let mut buffer = [0; READ_BUFFER];
-    while remaining > 0 {
-        let capacity = remaining.min(buffer.len() as u64) as usize;
-        let count = file.read(&mut buffer[..capacity])?;
-        if count == 0 {
-            return Ok(None);
-        }
-        hash.update(&buffer[..count]);
-        remaining -= count as u64;
+    if std::io::copy(&mut Read::by_ref(file).take(offset), &mut hash)? < offset {
+        return Ok(None);
     }
     let observed: [u8; 32] = hash.clone().finalize().into();
     Ok((observed == expected).then_some(hash))
@@ -89,7 +79,7 @@ pub(in crate::stream) fn stream_file(
         session_id: entry.session_id.clone(),
         project: entry.project.clone(),
     });
-    let mut reader = BufReader::with_capacity(READ_BUFFER, file);
+    let mut reader = BufReader::new(file);
     let mut batch: Vec<RawEvent> = Vec::new();
     let mut consumed = offset;
     let mut raw: Vec<u8> = Vec::new();

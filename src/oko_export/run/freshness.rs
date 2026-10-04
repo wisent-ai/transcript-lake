@@ -14,7 +14,6 @@ const SECOND_MS: f64 = 1000.0;
 const MINUTE_MS: f64 = 60000.0;
 const MINUTES_PER_HOUR: f64 = 60.0;
 const HOURS_PER_DAY: f64 = 24.0;
-const CURSOR_WALK_DEPTH: usize = 4;
 const PAD: usize = 26;
 
 fn iso_or_na(ms: Option<f64>) -> String {
@@ -45,8 +44,9 @@ fn age_label(ms: Option<f64>, now_ms: f64) -> String {
     format!("{}d", js_round(hours / HOURS_PER_DAY))
 }
 
-fn walk_cursor_times(node: &Value, depth: usize, files: &mut u64, newest: &mut Option<f64>) {
-    if depth > CURSOR_WALK_DEPTH || !(node.is_object() || node.is_array()) {
+/// Every `mtimeMs` in the cursor store, however deep the store nests it.
+fn walk_cursor_times(node: &Value, files: &mut u64, newest: &mut Option<f64>) {
+    if !(node.is_object() || node.is_array()) {
         return;
     }
     if let Some(ms) = node.get("mtimeMs").and_then(Value::as_f64) {
@@ -61,12 +61,12 @@ fn walk_cursor_times(node: &Value, depth: usize, files: &mut u64, newest: &mut O
     match node {
         Value::Object(map) => {
             for value in map.values() {
-                walk_cursor_times(value, depth + 1, files, newest);
+                walk_cursor_times(value, files, newest);
             }
         }
         Value::Array(items) => {
             for value in items {
-                walk_cursor_times(value, depth + 1, files, newest);
+                walk_cursor_times(value, files, newest);
             }
         }
         _ => {}
@@ -146,7 +146,7 @@ pub fn freshness() -> Value {
             .map_err(|error| error.to_string())
             .and_then(|raw| serde_json::from_str::<Value>(&raw).map_err(|error| error.to_string()))
         {
-            Ok(store) => walk_cursor_times(&store, 0, &mut lake_files, &mut lake_mtime),
+            Ok(store) => walk_cursor_times(&store, &mut lake_files, &mut lake_mtime),
             Err(error) => lake_error = Some(error),
         }
     }

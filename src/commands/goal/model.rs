@@ -4,7 +4,7 @@
 
 use std::env;
 use std::fs::{self, File, OpenOptions};
-use std::io::{Read, Write};
+use std::io::{self, Write};
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -14,8 +14,10 @@ use sha2::{Digest, Sha256};
 
 use crate::util::{find_on_path, home_dir, Error, Result};
 
-use super::{ModelValidationStamp, MODEL_BYTES, MODEL_NAME, MODEL_REVISION, MODEL_SHA256, PROMPT_NAME, PROMPT_SHA256, REPOSITORY};
-
+use super::{
+    ModelValidationStamp, MODEL_NAME, MODEL_REVISION, MODEL_SHA256, PROMPT_NAME, PROMPT_SHA256,
+    REPOSITORY,
+};
 
 pub(super) fn resolve_runtime() -> Result<PathBuf> {
     for key in ["TRANSCRIPT_LAKE_GOAL_LLAMA_CLI", "JEDEN_GOAL_LLAMA_CLI"] {
@@ -101,7 +103,7 @@ pub(super) fn download(url: &str, destination: &Path) -> Result<()> {
     fs::create_dir_all(parent)?;
     let temporary = destination.with_extension(format!("download-{}", std::process::id()));
     let status = Command::new("curl")
-        .args(["--fail", "--location", "--retry", "3", "--output"])
+        .args(["--fail", "--location", "--output"])
         .arg(&temporary)
         .arg(url)
         .status()
@@ -119,9 +121,11 @@ pub(super) fn download(url: &str, destination: &Path) -> Result<()> {
 pub(super) fn validate_model(data_dir: &Path, path: &Path) -> Result<()> {
     let metadata = fs::metadata(path)
         .map_err(|error| Error(format!("model {} is unavailable: {error}", path.display())))?;
-    if !metadata.is_file() || metadata.len() != MODEL_BYTES {
+    // The artifact is pinned by its SHA-256; its size is whatever that digest
+    // covers, so no byte count is compiled in.
+    if !metadata.is_file() {
         return Err(Error(format!(
-            "model {} has the wrong size",
+            "model {} is not a regular file",
             path.display()
         )));
     }
@@ -162,14 +166,7 @@ pub(super) fn validate_digest(path: &Path, expected: &str, name: &str) -> Result
     let mut file = File::open(path)
         .map_err(|error| Error(format!("{name} {} is unavailable: {error}", path.display())))?;
     let mut digest = Sha256::new();
-    let mut buffer = [0_u8; 4 * 1024 * 1024];
-    loop {
-        let read = file.read(&mut buffer)?;
-        if read == 0 {
-            break;
-        }
-        digest.update(&buffer[..read]);
-    }
+    io::copy(&mut file, &mut digest)?;
     let actual = format!("{:x}", digest.finalize());
     if actual != expected {
         return Err(Error(format!("{name} {} failed SHA-256", path.display())));

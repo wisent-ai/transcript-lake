@@ -6,7 +6,6 @@ use std::path::Path;
 
 use serde_json::Value;
 
-use super::READ_BUFFER;
 use crate::oko_export::fingerprint;
 use crate::util::{Error, Result};
 
@@ -46,7 +45,7 @@ impl Retained {
                     )))
                 }
             };
-            let reader = BufReader::with_capacity(READ_BUFFER, file);
+            let reader = BufReader::new(file);
             for (index, line) in reader.lines().enumerate() {
                 let line = line
                     .map_err(|error| Error(format!("cannot read {}: {error}", path.display())))?;

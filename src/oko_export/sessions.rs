@@ -16,7 +16,6 @@ use super::row::{
 use super::{atomic_write, hash_text, read_text, session_key, Tally};
 use crate::util::Result;
 
-const BUFFER_LIMIT: usize = 8388608;
 
 pub(crate) struct StagedSession {
     runtime: String,
@@ -36,8 +35,9 @@ fn flush_buffers(buffers: &mut HashMap<PathBuf, String>) -> Result<()> {
     Ok(())
 }
 
-/// Spill every conversation row to a per-session staging file, so a rebuild
-/// costs one bounded buffer rather than the whole lake in memory.
+/// Spill every conversation row to a per-session staging file, one partition
+/// at a time, so a rebuild holds one partition's rows rather than the whole
+/// lake in memory.
 pub(crate) fn stage_events(
     partitions: &[Partition],
     staging_root: &Path,
@@ -46,7 +46,6 @@ pub(crate) fn stage_events(
     let mut sessions: Vec<StagedSession> = Vec::new();
     let mut seen: HashSet<String> = HashSet::new();
     let mut buffers: HashMap<PathBuf, String> = HashMap::new();
-    let mut buffered_bytes = 0usize;
     for partition in partitions {
         if partition.size == 0 {
             continue;
@@ -76,7 +75,6 @@ pub(crate) fn stage_events(
                 .join(session_hash.clone() + ".ndjson");
             let fingerprint = fingerprint(&event, &runtime);
             let chunk = serde_json::to_string(&export_line(&event, &runtime, &fingerprint))? + "\n";
-            buffered_bytes += chunk.len();
             buffers
                 .entry(staged_file.clone())
                 .or_default()
@@ -88,13 +86,11 @@ pub(crate) fn stage_events(
                     staged_file,
                 });
             }
-            if buffered_bytes >= BUFFER_LIMIT {
-                flush_buffers(&mut buffers)?;
-                buffered_bytes = 0;
-            }
         }
+        // Each partition's rows are written out before the next is read, so
+        // what is held in memory is one partition, not a byte count chosen here.
+        flush_buffers(&mut buffers)?;
     }
-    flush_buffers(&mut buffers)?;
     Ok(sessions)
 }
 

@@ -7,7 +7,6 @@ use std::path::{Path, PathBuf};
 
 use crate::util::{mtime_ms, Result};
 
-const READ_CHUNK: usize = 65536;
 
 /// Directory entries, treating a missing or non-directory path as empty.
 /// Sorted by name: `readdirSync` returns strcmp order, and the export walk is
@@ -35,13 +34,16 @@ pub(crate) fn read_dir_names(dir: &Path) -> Result<Vec<String>> {
 }
 
 /// Offset just past the last complete line, so a partition still being
-/// appended to is read only up to its last durable record separator.
+/// appended to is read only up to its last durable record separator. The file
+/// is read backwards in the filesystem's own preferred I/O size.
 fn newline_aligned_size(path: &Path, size: u64) -> Result<u64> {
+    use std::os::unix::fs::MetadataExt;
     if size == 0 {
         return Ok(0);
     }
     let handle = File::open(path)?;
-    let mut buffer = vec![0u8; std::cmp::min(READ_CHUNK as u64, size) as usize];
+    let block = handle.metadata()?.blksize().max(1);
+    let mut buffer = vec![0u8; std::cmp::min(block, size) as usize];
     let mut end = size;
     while end > 0 {
         let start = end.saturating_sub(buffer.len() as u64);

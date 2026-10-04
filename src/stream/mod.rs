@@ -24,7 +24,6 @@ use writer::Writer;
 /// Events buffered before a partition append and a cursor checkpoint.
 const BATCH_EVENTS: usize = 512;
 const PART_DIGEST_LEN: usize = 12;
-const READ_BUFFER: usize = 64 * 1024;
 
 /// Parameters for an explicit recovery replay into an empty Lake.
 pub struct ReplayOptions {
