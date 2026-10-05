@@ -36,7 +36,7 @@ fn catch_up_locked(data_dir: &Path) -> Result<Value> {
         adapters.push(crate::hook_segments::hooks_adapter());
     }
     let mut cursors = Cursors::open(data_dir)?;
-    let mut writer = Writer::new(data_dir.to_path_buf(), machine_name());
+    let mut writer = Writer::new(data_dir.to_path_buf(), machine_name())?;
     let mut per_runtime = Map::new();
     let mut discovered = 0u64;
     let mut touched = 0u64;
@@ -155,7 +155,7 @@ fn stream_paths_locked(data_dir: &Path, paths: &[PathBuf]) -> Result<Value> {
         adapters.push(crate::hook_segments::hooks_adapter());
     }
     let mut cursors = Cursors::open(data_dir)?;
-    let mut writer = Writer::new(data_dir.to_path_buf(), machine_name());
+    let mut writer = Writer::new(data_dir.to_path_buf(), machine_name())?;
     let mut per_runtime: Map<String, Value> = Map::new();
     let mut tallies: HashMap<&'static str, Tally> = HashMap::new();
     let mut touched = 0u64;

@@ -39,7 +39,7 @@ fn replay_locked(opts: &ReplayOptions) -> Result<Value> {
         None => SUPPORTED_SOURCES.to_vec(),
     };
     let mut cursors = Cursors::open(&data_dir)?;
-    let mut writer = Writer::new(data_dir.clone(), machine);
+    let mut writer = Writer::new(data_dir.clone(), machine)?;
     let home = home_dir();
     let mut per_runtime = Map::new();
     for name in selected {

@@ -11,7 +11,6 @@ use sha2::{Digest, Sha256};
 use crate::cursors::{open_writer_lease, CursorRecord, Cursors};
 use crate::util::{machine_name, Error, Result};
 
-
 mod live;
 mod replay;
 mod source;
@@ -83,7 +82,7 @@ fn ingest_source_locked(data_dir: &Path, runtime: &str, root: &Path) -> Result<V
     let entries = adapter.list_sessions(root);
     let discovered = entries.len() as u64;
     let mut cursors = Cursors::open(data_dir)?;
-    let mut writer = Writer::new(data_dir.to_path_buf(), machine_name());
+    let mut writer = Writer::new(data_dir.to_path_buf(), machine_name())?;
     let before = total_hits(&writer.masker.counts());
     let mut tally = Tally::default();
     for entry in entries {

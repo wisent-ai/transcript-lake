@@ -65,12 +65,13 @@ pub struct Writer {
 }
 
 impl Writer {
-    pub(super) fn new(data_dir: PathBuf, machine: String) -> Self {
-        Self {
+    /// Refused, naming the setting, when the operator's secret formats are not declared.
+    pub(super) fn new(data_dir: PathBuf, machine: String) -> Result<Self> {
+        Ok(Self {
             data_dir,
             machine,
-            masker: Masker::new(),
-        }
+            masker: Masker::declared()?,
+        })
     }
 
     fn canonicalize(&mut self, event: &RawEvent, runtime: &str) -> (CanonicalEvent, String) {

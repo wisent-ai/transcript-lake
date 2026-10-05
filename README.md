@@ -63,6 +63,7 @@ Its value is one live parsing and masking boundary: every downstream consumer re
 - DuckDB CLI `1.5.x` is required only for SQL queries and Parquet compaction.
 - Oko and Tama are optional integrations. Core streaming remains usable without them.
 - Data remains local under `LAKE_DATA`, defaulting to `~/.transcript-lake`.
+- `TRANSCRIPT_LAKE_SECRET_FORMATS` must name the operator's JSON declaration of the secret formats the masker recognises (assignment, token and entropy patterns, and the entropy diversity floor); without it the writer refuses to start and names the setting.
 - Historical reconstruction into a separate empty Lake is explicit through `rebuild`; ordinary source replacements are recovered automatically in the current Lake.
 
 ## Core use cases

@@ -4,37 +4,53 @@
 //! short prefix of a sha digest of the hit — nothing reversible and no
 //! plaintext prefix survives.
 //!
-//! Pure string transform: no IO, deterministic, idempotent — marker bodies use
-//! separators that sit outside every hit alphabet, so a second pass is a no-op.
-use std::sync::LazyLock;
+//! What counts as a secret is the operator's declaration, not this file's: the
+//! JSON file named by `TRANSCRIPT_LAKE_SECRET_FORMATS` gives each class its
+//! pattern (or `null` to recognise none of that class) and the entropy class
+//! its diversity floor. Without the file, or with a key missing, the writer is
+//! refused by name, so no text reaches the Lake under an unstated rule.
+//!
+//! Pure string transform once built: no IO, deterministic, idempotent — marker
+//! bodies use separators that sit outside every hit alphabet, so a second pass
+//! is a no-op as long as no declared pattern matches `[`, `:` or `]`.
+use std::path::{Path, PathBuf};
 
 use regex::{Captures, Regex};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
+use crate::util::{Error, Result};
+
+/// Hex characters of the hit's SHA-256 kept in the marker (the frozen marker
+/// interface's "short prefix").
 const FP_LEN: usize = 8;
-const RUN_MIN: usize = 40;
-const DISTINCT_MIN: usize = 16;
-const GROUPS_MIN: usize = 3;
+const FORMATS_ENV: &str = "TRANSCRIPT_LAKE_SECRET_FORMATS";
 
-/// Dense token alphabet shared by the entropy and assignment value classes.
-const DENSE: &str = "[A-Za-z0-9+/=_-]";
+/// The entropy class: candidate runs, kept only when they draw on enough
+/// distinct characters and character groups.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct EntropyFormat {
+    pattern: String,
+    min_distinct: usize,
+    min_groups: usize,
+}
 
-// Class (c), assignment shape: an UPPER_CASE name, an equals sign, then a long
-// token value. The whole assignment is the hit.
-static ASSIGN_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(&format!(r"\b[A-Z][A-Z0-9_]{{2,}}={DENSE}{{16,}}")).expect("assignment pattern")
-});
+/// The operator's declared secret formats. Every key must be present; `null`
+/// declares that the class recognises nothing.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DeclaredFormats {
+    assignment: Option<String>,
+    token: Option<String>,
+    entropy: Option<EntropyFormat>,
+}
 
-// Class (a), provider-token shape: a short lowercase prefix of two to seven
-// letters, a dash, then a twenty-plus run of token characters.
-static TOKEN_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"\b[a-z]{2,7}-[A-Za-z0-9_-]{20,}").expect("token pattern"));
-
-// Class (b), candidate dense runs of forty-plus characters; the per-hit
-// diversity check below keeps prose and plain hex digests out.
-static ENTROPY_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(&format!("{DENSE}{{40,}}")).expect("entropy pattern"));
+struct EntropyRule {
+    re: Regex,
+    min_distinct: usize,
+    min_groups: usize,
+}
 
 /// Per-class hit counts reported by stream commits and recovery replay.
 #[derive(Debug, Clone, Copy, Default, Serialize)]
@@ -44,9 +60,20 @@ pub struct MaskCounts {
     pub assignment: u64,
 }
 
-#[derive(Debug, Default)]
 pub struct Masker {
+    assignment: Option<Regex>,
+    token: Option<Regex>,
+    entropy: Option<EntropyRule>,
     counts: MaskCounts,
+}
+
+fn compile(class: &str, pattern: &str, source: &Path) -> Result<Regex> {
+    Regex::new(pattern).map_err(|error| {
+        Error(format!(
+            "{FORMATS_ENV} file {} declares an invalid {class} pattern: {error}",
+            source.display()
+        ))
+    })
 }
 
 fn fingerprint(value: &str) -> String {
@@ -63,53 +90,92 @@ fn marker(class: &str, value: &str) -> String {
     )
 }
 
-/// High-entropy filter: long enough, many distinct characters, and drawing on
-/// several character groups at once. Lowercase prose (one group) and plain hex
-/// digests (two groups, sixteen distinct at most) both fail this on purpose.
-fn dense_enough(run: &str) -> bool {
-    if run.chars().count() < RUN_MIN {
-        return false;
-    }
+/// Diversity filter for an entropy candidate: at least the declared number of
+/// distinct characters, drawn from at least the declared number of character
+/// groups (lowercase, uppercase, digit, other).
+fn dense_enough(run: &str, rule: &EntropyRule) -> bool {
     let mut distinct: Vec<char> = run.chars().collect();
     distinct.sort_unstable();
     distinct.dedup();
-    if distinct.len() < DISTINCT_MIN {
+    if distinct.len() < rule.min_distinct {
         return false;
     }
     let has_lower = run.chars().any(|c| c.is_ascii_lowercase());
     let has_upper = run.chars().any(|c| c.is_ascii_uppercase());
     let has_digit = run.chars().any(|c| c.is_ascii_digit());
-    let has_symbol = run
-        .chars()
-        .any(|c| matches!(c, '+' | '/' | '=' | '_' | '-'));
-    let groups = [has_lower, has_upper, has_digit, has_symbol]
+    let has_other = run.chars().any(|c| !c.is_ascii_alphanumeric());
+    let groups = [has_lower, has_upper, has_digit, has_other]
         .into_iter()
         .filter(|hit| *hit)
         .count();
-    groups >= GROUPS_MIN
+    groups >= rule.min_groups
 }
 
 impl Masker {
-    pub fn new() -> Self {
-        Self::default()
+    /// The masker for the operator's declared formats, read from the file
+    /// `TRANSCRIPT_LAKE_SECRET_FORMATS` names.
+    pub fn declared() -> Result<Self> {
+        let source = std::env::var_os(FORMATS_ENV)
+            .filter(|value| !value.is_empty())
+            .map(PathBuf::from)
+            .ok_or_else(|| {
+                Error(format!(
+                    "{FORMATS_ENV} is required: the JSON file declaring the assignment, token and entropy secret formats"
+                ))
+            })?;
+        let text = std::fs::read_to_string(&source).map_err(|error| {
+            Error(format!(
+                "{FORMATS_ENV} file {} cannot be read: {error}",
+                source.display()
+            ))
+        })?;
+        let declared: DeclaredFormats = serde_json::from_str(&text).map_err(|error| {
+            Error(format!(
+                "{FORMATS_ENV} file {} is not a secret-format declaration: {error}",
+                source.display()
+            ))
+        })?;
+        Ok(Self {
+            assignment: declared
+                .assignment
+                .as_deref()
+                .map(|pattern| compile("assignment", pattern, &source))
+                .transpose()?,
+            token: declared
+                .token
+                .as_deref()
+                .map(|pattern| compile("token", pattern, &source))
+                .transpose()?,
+            entropy: declared
+                .entropy
+                .map(|format| {
+                    Ok::<_, Error>(EntropyRule {
+                        re: compile("entropy", &format.pattern, &source)?,
+                        min_distinct: format.min_distinct,
+                        min_groups: format.min_groups,
+                    })
+                })
+                .transpose()?,
+            counts: MaskCounts::default(),
+        })
     }
 
-    fn sub(&mut self, text: &str, re: &Regex, class: &str, guarded: bool) -> String {
-        let mut hits = 0u64;
-        let out = re.replace_all(text, |caps: &Captures<'_>| {
+    fn sub(
+        text: &str,
+        re: &Regex,
+        class: &str,
+        guard: Option<&EntropyRule>,
+        hits: &mut u64,
+    ) -> String {
+        re.replace_all(text, |caps: &Captures<'_>| {
             let hit = &caps[0];
-            if guarded && !dense_enough(hit) {
+            if guard.is_some_and(|rule| !dense_enough(hit, rule)) {
                 return hit.to_string();
             }
-            hits += 1;
+            *hits += 1;
             marker(class, hit)
-        });
-        match class {
-            "token" => self.counts.token += hits,
-            "entropy" => self.counts.entropy += hits,
-            _ => self.counts.assignment += hits,
-        }
-        out.into_owned()
+        })
+        .into_owned()
     }
 
     /// Order matters: whole assignments first, then provider-shaped tokens,
@@ -119,9 +185,23 @@ impl Masker {
         if text.is_empty() {
             return String::new();
         }
-        let out = self.sub(text, &ASSIGN_RE, "assignment", false);
-        let out = self.sub(&out, &TOKEN_RE, "token", false);
-        self.sub(&out, &ENTROPY_RE, "entropy", true)
+        let mut out = text.to_string();
+        if let Some(re) = &self.assignment {
+            out = Self::sub(&out, re, "assignment", None, &mut self.counts.assignment);
+        }
+        if let Some(re) = &self.token {
+            out = Self::sub(&out, re, "token", None, &mut self.counts.token);
+        }
+        if let Some(rule) = &self.entropy {
+            out = Self::sub(
+                &out,
+                &rule.re,
+                "entropy",
+                Some(rule),
+                &mut self.counts.entropy,
+            );
+        }
+        out
     }
 
     pub fn counts(&self) -> MaskCounts {
