@@ -53,9 +53,7 @@ pub fn onboarding(rest: &[String]) -> Result<i32> {
         ));
     }
     if parsed.flag("skip-source") && source.is_some() {
-        return Err(Error(
-            "use either --source/--root or --skip-source".into(),
-        ));
+        return Err(Error("use either --source/--root or --skip-source".into()));
     }
     let json_output = parsed.flag("json");
     // Machine output has no reader to press Enter, so it never prompts.
@@ -116,12 +114,16 @@ pub fn onboarding(rest: &[String]) -> Result<i32> {
                         .filter(|candidate| candidate.available && candidate.mode == "transcripts")
                         .flat_map(|candidate| {
                             candidate.roots.iter().map(move |root| {
-                                format!("{}: {} ({} files)", candidate.runtime, root, candidate.files)
+                                format!(
+                                    "{}: {} ({} files)",
+                                    candidate.runtime, root, candidate.files
+                                )
                             })
                         })
                         .collect();
                     if candidates.is_empty() {
-                        report.note("No supported transcript roots were discovered on this machine.");
+                        report
+                            .note("No supported transcript roots were discovered on this machine.");
                         report.finish(
                             "awaiting_source",
                             &state,
@@ -192,9 +194,8 @@ pub fn onboarding(rest: &[String]) -> Result<i32> {
             }
             Some(_) => {
                 wait_for_enter(unattended, "Press Enter to continue. ")?;
-                advance(&definition, &screen, &mut state, &Map::new(), &revision)?.ok_or_else(
-                    || Error("published journey has no eligible next screen".into()),
-                )?;
+                advance(&definition, &screen, &mut state, &Map::new(), &revision)?
+                    .ok_or_else(|| Error("published journey has no eligible next screen".into()))?;
             }
             None => return Err(Error("published onboarding screen has no kind".into())),
         }

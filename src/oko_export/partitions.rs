@@ -7,7 +7,6 @@ use std::path::{Path, PathBuf};
 
 use crate::util::{mtime_ms, Result};
 
-
 /// Directory entries, treating a missing or non-directory path as empty.
 /// Sorted by name: `readdirSync` returns strcmp order, and the export walk is
 /// observable in the file Oko reads, so the order is part of the contract.

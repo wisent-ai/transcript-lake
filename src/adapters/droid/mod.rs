@@ -195,7 +195,6 @@ pub(super) fn js_string(value: Option<&Value>) -> String {
 }
 
 /// Sidecar settings files are whole-file JSON, accumulated line by line and
-
 mod settings;
 mod transcript;
 

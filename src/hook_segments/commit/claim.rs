@@ -140,4 +140,3 @@ pub(super) fn release_claim(claim: &Claim) {
         }
     }
 }
-

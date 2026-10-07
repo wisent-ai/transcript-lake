@@ -13,7 +13,6 @@ use crate::util::{home_dir, Error, Result};
 
 use super::Preflight;
 
-
 pub(super) fn canonical_supported_root(adapter: &dyn Adapter, requested: &Path) -> Result<PathBuf> {
     let root = fs::canonicalize(requested).map_err(|error| {
         Error(format!(
@@ -161,12 +160,7 @@ pub(super) fn preflight(adapter: &dyn Adapter, root: &Path) -> Result<Preflight>
     })
 }
 
-fn validate_supported_record(
-    runtime: &str,
-    record: &Value,
-    file: &Path,
-    line: u64,
-) -> Result<()> {
+fn validate_supported_record(runtime: &str, record: &Value, file: &Path, line: u64) -> Result<()> {
     if !record.is_object() {
         return Err(Error(format!(
             "unsupported non-object JSON record in {} at line {line}; no source data was ingested",
@@ -197,20 +191,22 @@ fn validate_supported_record(
             kind,
             "session_meta" | "turn_context" | "event_msg" | "response_item" | "compacted"
         ),
-        "kimi" => matches!(
-            kind,
-            "context.append_loop_event"
-                | "context.append_message"
-                | "usage.record"
-                | "metadata"
-                | "config.update"
-                | "context.apply_compaction"
-                | "turn.cancel"
-                | "turn.prompt"
-                | "turn.steer"
-        ) || kind.starts_with("tools.")
-            || kind.starts_with("permission.")
-            || kind.contains("_mode."),
+        "kimi" => {
+            matches!(
+                kind,
+                "context.append_loop_event"
+                    | "context.append_message"
+                    | "usage.record"
+                    | "metadata"
+                    | "config.update"
+                    | "context.apply_compaction"
+                    | "turn.cancel"
+                    | "turn.prompt"
+                    | "turn.steer"
+            ) || kind.starts_with("tools.")
+                || kind.starts_with("permission.")
+                || kind.contains("_mode.")
+        }
         // OMP and Factory Droid preserve otherwise unknown record kinds as
         // explicit metadata events rather than dropping them.
         "omp" | "droid" => true,

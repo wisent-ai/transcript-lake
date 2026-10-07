@@ -13,7 +13,6 @@ use crate::util::{home_dir, write_json, Result};
 
 use super::SourceRow;
 
-
 pub(super) fn display_roots(roots: &[PathBuf]) -> Vec<String> {
     roots
         .iter()

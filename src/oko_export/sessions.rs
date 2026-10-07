@@ -10,12 +10,9 @@ use std::path::{Path, PathBuf};
 use serde_json::Value;
 
 use super::partitions::{read_dir_names, LineReader, Partition};
-use super::row::{
-    accepted, dedupe, export_line, fingerprint, render, row_order, row_runtime,
-};
+use super::row::{accepted, dedupe, export_line, fingerprint, render, row_order, row_runtime};
 use super::{atomic_write, hash_text, read_text, session_key, Tally};
 use crate::util::Result;
-
 
 pub(crate) struct StagedSession {
     runtime: String,

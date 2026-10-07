@@ -8,11 +8,13 @@ use serde::Serialize;
 use serde_json::Value;
 
 use crate::args::{parse_options, require_flags_only};
-use crate::paths::{lake_paths, partition_report, read_cursor_status, read_stream_status, CursorStatus, PartitionRow, StreamStatus};
+use crate::paths::{
+    lake_paths, partition_report, read_cursor_status, read_stream_status, CursorStatus,
+    PartitionRow, StreamStatus,
+};
 use crate::util::{write_json, Result};
 
 use super::js_string;
-
 
 #[derive(Debug, Serialize)]
 pub struct StatusReport {
@@ -60,7 +62,10 @@ pub fn status(rest: &[String]) -> Result<i32> {
             source.root.display()
         )?;
     } else {
-        writeln!(out, "selected source: none (stream discovery remains automatic)")?;
+        writeln!(
+            out,
+            "selected source: none (stream discovery remains automatic)"
+        )?;
     }
     if report.partitions.is_empty() {
         writeln!(out, "partitions: none (the stream has not recorded events)")?;
@@ -117,4 +122,3 @@ pub fn status(rest: &[String]) -> Result<i32> {
     }
     Ok(status)
 }
-

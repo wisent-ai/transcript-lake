@@ -23,11 +23,13 @@ use crate::paths::resolve_data_dir;
 use crate::util::{find_on_path, home_dir, quote_sql, write_json, Error, Result};
 
 pub(super) const MODEL_NAME: &str = "jeden-goal-qwen3-4b-q4_k_m.gguf";
-pub(super) const MODEL_SHA256: &str = "2512d7a455a50a16742b75d8fe38bf02b46b5d6b607f785be32a6345d999d310";
+pub(super) const MODEL_SHA256: &str =
+    "2512d7a455a50a16742b75d8fe38bf02b46b5d6b607f785be32a6345d999d310";
 pub(super) const MODEL_REVISION: &str = "d9ce79f106ead1176b74bb0d9fb875521ca712b1";
 const MODEL_SOURCE: &str = "model:jeden-goal-qwen3-4b-2512d7a4";
 pub(super) const PROMPT_NAME: &str = "goal-system-prompt.md";
-pub(super) const PROMPT_SHA256: &str = "6a42afdb497988d0e0281dabe230f2e256423432ffec2eb02f0d570d34ac4621";
+pub(super) const PROMPT_SHA256: &str =
+    "6a42afdb497988d0e0281dabe230f2e256423432ffec2eb02f0d570d34ac4621";
 pub(super) const REPOSITORY: &str = "lbartoszcze/jeden-goal-qwen3-4b";
 
 #[derive(Deserialize, Serialize)]
@@ -207,13 +209,24 @@ fn infer_goal(text: &str) -> Result<Option<String>> {
         .arg(&prompt)
         .arg("--prompt")
         .arg(&request)
-        .args(["--chat-template", "auto", "--temperature", "0", "--max-new-tokens"])
+        .args([
+            "--chat-template",
+            "auto",
+            "--temperature",
+            "0",
+            "--max-new-tokens",
+        ])
         .arg(context.to_string())
         .arg("--seed")
         .arg(seed.to_string())
         .stdin(Stdio::null())
         .output()
-        .map_err(|error| Error(format!("failed to start Ster {}: {error}", runtime.display())))?;
+        .map_err(|error| {
+            Error(format!(
+                "failed to start Ster {}: {error}",
+                runtime.display()
+            ))
+        })?;
     if !output.status.success() {
         return Err(Error(format!(
             "Ster could not run the goal model ({} generate exited {}): {}",

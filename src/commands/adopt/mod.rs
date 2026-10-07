@@ -35,18 +35,30 @@ pub fn adopt(rest: &[String]) -> Result<i32> {
     writeln!(
         out,
         "source {}: {}",
-        report.get("sourceId").and_then(Value::as_str).unwrap_or_default(),
-        report.get("status").and_then(Value::as_str).unwrap_or("adopted")
+        report
+            .get("sourceId")
+            .and_then(Value::as_str)
+            .unwrap_or_default(),
+        report
+            .get("status")
+            .and_then(Value::as_str)
+            .unwrap_or("adopted")
     )?;
     writeln!(
         out,
         "runtime: {}",
-        report.get("runtime").and_then(Value::as_str).unwrap_or_default()
+        report
+            .get("runtime")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
     )?;
     writeln!(
         out,
         "root: {}",
-        report.get("root").and_then(Value::as_str).unwrap_or_default()
+        report
+            .get("root")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
     )?;
     writeln!(
         out,

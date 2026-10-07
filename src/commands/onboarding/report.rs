@@ -9,7 +9,6 @@ use crate::util::Result;
 use super::journey::*;
 use super::*;
 
-
 /// Screens as they are shown, plus the terminal verdict. Human output is
 /// printed as the walk happens; `--json` collects the same walk into one
 /// object, because a machine reader wants one document, not a transcript.
@@ -124,4 +123,3 @@ impl Report {
         Ok(0)
     }
 }
-

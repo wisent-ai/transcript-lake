@@ -165,4 +165,3 @@ pub(super) fn commit_segment(
     publish_ack(ready_dir, segment, &commit)?;
     Ok(Outcome::Committed(segment.events.len() as u64))
 }
-

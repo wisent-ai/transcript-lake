@@ -35,7 +35,6 @@ pub fn js_string(value: Option<&Value>) -> String {
     }
 }
 
-
 pub fn paths(rest: &[String]) -> Result<i32> {
     let parsed = parse_options("paths", rest, &[], &["json"])?;
     require_flags_only("paths", &parsed)?;

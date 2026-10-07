@@ -94,9 +94,11 @@ pub fn compact(rest: &[String]) -> Result<i32> {
 const PROJECTION_TARGETS: &str = "oko";
 
 fn projection_target(parsed: &crate::args::Parsed, command: &str) -> Result<String> {
-    let target = parsed
-        .value("target")
-        .ok_or_else(|| Error(format!("{command} requires --target <{PROJECTION_TARGETS}>")))?;
+    let target = parsed.value("target").ok_or_else(|| {
+        Error(format!(
+            "{command} requires --target <{PROJECTION_TARGETS}>"
+        ))
+    })?;
     if !PROJECTION_TARGETS.split(' ').any(|known| known == target) {
         return Err(Error(format!(
             "no projection target is named {target}; the targets are {PROJECTION_TARGETS}"
@@ -119,7 +121,8 @@ pub fn projection(rest: &[String]) -> Result<i32> {
             require_flags_only("projection rebuild", &parsed)?;
             projection_target(&parsed, "projection rebuild")?;
             let reindex = parsed.flag("reindex");
-            let summary = oko_export::export_oko_with_reindex(true, reindex, &resolve_data_dir(None))?;
+            let summary =
+                oko_export::export_oko_with_reindex(true, reindex, &resolve_data_dir(None))?;
             write_json(&summary)?;
             let reindexed = summary.get("reindex").is_some_and(|report| {
                 report.get("ran").and_then(Value::as_bool).unwrap_or(false)
@@ -146,7 +149,9 @@ pub fn projection(rest: &[String]) -> Result<i32> {
             };
             run_binary(&binary.to_string_lossy(), &["transcripts", "reindex"])
         }
-        other => Err(Error(format!("projection takes rebuild or refresh, not {other}"))),
+        other => Err(Error(format!(
+            "projection takes rebuild or refresh, not {other}"
+        ))),
     }
 }
 

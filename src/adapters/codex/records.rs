@@ -236,7 +236,6 @@ impl CodexParser {
         }
         Vec::new()
     }
-
 }
 
 mod message;

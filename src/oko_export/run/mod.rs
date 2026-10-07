@@ -16,8 +16,7 @@ use self::cursors::{incremental_sessions, partition_snapshot, read_export_cursor
 use super::partitions::{event_partition_files, Partition};
 use super::row::{accepted, export_line, fingerprint, row_runtime};
 use super::sessions::{
-    materialize_session, merge_incremental_session, prune_outputs, stage_events,
-    IncrementalSession,
+    materialize_session, merge_incremental_session, prune_outputs, stage_events, IncrementalSession,
 };
 use super::{atomic_write, hash_text, remove_tree, session_key, Tally};
 use crate::cursors::open_writer_lease;

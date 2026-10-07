@@ -31,7 +31,10 @@ pub(super) fn resolve_runtime() -> Result<PathBuf> {
         if path.is_file() {
             return Ok(path);
         }
-        return Err(Error(format!("{key} does not name a file: {}", path.display())));
+        return Err(Error(format!(
+            "{key} does not name a file: {}",
+            path.display()
+        )));
     }
     find_on_path("ster").ok_or_else(|| {
         Error("local goal model runs on Ster: install ster on PATH or name it with TRANSCRIPT_LAKE_STER".into())
@@ -48,12 +51,18 @@ fn base_model(data_dir: &Path) -> Result<String> {
             &card,
         )?;
     }
-    let read: serde_json::Value = serde_json::from_slice(&fs::read(&card)?)
-        .map_err(|error| Error(format!("model card {} is not JSON: {error}", card.display())))?;
+    let read: serde_json::Value = serde_json::from_slice(&fs::read(&card)?).map_err(|error| {
+        Error(format!(
+            "model card {} is not JSON: {error}",
+            card.display()
+        ))
+    })?;
     let declared = &read["cardData"]["base_model"];
-    let base = declared
-        .as_str()
-        .or_else(|| declared.as_array().and_then(|bases| bases.iter().find_map(serde_json::Value::as_str)));
+    let base = declared.as_str().or_else(|| {
+        declared
+            .as_array()
+            .and_then(|bases| bases.iter().find_map(serde_json::Value::as_str))
+    });
     base.map(str::to_owned).ok_or_else(|| {
         Error(format!(
             "{REPOSITORY}@{MODEL_REVISION} declares no base_model in its card ({}), so Ster has no config or tokenizer to run it with",
@@ -80,11 +89,21 @@ pub(super) fn resolve_checkpoint(data_dir: &Path, model: &Path) -> Result<PathBu
         Err(_) => {
             let info = artifact_dir(data_dir).join("base-model.json");
             download(&format!("https://huggingface.co/api/models/{base}"), &info)?;
-            let read: serde_json::Value = serde_json::from_slice(&fs::read(&info)?)
-                .map_err(|error| Error(format!("base model record {} is not JSON: {error}", info.display())))?;
+            let read: serde_json::Value =
+                serde_json::from_slice(&fs::read(&info)?).map_err(|error| {
+                    Error(format!(
+                        "base model record {} is not JSON: {error}",
+                        info.display()
+                    ))
+                })?;
             let sha = read["sha"]
                 .as_str()
-                .ok_or_else(|| Error(format!("base model {base} answered no revision ({})", info.display())))?
+                .ok_or_else(|| {
+                    Error(format!(
+                        "base model {base} answered no revision ({})",
+                        info.display()
+                    ))
+                })?
                 .to_owned();
             fs::write(&recorded, &sha)?;
             sha
@@ -93,7 +112,10 @@ pub(super) fn resolve_checkpoint(data_dir: &Path, model: &Path) -> Result<PathBu
     for file in ["config.json", "tokenizer.json", "tokenizer_config.json"] {
         let path = directory.join(file);
         if !path.is_file() {
-            download(&format!("https://huggingface.co/{base}/resolve/{revision}/{file}"), &path)?;
+            download(
+                &format!("https://huggingface.co/{base}/resolve/{revision}/{file}"),
+                &path,
+            )?;
         }
     }
     Ok(directory)
@@ -105,9 +127,12 @@ pub(super) fn declared_context(checkpoint: &Path) -> Result<u64> {
     let config = checkpoint.join("config.json");
     let read: serde_json::Value = serde_json::from_slice(&fs::read(&config)?)
         .map_err(|error| Error(format!("{} is not JSON: {error}", config.display())))?;
-    read["max_position_embeddings"]
-        .as_u64()
-        .ok_or_else(|| Error(format!("{} declares no max_position_embeddings", config.display())))
+    read["max_position_embeddings"].as_u64().ok_or_else(|| {
+        Error(format!(
+            "{} declares no max_position_embeddings",
+            config.display()
+        ))
+    })
 }
 
 pub(super) fn resolve_model(data_dir: &Path) -> Result<PathBuf> {

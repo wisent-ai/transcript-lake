@@ -54,7 +54,10 @@ pub fn read_registry(data_dir: &Path) -> Result<Option<SourceRegistry>> {
         return Ok(None);
     }
     let registry: SourceRegistry = serde_json::from_slice(&fs::read(&path)?).map_err(|error| {
-        Error(format!("invalid source registry {}: {error}", path.display()))
+        Error(format!(
+            "invalid source registry {}: {error}",
+            path.display()
+        ))
     })?;
     validate_registry(&registry, &path)?;
     Ok(Some(registry))
@@ -91,8 +94,13 @@ pub fn persist_selection(data_dir: &Path, runtime: &str, root: &Path) -> Result<
         }
     };
     registry.selected_source_id = id;
-    registry.sources.sort_by(|left, right| left.id.cmp(&right.id));
-    durable_write(&registry_path(data_dir), &serde_json::to_vec_pretty(&registry)?)?;
+    registry
+        .sources
+        .sort_by(|left, right| left.id.cmp(&right.id));
+    durable_write(
+        &registry_path(data_dir),
+        &serde_json::to_vec_pretty(&registry)?,
+    )?;
     Ok(source)
 }
 
@@ -106,7 +114,10 @@ fn validate_registry(registry: &SourceRegistry, path: &Path) -> Result<()> {
         )));
     }
     if registry.sources.is_empty() {
-        return Err(Error(format!("source registry {} contains no sources", path.display())));
+        return Err(Error(format!(
+            "source registry {} contains no sources",
+            path.display()
+        )));
     }
     let mut ids = std::collections::BTreeSet::new();
     for source in &registry.sources {
@@ -126,8 +137,7 @@ fn validate_registry(registry: &SourceRegistry, path: &Path) -> Result<()> {
                 source.runtime
             )));
         }
-        if !source.root.is_absolute()
-            || source.id != source_identity(&source.runtime, &source.root)
+        if !source.root.is_absolute() || source.id != source_identity(&source.runtime, &source.root)
         {
             return Err(Error(format!(
                 "source registry {} carries an invalid identity for {}",

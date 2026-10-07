@@ -153,4 +153,3 @@ pub(super) fn same_outputs(prior: Option<&Value>, current: Option<&Value>) -> bo
     let seen: Vec<String> = prior.iter().map(output_key).collect();
     current.iter().all(|item| seen.contains(&output_key(item)))
 }
-

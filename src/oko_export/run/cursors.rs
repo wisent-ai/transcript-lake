@@ -7,9 +7,7 @@ use std::path::Path;
 use serde_json::{json, Map, Value};
 
 use crate::oko_export::partitions::{LineReader, Partition};
-use crate::oko_export::row::{
-    accepted, export_line, fingerprint, number_value, row_runtime,
-};
+use crate::oko_export::row::{accepted, export_line, fingerprint, number_value, row_runtime};
 use crate::oko_export::sessions::IncrementalSession;
 use crate::oko_export::{hash_text, read_text, session_key, Tally};
 use crate::util::Result;

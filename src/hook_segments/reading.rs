@@ -187,4 +187,3 @@ pub(super) fn durable_write(path: &Path, content: &[u8]) -> Result<()> {
     sync_directory(parent)?;
     Ok(())
 }
-
