@@ -1,14 +1,14 @@
-//! The local model this command runs on: where the runtime, the weights and
-//! the system prompt are found, how each is checked against the digest it is
-//! published under, and the temporary input file one inference is given.
+//! The model this command runs on: Ster, the product that owns local model
+//! inference, run over a checkpoint directory assembled here from the
+//! published GGUF and its base model's config and tokenizer, each checked
+//! against what it is published under.
 
 use std::env;
-use std::fs::{self, File, OpenOptions};
-use std::io::{self, Write};
-use std::os::unix::fs::OpenOptionsExt;
+use std::fs::{self, File};
+use std::io;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::UNIX_EPOCH;
 
 use sha2::{Digest, Sha256};
 
@@ -19,26 +19,95 @@ use super::{
     REPOSITORY,
 };
 
+/// Ster's CLI: `TRANSCRIPT_LAKE_STER` when it names a file, else `ster` on
+/// PATH. Ster runs the GGUF on its own decoder (a local directory holding one
+/// `.gguf` beside the base model's `config.json` and tokenizer).
 pub(super) fn resolve_runtime() -> Result<PathBuf> {
-    for key in ["TRANSCRIPT_LAKE_GOAL_LLAMA_CLI", "JEDEN_GOAL_LLAMA_CLI"] {
-        if let Some(path) = env::var_os(key)
-            .map(PathBuf::from)
-            .filter(|path| !path.as_os_str().is_empty())
-        {
-            if path.is_file() {
-                return Ok(path);
-            }
-            return Err(Error(format!(
-                "{key} does not name a file: {}",
-                path.display()
-            )));
+    let key = "TRANSCRIPT_LAKE_STER";
+    if let Some(path) = env::var_os(key)
+        .map(PathBuf::from)
+        .filter(|path| !path.as_os_str().is_empty())
+    {
+        if path.is_file() {
+            return Ok(path);
+        }
+        return Err(Error(format!("{key} does not name a file: {}", path.display())));
+    }
+    find_on_path("ster").ok_or_else(|| {
+        Error("local goal model runs on Ster: install ster on PATH or name it with TRANSCRIPT_LAKE_STER".into())
+    })
+}
+
+/// The base model the goal model was fine-tuned from, as its published card
+/// at the pinned revision declares it (`cardData.base_model`).
+fn base_model(data_dir: &Path) -> Result<String> {
+    let card = artifact_dir(data_dir).join("model-card.json");
+    if !card.is_file() {
+        download(
+            &format!("https://huggingface.co/api/models/{REPOSITORY}/revision/{MODEL_REVISION}"),
+            &card,
+        )?;
+    }
+    let read: serde_json::Value = serde_json::from_slice(&fs::read(&card)?)
+        .map_err(|error| Error(format!("model card {} is not JSON: {error}", card.display())))?;
+    let declared = &read["cardData"]["base_model"];
+    let base = declared
+        .as_str()
+        .or_else(|| declared.as_array().and_then(|bases| bases.iter().find_map(serde_json::Value::as_str)));
+    base.map(str::to_owned).ok_or_else(|| {
+        Error(format!(
+            "{REPOSITORY}@{MODEL_REVISION} declares no base_model in its card ({}), so Ster has no config or tokenizer to run it with",
+            card.display()
+        ))
+    })
+}
+
+/// The checkpoint directory Ster loads: the validated GGUF linked beside the
+/// base model's config, tokenizer and tokenizer config, fetched once at the
+/// base repository's revision of that moment, which `base-revision` records.
+pub(super) fn resolve_checkpoint(data_dir: &Path, model: &Path) -> Result<PathBuf> {
+    let directory = artifact_dir(data_dir).join("checkpoint");
+    fs::create_dir_all(&directory)?;
+    let linked = directory.join(MODEL_NAME);
+    if fs::read_link(&linked).ok().as_deref() != Some(model) {
+        let _ = fs::remove_file(&linked);
+        std::os::unix::fs::symlink(model, &linked)?;
+    }
+    let base = base_model(data_dir)?;
+    let recorded = directory.join("base-revision");
+    let revision = match fs::read_to_string(&recorded) {
+        Ok(revision) => revision.trim().to_owned(),
+        Err(_) => {
+            let info = artifact_dir(data_dir).join("base-model.json");
+            download(&format!("https://huggingface.co/api/models/{base}"), &info)?;
+            let read: serde_json::Value = serde_json::from_slice(&fs::read(&info)?)
+                .map_err(|error| Error(format!("base model record {} is not JSON: {error}", info.display())))?;
+            let sha = read["sha"]
+                .as_str()
+                .ok_or_else(|| Error(format!("base model {base} answered no revision ({})", info.display())))?
+                .to_owned();
+            fs::write(&recorded, &sha)?;
+            sha
+        }
+    };
+    for file in ["config.json", "tokenizer.json", "tokenizer_config.json"] {
+        let path = directory.join(file);
+        if !path.is_file() {
+            download(&format!("https://huggingface.co/{base}/resolve/{revision}/{file}"), &path)?;
         }
     }
-    find_on_path("llama-cli").ok_or_else(|| {
-        Error(
-            "local goal model requires llama-cli on PATH or TRANSCRIPT_LAKE_GOAL_LLAMA_CLI".into(),
-        )
-    })
+    Ok(directory)
+}
+
+/// The context the base model declares (`max_position_embeddings`): the goal
+/// is generated until the model ends it or the context is full, as before.
+pub(super) fn declared_context(checkpoint: &Path) -> Result<u64> {
+    let config = checkpoint.join("config.json");
+    let read: serde_json::Value = serde_json::from_slice(&fs::read(&config)?)
+        .map_err(|error| Error(format!("{} is not JSON: {error}", config.display())))?;
+    read["max_position_embeddings"]
+        .as_u64()
+        .ok_or_else(|| Error(format!("{} declares no max_position_embeddings", config.display())))
 }
 
 pub(super) fn resolve_model(data_dir: &Path) -> Result<PathBuf> {
@@ -172,22 +241,4 @@ pub(super) fn validate_digest(path: &Path, expected: &str, name: &str) -> Result
         return Err(Error(format!("{name} {} failed SHA-256", path.display())));
     }
     Ok(())
-}
-
-pub(super) fn temporary_input(data_dir: &Path, text: &str) -> Result<PathBuf> {
-    let directory = data_dir.join("tmp");
-    fs::create_dir_all(&directory)?;
-    let nonce = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos();
-    let path = directory.join(format!("goal-input-{}-{nonce}.txt", std::process::id()));
-    let mut file = OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .mode(0o600)
-        .open(&path)?;
-    write!(file, "<user>{}</user>", text.replace('\0', ""))?;
-    file.sync_all()?;
-    Ok(path)
 }

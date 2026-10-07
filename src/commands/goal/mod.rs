@@ -1,8 +1,8 @@
 //! Local goal-title inference with the qualified Jeden GGUF.
 //!
 //! The model consumes only caller-supplied or already masked Lake text. It runs
-//! through a local llama.cpp executable; no transcript content is sent to an
-//! inference service.
+//! on Ster (`ster generate`), the product that owns local model inference, on
+//! this machine; no transcript content is sent to an inference service.
 
 use std::env;
 use std::fs::{self, File, OpenOptions};
@@ -184,45 +184,40 @@ fn infer_goal(text: &str) -> Result<Option<String>> {
     let model = resolve_model(&data_dir)?;
     let prompt = resolve_prompt(&data_dir)?;
     let runtime = resolve_runtime()?;
-    let input = temporary_input(&data_dir, text)?;
+    let checkpoint = resolve_checkpoint(&data_dir, &model)?;
+    // The model's own declared context bounds the answer: it is generated
+    // until the model ends it, as no token budget is chosen here.
+    let context = declared_context(&checkpoint)?;
+    let request = format!("<user>{}</user>", text.replace('\0', ""));
+    // Argmax decoding draws nothing, so the seed Ster requires changes no
+    // token; it is the request's digest read as a number, so the same text
+    // runs the same way.
+    let digest = Sha256::digest(request.as_bytes());
+    let seed = digest
+        .chunks_exact(std::mem::size_of::<u64>())
+        .next()
+        .and_then(|bytes| bytes.try_into().ok())
+        .map(u64::from_le_bytes)
+        .ok_or_else(|| Error("a SHA-256 digest is shorter than one u64".into()))?;
     let output = Command::new(&runtime)
-        .args([
-            "--model",
-            model.to_string_lossy().as_ref(),
-            "--system-prompt-file",
-            prompt.to_string_lossy().as_ref(),
-            "--file",
-            input.to_string_lossy().as_ref(),
-            "--single-turn",
-            "--reasoning",
-            "off",
-            // The model's own declared context and generation until it ends
-            // its answer; no window or token budget is chosen here.
-            "--ctx-size",
-            "0",
-            "--n-predict",
-            "-1",
-            "--temp",
-            "0",
-            "--gpu-layers",
-            "all",
-            "--no-display-prompt",
-            "--no-show-timings",
-            "--simple-io",
-            "--log-disable",
-        ])
+        .arg("generate")
+        .arg("--model")
+        .arg(&checkpoint)
+        .arg("--system")
+        .arg(&prompt)
+        .arg("--prompt")
+        .arg(&request)
+        .args(["--chat-template", "auto", "--temperature", "0", "--max-new-tokens"])
+        .arg(context.to_string())
+        .arg("--seed")
+        .arg(seed.to_string())
         .stdin(Stdio::null())
-        .output();
-    let _ = fs::remove_file(&input);
-    let output = output.map_err(|error| {
-        Error(format!(
-            "failed to start local goal model runtime {}: {error}",
-            runtime.display()
-        ))
-    })?;
+        .output()
+        .map_err(|error| Error(format!("failed to start Ster {}: {error}", runtime.display())))?;
     if !output.status.success() {
         return Err(Error(format!(
-            "local goal model failed with status {}: {}",
+            "Ster could not run the goal model ({} generate exited {}): {}",
+            runtime.display(),
             output.status,
             String::from_utf8_lossy(&output.stderr).trim()
         )));
