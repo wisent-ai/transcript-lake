@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use serde_json::{Map, Value};
 
 use crate::stream::warn;
-use crate::types::{Adapter, Parser, ParserCtx, RawEvent, SessionEntry};
+use crate::types::{Adapter, Parser, ParserCtx, RawEvent, Reading, SessionEntry};
 
 use super::*;
 
@@ -73,8 +73,8 @@ impl Adapter for Hooks {
         })
     }
 
-    fn parser(&self, ctx: ParserCtx) -> Box<dyn Parser> {
-        Box::new(HooksParser { file: ctx.file })
+    fn read(&self, ctx: ParserCtx) -> Reading {
+        Reading::Lines(Box::new(HooksParser { file: ctx.file }))
     }
 }
 

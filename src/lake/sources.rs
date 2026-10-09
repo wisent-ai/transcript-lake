@@ -11,7 +11,6 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
-use crate::types::SUPPORTED_SOURCES;
 use crate::util::{now_iso, Error, Result};
 
 pub const SOURCE_REGISTRY_FILE: &str = "sources.json";
@@ -128,9 +127,7 @@ fn validate_registry(registry: &SourceRegistry, path: &Path) -> Result<()> {
                 source.id
             )));
         }
-        if crate::adapters::by_name(&source.runtime).is_none()
-            || !SUPPORTED_SOURCES.contains(&source.runtime.as_str())
-        {
+        if crate::adapters::by_name(&source.runtime).is_none() {
             return Err(Error(format!(
                 "source registry {} names unsupported transcript runtime {}",
                 path.display(),

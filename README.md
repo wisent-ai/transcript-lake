@@ -25,7 +25,7 @@ Your Company’s Memory, Written as It Happens.
 
 ## Problem and intended users
 
-Coding agents persist conversations in incompatible local formats. Comparing activity across Claude Code, Codex, OMP, Droid, Kimi, and adaptive hooks otherwise requires provider-specific parsers, repeated full scans, and unsafe handling of raw transcripts.
+Coding agents persist conversations in incompatible local formats — append-only JSONL, JSON documents rewritten in place, SQLite databases, Markdown logs. Comparing activity across the dozens of harnesses a team runs otherwise requires provider-specific parsers, repeated full scans, and unsafe handling of raw transcripts.
 
 Transcript Lake is for:
 
@@ -40,7 +40,7 @@ Its value is one live parsing and masking boundary: every downstream consumer re
 
 ### Included
 
-- Real-time, newline-aligned streaming from local Claude Code, Codex, OMP, Droid, and Kimi session stores.
+- Real-time streaming from the local session stores of every harness in the adapter registry (`src/adapters/mod.rs`): append-only stores are read from a verified byte cursor; stores rewritten in place (JSON documents, SQLite databases with their write-ahead log, Markdown logs) are read whole whenever they change, and what was archived before is recognised by occurrence so nothing is appended twice. `transcript-lake sources` lists every supported runtime with the roots it reads on this machine.
 - Real-time adaptive-hook decisions from Tama telemetry segments or its legacy local log.
 - Provider-neutral NDJSON events for user, assistant, thinking, tool, usage, metadata, and hook-decision records.
 - Deterministic masking before any event reaches durable Lake storage.
@@ -52,7 +52,7 @@ Its value is one live parsing and masking boundary: every downstream consumer re
 - Transcript Lake is not a chat UI, agent runtime, cloud service, or team synchronization system.
 - It does not modify vendor transcript stores.
 - It does not provide semantic or vector search.
-- It does not currently ship Gemini or Qwen adapters.
+- It does not read stores a vendor keeps only on its servers (current Amp threads) or encrypts (Windsurf Cascade's `.pb` trajectories), and it never writes to a vendor's store: databases are opened read-only.
 - It does not fully anonymize conversations. Hostname, runtime, timestamps, session identifiers, project paths, model names, and bounded structural metadata remain available for correlation.
 - It does not run periodic scans or require an external scheduler; one supervised `stream` process follows source writes continuously.
 
@@ -202,7 +202,7 @@ Canonical event and adapter interfaces are machine contracts documented in [the 
 ## Project status and support
 
 - **Maturity:** development (`0.x` contract; no supported immutable release yet).
-- **Current compatibility:** macOS; a self-contained binary built with Rust `1.85` or newer; DuckDB `1.5.x` for SQL/compaction; locally observed formats for Claude Code, Codex, OMP, Droid, Kimi, and Tama hook telemetry.
+- **Current compatibility:** macOS; a self-contained binary built with Rust `1.85` or newer; DuckDB `1.5.x` for SQL/compaction; the session formats each adapter's module documentation names, with the upstream source or observed-format registry it was read from, and Tama hook telemetry.
 - **Support and defects:** [GitHub Issues](https://github.com/wisent-ai/transcript-lake/issues).
 - **Security reports:** use a private [GitHub security advisory](https://github.com/wisent-ai/transcript-lake/security/advisories/new); do not disclose transcript data or credentials in a public issue.
 - **License:** MIT; see [LICENSE](LICENSE).

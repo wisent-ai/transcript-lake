@@ -1,7 +1,8 @@
 //! Startup catch-up and filesystem-notification ingestion use one cursor contract.
 pub(super) mod file;
+mod owner;
 
-use file::stream_file;
+use file::{log_changed_since, stream_file};
 
 use super::{ingest_source_locked, total_hits, warn, Tally, Writer};
 use crate::cursors::{open_writer_lease, CursorRecord, Cursors};
@@ -60,7 +61,8 @@ fn catch_up_locked(data_dir: &Path) -> Result<Value> {
                 };
                 let key = entry.file.to_string_lossy().to_string();
                 if let Some(CursorRecord::Bytes(cursor)) = cursors.get(&key)? {
-                    if cursor.is_current(&meta) {
+                    if cursor.is_current(&meta) && !log_changed_since(&entry.file, cursor.mtime_ms)
+                    {
                         tally.skipped += 1;
                         continue;
                     }
@@ -174,19 +176,7 @@ fn stream_paths_locked(data_dir: &Path, paths: &[PathBuf]) -> Result<Value> {
             touched += report.files;
             continue;
         }
-        let Some(adapter) = adapters.iter().find(|adapter| {
-            if let Some(source) = &selected {
-                adapter.runtime() == source.runtime && path.starts_with(&source.root)
-            } else {
-                adapter
-                    .roots(&home)
-                    .iter()
-                    .any(|root| path.starts_with(root))
-            }
-        }) else {
-            continue;
-        };
-        let Some(entry) = adapter.entry_for(path) else {
+        let Some((adapter, entry)) = owner::owner(&adapters, selected.as_ref(), &home, path) else {
             continue;
         };
         let Ok(meta) = fs::metadata(&entry.file) else {
@@ -195,20 +185,13 @@ fn stream_paths_locked(data_dir: &Path, paths: &[PathBuf]) -> Result<Value> {
         let tally = tallies.entry(adapter.runtime()).or_default();
         let key = entry.file.to_string_lossy().to_string();
         if let Some(CursorRecord::Bytes(cursor)) = cursors.get(&key)? {
-            if cursor.is_current(&meta) {
+            if cursor.is_current(&meta) && !log_changed_since(&entry.file, cursor.mtime_ms) {
                 tally.skipped += 1;
                 continue;
             }
         }
         let before = total_hits(&writer.masker.counts());
-        match stream_file(
-            &mut writer,
-            &mut cursors,
-            adapter.as_ref(),
-            &entry,
-            false,
-            tally,
-        ) {
+        match stream_file(&mut writer, &mut cursors, adapter, &entry, false, tally) {
             Ok(()) => {
                 tally.files += 1;
                 touched += 1;

@@ -1,6 +1,11 @@
-//! Adapter: Claude Code transcripts — `~/.claude/projects/<encoded-cwd>/<sessionId>.jsonl`
+//! Adapter: Claude Code transcripts — `~/.claude/projects/<encoded-cwd>/<sessionId>.jsonl` —
+//! and every harness that writes Claude Code's transcripts elsewhere: Cherry
+//! Studio runs Claude Code with its config dir under the app's data,
+//! `~/Library/Application Support/CherryStudio/Data/Agents/.claude/projects`
+//! (`~/.config/CherryStudio/...` on Linux; the observed-format registry
+//! vshulcz/deja-vu `docs/registry/cherrystudio.md`).
 //!
-//! Frozen interface: `runtime`, `roots(home)`, `list_sessions(root)`, `parser(ctx)`.
+//! Interface: `runtime`, `roots(home)`, `list_sessions(root)`, `entry_for(path)`, `read(ctx)`.
 //! Adapters emit UNMASKED text (the stream masks) and never do IO in `on_line`.
 //! Contract: malformed lines are tolerated silently (no events).
 //! Record types user | assistant | system | summary carry
@@ -11,21 +16,59 @@ use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 
-use crate::types::{Adapter, Parser, ParserCtx, SessionEntry};
+use crate::types::{Adapter, ParserCtx, Reading, SessionEntry};
 
-pub struct Claude;
+/// One harness that writes Claude Code's transcripts: its runtime id and the
+/// `projects` directories it may keep them in, under the home.
+pub struct ClaudeStore {
+    runtime: &'static str,
+    projects: &'static [&'static [&'static str]],
+}
 
-impl Adapter for Claude {
+/// Claude Code.
+pub const CLAUDE: ClaudeStore = ClaudeStore {
+    runtime: "claude",
+    projects: &[&[".claude", "projects"]],
+};
+/// Cherry Studio's agents.
+pub const CHERRY_STUDIO: ClaudeStore = ClaudeStore {
+    runtime: "cherrystudio",
+    projects: &[
+        &[
+            "Library",
+            "Application Support",
+            "CherryStudio",
+            "Data",
+            "Agents",
+            ".claude",
+            "projects",
+        ],
+        &[
+            ".config",
+            "CherryStudio",
+            "Data",
+            "Agents",
+            ".claude",
+            "projects",
+        ],
+    ],
+};
+
+impl Adapter for ClaudeStore {
     fn runtime(&self) -> &'static str {
-        "claude"
+        self.runtime
     }
 
     fn roots(&self, home: &Path) -> Vec<PathBuf> {
-        let dir = home.join(".claude").join("projects");
-        if dir.exists() {
-            return vec![dir];
-        }
-        Vec::new()
+        self.projects
+            .iter()
+            .map(|parts| {
+                parts
+                    .iter()
+                    .fold(home.to_path_buf(), |path, part| path.join(part))
+            })
+            .filter(|dir| dir.exists())
+            .collect()
     }
 
     fn list_sessions(&self, root: &Path) -> Vec<SessionEntry> {
@@ -64,8 +107,8 @@ impl Adapter for Claude {
         project_entry(project_dir, &name)
     }
 
-    fn parser(&self, ctx: ParserCtx) -> Box<dyn Parser> {
-        Box::new(ClaudeParser::new(ctx))
+    fn read(&self, ctx: ParserCtx) -> Reading {
+        Reading::Lines(Box::new(ClaudeParser::new(ctx)))
     }
 }
 

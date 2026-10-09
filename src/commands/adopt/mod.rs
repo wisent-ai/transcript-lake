@@ -81,8 +81,10 @@ pub fn adopt(rest: &[String]) -> Result<i32> {
 /// persisted after that boundary returns successfully.
 pub fn adopt_source(runtime: &str, requested_root: &Path, data_dir: &Path) -> Result<Value> {
     let adapter = crate::adapters::by_name(runtime).ok_or_else(|| {
+        let runtimes: Vec<&str> = crate::adapters::all().iter().map(|adapter| adapter.runtime()).collect();
         Error(format!(
-            "source \"{runtime}\" is not an adoptable transcript runtime (expected one of: claude, codex, omp, droid, kimi)"
+            "source \"{runtime}\" is not an adoptable transcript runtime (expected one of: {}; `transcript-lake sources` shows each with its roots on this machine)",
+            runtimes.join(", ")
         ))
     })?;
     let root = canonical_supported_root(adapter.as_ref(), requested_root)?;

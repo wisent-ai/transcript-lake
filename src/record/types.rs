@@ -6,7 +6,18 @@ use serde::Serialize;
 use serde_json::{Map, Value};
 
 pub const HOOKS: &str = "hooks";
-pub const SUPPORTED_SOURCES: [&str; 6] = ["claude", "codex", "omp", "droid", "kimi", "hooks"];
+
+/// Every source name a command accepts: each registered transcript adapter's
+/// runtime, in discovery order, then the adaptive-hook telemetry. The adapter
+/// registry is the one list; nothing else names the runtimes.
+pub fn supported_sources() -> Vec<&'static str> {
+    let mut names: Vec<&'static str> = crate::adapters::all()
+        .iter()
+        .map(|adapter| adapter.runtime())
+        .collect();
+    names.push(HOOKS);
+    names
+}
 
 /// The canonical event types, in the order the Lake contract lists them.
 pub const EVENT_TYPES: [&str; 7] = [
@@ -81,22 +92,51 @@ pub trait Parser {
     }
 }
 
+/// Reads every event of a session kept whole, when the stream asks for it.
+pub type WholeLoader = Box<dyn FnOnce() -> crate::util::Result<Vec<RawEvent>>>;
+
+/// How one session is read.
+pub enum Reading {
+    /// Appended newline-delimited records, read from the stream's byte cursor.
+    Lines(Box<dyn Parser>),
+    /// The whole session read at once: a JSON document rewritten in place, a
+    /// SQLite database (with its `-wal` file), a markdown log. The stream
+    /// calls the loader only when the source's bytes changed since its last
+    /// checkpoint, and recognises events it archived before by occurrence,
+    /// so nothing is appended twice. A database that holds many sessions is
+    /// one entry: the loader answers every session's events, each carrying
+    /// its own `session_id`.
+    Whole(WholeLoader),
+}
+
 /// One supported local transcript store.
 pub trait Adapter {
     fn runtime(&self) -> &'static str;
     /// Existing source roots for this runtime under the given home directory.
     fn roots(&self, home: &Path) -> Vec<PathBuf>;
+    /// The stable directories the stream watches for this runtime. A harness
+    /// that keeps one root per project lists those projects in `roots`; a
+    /// project that appears after the stream starts is only seen when its
+    /// parent is watched, so such an adapter answers that parent here.
+    fn watch_roots(&self, home: &Path) -> Vec<PathBuf> {
+        self.roots(home)
+    }
     /// Candidate transcript files beneath one root. A directory that vanishes
     /// mid-scan yields no entries instead of failing the run.
     fn list_sessions(&self, root: &Path) -> Vec<SessionEntry>;
     /// The entry for one transcript file whose path is already known, derived
     /// without listing a root. `None` when this adapter does not own the path
-    /// or the path is not a transcript file it would have listed.
+    /// or the path is not a transcript file it would have listed. A database
+    /// adapter maps its `-wal` file to the database's own entry, because a
+    /// SQLite write lands there first.
     ///
     /// This is what lets the online watcher read the file it was told about
     /// instead of re-walking every root to find it again.
     fn entry_for(&self, path: &Path) -> Option<SessionEntry>;
-    fn parser(&self, ctx: ParserCtx) -> Box<dyn Parser>;
+    /// How `ctx`'s session is read. No file is opened here: a line reader is
+    /// handed the bytes by the stream, and a whole reader opens its source
+    /// only when the stream calls its loader.
+    fn read(&self, ctx: ParserCtx) -> Reading;
 }
 
 /// One partition file a segment producer published.

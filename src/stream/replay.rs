@@ -2,7 +2,7 @@
 use super::{stream_file, total_hits, warn, ReplayOptions, Tally, Writer};
 use crate::cursors::{open_writer_lease, Cursors};
 use crate::hook_segments::replay_closed_hook_segments;
-use crate::types::{Adapter, HOOKS, SUPPORTED_SOURCES};
+use crate::types::{supported_sources, Adapter, HOOKS};
 use crate::util::{home_dir, machine_name, Error, Result};
 use serde_json::{json, Map, Value};
 use std::fs;
@@ -26,17 +26,18 @@ fn replay_locked(opts: &ReplayOptions) -> Result<Value> {
     let data_dir = opts.data_dir.clone();
     let machine = machine_name();
     let requested = opts.source.as_deref();
+    let supported = supported_sources();
     if let Some(name) = requested {
-        if !SUPPORTED_SOURCES.contains(&name) {
+        if !supported.contains(&name) {
             return Err(Error(format!(
-                "unknown source \"{name}\" (expected one of: {})",
-                SUPPORTED_SOURCES.join(", ")
+                "unknown source \"{name}\" (expected one of: {}; `transcript-lake sources` shows each with its roots on this machine)",
+                supported.join(", ")
             )));
         }
     }
     let selected: Vec<&str> = match requested {
         Some(name) => vec![name],
-        None => SUPPORTED_SOURCES.to_vec(),
+        None => supported.clone(),
     };
     let mut cursors = Cursors::open(&data_dir)?;
     let mut writer = Writer::new(data_dir.clone(), machine)?;

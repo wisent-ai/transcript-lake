@@ -15,7 +15,7 @@ mod live;
 mod replay;
 mod source;
 mod writer;
-use live::file::stream_file;
+use live::file::{log_changed_since, stream_file};
 pub use live::{catch_up, stream_paths};
 pub use replay::replay;
 use writer::Writer;
@@ -90,7 +90,7 @@ fn ingest_source_locked(data_dir: &Path, runtime: &str, root: &Path) -> Result<V
             .map_err(|error| Error(format!("stat failed for {}: {error}", entry.file.display())))?;
         let key = entry.file.to_string_lossy().to_string();
         if let Some(CursorRecord::Bytes(cursor)) = cursors.get(&key)? {
-            if cursor.is_current(&meta) {
+            if cursor.is_current(&meta) && !log_changed_since(&entry.file, cursor.mtime_ms) {
                 tally.skipped += 1;
                 continue;
             }

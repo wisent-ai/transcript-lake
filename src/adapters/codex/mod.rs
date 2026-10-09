@@ -1,6 +1,8 @@
-//! Adapter: Codex CLI rollouts — `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl`
+//! Adapter: Codex CLI rollouts — `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl` — and
+//! TRAE CLI, which writes Codex rollouts under `~/.trae/cli/sessions/` (the
+//! observed-format registry vshulcz/deja-vu `docs/registry/trae.md`).
 //!
-//! Frozen interface: `runtime`, `roots(home)`, `list_sessions(root)`, `parser(ctx)`.
+//! Interface: `runtime`, `roots(home)`, `list_sessions(root)`, `entry_for(path)`, `read(ctx)`.
 //! Adapters emit UNMASKED text (the stream masks) and never do IO in `on_line`;
 //! malformed lines are tolerated silently. Envelope per line:
 //! `{ timestamp, type, payload }`. Verified on live files, old and current CLI
@@ -14,22 +16,41 @@ use std::path::{Path, PathBuf};
 use regex::Regex;
 use serde_json::Value;
 
-use crate::types::{Adapter, Parser, ParserCtx, SessionEntry};
+use crate::types::{Adapter, ParserCtx, Reading, SessionEntry};
 
 /// Filenames look like `rollout-<ISO-stamp>-<uuid>.jsonl`; the uuid is the session id.
 static UUID_RE: std::sync::LazyLock<Regex> = std::sync::LazyLock::new(|| {
     Regex::new("(?i)[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}").expect("uuid pattern")
 });
 
-pub struct Codex;
+/// One harness that writes Codex rollouts: its runtime id and the sessions
+/// directory under the home.
+pub struct CodexStore {
+    runtime: &'static str,
+    sessions: &'static [&'static str],
+}
 
-impl Adapter for Codex {
+/// Codex CLI.
+pub const CODEX: CodexStore = CodexStore {
+    runtime: "codex",
+    sessions: &[".codex", "sessions"],
+};
+/// TRAE CLI.
+pub const TRAE: CodexStore = CodexStore {
+    runtime: "trae",
+    sessions: &[".trae", "cli", "sessions"],
+};
+
+impl Adapter for CodexStore {
     fn runtime(&self) -> &'static str {
-        "codex"
+        self.runtime
     }
 
     fn roots(&self, home: &Path) -> Vec<PathBuf> {
-        let dir = home.join(".codex").join("sessions");
+        let dir = self
+            .sessions
+            .iter()
+            .fold(home.to_path_buf(), |path, part| path.join(part));
         if dir.exists() {
             return vec![dir];
         }
@@ -81,8 +102,8 @@ impl Adapter for Codex {
         day_entry(day, &name)
     }
 
-    fn parser(&self, ctx: ParserCtx) -> Box<dyn Parser> {
-        Box::new(CodexParser::new(ctx))
+    fn read(&self, ctx: ParserCtx) -> Reading {
+        Reading::Lines(Box::new(CodexParser::new(ctx)))
     }
 }
 

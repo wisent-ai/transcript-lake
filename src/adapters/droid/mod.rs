@@ -20,7 +20,7 @@ use std::path::{Path, PathBuf};
 
 use serde_json::{Map, Value};
 
-use crate::types::{Adapter, Parser, ParserCtx, SessionEntry};
+use crate::types::{Adapter, ParserCtx, Reading, SessionEntry};
 
 const JSONL_EXT: &str = ".jsonl";
 const SETTINGS_EXT: &str = ".settings.json";
@@ -81,11 +81,11 @@ impl Adapter for Droid {
         session_entry(root, &name)
     }
 
-    fn parser(&self, ctx: ParserCtx) -> Box<dyn Parser> {
+    fn read(&self, ctx: ParserCtx) -> Reading {
         if ctx.file.to_string_lossy().ends_with(SETTINGS_EXT) {
-            return Box::new(SettingsParser::new(ctx));
+            return Reading::Lines(Box::new(SettingsParser::new(ctx)));
         }
-        Box::new(TranscriptParser::new(ctx))
+        Reading::Lines(Box::new(TranscriptParser::new(ctx)))
     }
 }
 

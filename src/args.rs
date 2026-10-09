@@ -3,7 +3,7 @@
 //! never swallows the next flag, and anything unknown is a hard error.
 use std::collections::HashMap;
 
-use crate::types::SUPPORTED_SOURCES;
+use crate::types::supported_sources;
 use crate::util::{Error, Result};
 
 #[derive(Debug, Default)]
@@ -93,10 +93,11 @@ pub fn require_runtime(value: Option<&str>) -> Result<Option<String>> {
     let Some(value) = value else {
         return Ok(None);
     };
-    if !SUPPORTED_SOURCES.contains(&value) {
+    let supported = supported_sources();
+    if !supported.contains(&value) {
         return Err(Error(format!(
-            "unknown source \"{value}\" (expected one of: {})",
-            SUPPORTED_SOURCES.join(", ")
+            "unknown source \"{value}\" (expected one of: {}; `transcript-lake sources` shows each with its roots on this machine)",
+            supported.join(", ")
         )));
     }
     Ok(Some(value.to_string()))

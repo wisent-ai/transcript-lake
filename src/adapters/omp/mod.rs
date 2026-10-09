@@ -1,6 +1,15 @@
-//! Adapter for Oh My Pi (omp) agent session transcripts.
+//! Adapter for Oh My Pi (omp) agent session transcripts, and for every harness
+//! that writes Pi's session files (pi-mono's coding agent, which omp is built
+//! from, and the agents built on it).
 //!
 //! Source layout: `HOME/.omp/agent/sessions/<encoded-cwd>/<stamp>_<uuid>.jsonl`;
+//! Pi `HOME/.pi/agent/sessions/<encoded-cwd>/` (pi-mono `packages/coding-agent/
+//! docs/session-format.md`); Senpi `~/.senpi/agent/sessions/<cwd>/`, gajae-code
+//! `~/.gjc/agent/sessions/<cwd>/`, prime-agent `~/.prime/agent/sessions/<cwd>/`,
+//! Kimchi `~/.config/kimchi/harness/sessions/--<cwd>--/` and OpenClaw
+//! `~/.openclaw/agents/<agent>/sessions/` (the observed-format registry
+//! vshulcz/deja-vu `docs/registry/{senpi,gjc,prime,kimchi,openclaw}.md`, each
+//! "pi's session JSONL");
 //! a sibling directory with the same stem holds non-transcript artifacts and
 //! is skipped. Typed lines verified on real files from this machine:
 //!   session (id, cwd, version), title / title_change (title, updatedAt),
@@ -18,26 +27,101 @@ use std::path::{Path, PathBuf};
 
 use serde_json::{Map, Value};
 
-use crate::types::{Adapter, Parser, ParserCtx, SessionEntry};
+use crate::types::{Adapter, ParserCtx, Reading, SessionEntry};
 
 const JSONL_EXT: &str = ".jsonl";
 
-pub struct Omp;
+/// Where a harness keeps Pi's session files under the home: one directory per
+/// project under a sessions directory, or one sessions directory per agent.
+pub enum Layout {
+    PerProject(&'static [&'static str]),
+    PerAgent(&'static [&'static str]),
+}
 
-impl Adapter for Omp {
+/// One harness that writes omp's session files: its runtime id and where
+/// they are.
+pub struct OmpStore {
+    runtime: &'static str,
+    layout: Layout,
+}
+
+/// Oh My Pi.
+pub const OMP: OmpStore = OmpStore {
+    runtime: "omp",
+    layout: Layout::PerProject(&[".omp", "agent", "sessions"]),
+};
+/// Pi, pi-mono's coding agent.
+pub const PI: OmpStore = OmpStore {
+    runtime: "pi",
+    layout: Layout::PerProject(&[".pi", "agent", "sessions"]),
+};
+/// Senpi.
+pub const SENPI: OmpStore = OmpStore {
+    runtime: "senpi",
+    layout: Layout::PerProject(&[".senpi", "agent", "sessions"]),
+};
+/// gajae-code.
+pub const GJC: OmpStore = OmpStore {
+    runtime: "gjc",
+    layout: Layout::PerProject(&[".gjc", "agent", "sessions"]),
+};
+/// PrimeIntellect's prime-agent.
+pub const PRIME: OmpStore = OmpStore {
+    runtime: "prime",
+    layout: Layout::PerProject(&[".prime", "agent", "sessions"]),
+};
+/// Kimchi Coding.
+pub const KIMCHI: OmpStore = OmpStore {
+    runtime: "kimchi",
+    layout: Layout::PerProject(&[".config", "kimchi", "harness", "sessions"]),
+};
+/// OpenClaw.
+pub const OPENCLAW: OmpStore = OmpStore {
+    runtime: "openclaw",
+    layout: Layout::PerAgent(&[".openclaw", "agents"]),
+};
+
+impl Adapter for OmpStore {
     fn runtime(&self) -> &'static str {
-        "omp"
+        self.runtime
+    }
+
+    fn watch_roots(&self, home: &Path) -> Vec<PathBuf> {
+        let parts = match &self.layout {
+            Layout::PerProject(parts) | Layout::PerAgent(parts) => parts,
+        };
+        let base = parts
+            .iter()
+            .fold(home.to_path_buf(), |path, part| path.join(part));
+        if base.is_dir() {
+            vec![base]
+        } else {
+            Vec::new()
+        }
     }
 
     fn roots(&self, home: &Path) -> Vec<PathBuf> {
-        let base = home.join(".omp").join("agent").join("sessions");
+        let (parts, per_agent) = match &self.layout {
+            Layout::PerProject(parts) => (parts, false),
+            Layout::PerAgent(parts) => (parts, true),
+        };
+        let base = parts
+            .iter()
+            .fold(home.to_path_buf(), |path, part| path.join(part));
         let Some(entries) = read_dirents(&base) else {
             return Vec::new();
         };
         entries
             .into_iter()
             .filter(|(_, file_type)| file_type.is_dir())
-            .map(|(name, _)| base.join(name))
+            .map(|(name, _)| {
+                if per_agent {
+                    base.join(name).join("sessions")
+                } else {
+                    base.join(name)
+                }
+            })
+            .filter(|root| root.is_dir())
             .collect()
     }
 
@@ -76,8 +160,8 @@ impl Adapter for Omp {
         session_entry(root, &name)
     }
 
-    fn parser(&self, ctx: ParserCtx) -> Box<dyn Parser> {
-        Box::new(OmpParser::new(ctx))
+    fn read(&self, ctx: ParserCtx) -> Reading {
+        Reading::Lines(Box::new(OmpParser::new(ctx)))
     }
 }
 

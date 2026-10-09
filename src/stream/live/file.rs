@@ -1,14 +1,119 @@
 //! A byte offset is usable only after its consumed prefix has been verified.
+//! A session kept whole has no offset: it is read again whenever its file
+//! changes, and what was archived before is recognised by occurrence.
 use std::fs::{self, File};
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
+use std::path::{Path, PathBuf};
 
 use sha2::{Digest, Sha256};
 
 use super::super::source::Retained;
 use super::super::{file_stem, hex_digest, warn, Tally, Writer, PART_DIGEST_LEN};
 use crate::cursors::{ByteCursor, CursorRecord, Cursors, SourceCheckpoint};
-use crate::types::{Adapter, ParserCtx, RawEvent, SessionEntry};
-use crate::util::{mtime_ms, Result};
+use crate::types::{Adapter, ParserCtx, RawEvent, Reading, SessionEntry, WholeLoader};
+use crate::util::{mtime_ms, Error, Result};
+
+/// The partition file a source's events go to, and the digest of its file
+/// stem, both derived from the source's path.
+fn partition_names(entry: &SessionEntry, key: &str) -> Result<(String, String)> {
+    let digest = hex_digest(key.as_bytes());
+    let name = entry.file.file_name().ok_or_else(|| {
+        Error(format!(
+            "transcript path {} names no file, so no partition can be derived from it",
+            entry.file.display()
+        ))
+    })?;
+    Ok((
+        format!("part-{}.ndjson", &digest[..PART_DIGEST_LEN]),
+        hex_digest(file_stem(&name.to_string_lossy()).as_bytes()),
+    ))
+}
+
+/// The file SQLite writes a database's committed pages to before they reach
+/// the database file itself (its write-ahead log).
+fn write_ahead_log(file: &Path) -> PathBuf {
+    let mut name = file.as_os_str().to_os_string();
+    name.push("-wal");
+    PathBuf::from(name)
+}
+
+/// Whether a database's write-ahead log changed after `checkpoint_ms`: a
+/// write there leaves the database file's own size and time untouched, so
+/// the file alone would call a changed database current. A source with no
+/// log has nothing beside it to change.
+pub(in crate::stream) fn log_changed_since(file: &Path, checkpoint_ms: f64) -> bool {
+    fs::metadata(write_ahead_log(file)).is_ok_and(|meta| mtime_ms(&meta) > checkpoint_ms)
+}
+
+/// What one file's generation is: its size and its modification time to the
+/// nanosecond, as the filesystem reports them.
+fn generation(meta: &fs::Metadata) -> String {
+    use std::os::unix::fs::MetadataExt;
+    format!("{}:{}:{}", meta.len(), meta.mtime(), meta.mtime_nsec())
+}
+
+/// The digest of a whole source's generation: the source file's and its
+/// write-ahead log's when it has one. A whole source is a document or a
+/// database rewritten in place, some of them hundreds of megabytes, so what
+/// is compared is whether the filesystem says either changed, not their bytes.
+fn whole_digest(file: &Path) -> Result<Sha256> {
+    let mut hash = Sha256::new();
+    hash.update(generation(&fs::metadata(file)?).as_bytes());
+    let log = write_ahead_log(file);
+    match fs::metadata(&log) {
+        Ok(meta) => hash.update(generation(&meta).as_bytes()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => {
+            return Err(Error(format!(
+                "cannot read the write-ahead log {} of {}: {error}",
+                log.display(),
+                file.display()
+            )))
+        }
+    }
+    Ok(hash)
+}
+
+/// Read a session kept whole when its bytes differ from the last checkpoint,
+/// writing every event it holds that the source's partitions do not already
+/// hold, then checkpoint the digest of what was read.
+#[allow(clippy::too_many_arguments)]
+fn stream_whole(
+    writer: &mut Writer,
+    cursors: &mut Cursors,
+    runtime: &str,
+    entry: &SessionEntry,
+    load: WholeLoader,
+    replay: bool,
+    tally: &mut Tally,
+    key: &str,
+) -> Result<()> {
+    let (part_name, stem_hash) = partition_names(entry, key)?;
+    let hash = whole_digest(&entry.file)?;
+    let meta = fs::metadata(&entry.file)?;
+    let digest = hash.clone().finalize();
+    let previous = match if replay { None } else { cursors.get(key)? } {
+        Some(CursorRecord::Bytes(cursor)) => cursor.source,
+        Some(CursorRecord::Segment(_)) | None => None,
+    };
+    let unchanged = previous.is_some_and(|source| source.sha256.as_slice() == digest.as_slice());
+    let mut events = if unchanged { Vec::new() } else { load()? };
+    let mut retained = Retained::load(&writer.data_dir, runtime, &part_name)?;
+    checkpoint(
+        writer,
+        cursors,
+        &mut events,
+        runtime,
+        &part_name,
+        &stem_hash,
+        tally,
+        key,
+        &meta,
+        meta.len(),
+        &hash,
+        Some(&mut retained),
+    )
+}
 
 fn verified_prefix(file: &mut File, offset: u64, expected: [u8; 32]) -> Result<Option<Sha256>> {
     let mut hash = Sha256::new();
@@ -28,6 +133,17 @@ pub(in crate::stream) fn stream_file(
     tally: &mut Tally,
 ) -> Result<()> {
     let key = entry.file.to_string_lossy().to_string();
+    let runtime = adapter.runtime();
+    let mut parser = match adapter.read(ParserCtx {
+        file: entry.file.clone(),
+        session_id: entry.session_id.clone(),
+        project: entry.project.clone(),
+    }) {
+        Reading::Lines(parser) => parser,
+        Reading::Whole(load) => {
+            return stream_whole(writer, cursors, runtime, entry, load, replay, tally, &key)
+        }
+    };
     let mut file = File::open(&entry.file)?;
     let meta = file.metadata()?;
     let size = meta.len();
@@ -63,22 +179,12 @@ pub(in crate::stream) fn stream_file(
         tally.replayed += 1;
         file.seek(SeekFrom::Start(0))?;
     }
-    let digest = hex_digest(key.as_bytes());
-    let part_name = format!("part-{}.ndjson", &digest[..PART_DIGEST_LEN]);
-    let stem_hash = hex_digest(
-        file_stem(&entry.file.file_name().unwrap_or_default().to_string_lossy()).as_bytes(),
-    );
-    let runtime = adapter.runtime();
+    let (part_name, stem_hash) = partition_names(entry, &key)?;
     let mut retained = if recovering {
         Some(Retained::load(&writer.data_dir, runtime, &part_name)?)
     } else {
         None
     };
-    let mut parser = adapter.parser(ParserCtx {
-        file: entry.file.clone(),
-        session_id: entry.session_id.clone(),
-        project: entry.project.clone(),
-    });
     let mut reader = BufReader::new(file);
     let mut batch: Vec<RawEvent> = Vec::new();
     let mut consumed = offset;

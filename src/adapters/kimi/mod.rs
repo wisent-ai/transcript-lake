@@ -1,7 +1,7 @@
 //! Adapter: Kimi Code CLI wire transcripts —
 //!   `~/.kimi-code/sessions/wd_*/session_*/agents/main/wire.jsonl`
 //!
-//! Frozen interface: `runtime`, `roots(home)`, `list_sessions(root)`, `parser(ctx)`.
+//! Interface: `runtime`, `roots(home)`, `list_sessions(root)`, `entry_for(path)`, `read(ctx)`.
 //! Adapters emit UNMASKED text (the stream masks) and never do IO in `on_line`.
 //! Supported wire shapes:
 //!   metadata {protocol_version, app_version, created_at(epoch ms)}
@@ -28,7 +28,7 @@ use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 
-use crate::types::{Adapter, Parser, ParserCtx, SessionEntry};
+use crate::types::{Adapter, ParserCtx, Reading, SessionEntry};
 
 pub struct Kimi;
 
@@ -97,8 +97,8 @@ impl Adapter for Kimi {
         session_entry(work_dir, &name, &read_work_dir_index(&root))
     }
 
-    fn parser(&self, ctx: ParserCtx) -> Box<dyn Parser> {
-        Box::new(KimiParser::new(ctx))
+    fn read(&self, ctx: ParserCtx) -> Reading {
+        Reading::Lines(Box::new(KimiParser::new(ctx)))
     }
 }
 

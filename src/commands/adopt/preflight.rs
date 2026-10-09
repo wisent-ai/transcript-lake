@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 
-use crate::types::{Adapter, ParserCtx};
+use crate::types::{Adapter, ParserCtx, Reading};
 use crate::util::{home_dir, Error, Result};
 
 use super::Preflight;
@@ -68,7 +68,10 @@ pub(super) fn preflight(adapter: &dyn Adapter, root: &Path) -> Result<Preflight>
                 entry.file.display()
             ))
         })?;
-        if !canonical.starts_with(root) || !fs::metadata(&canonical)?.is_file() {
+        // A session is a file, or a directory a whole reader reads (one file
+        // per event); anything else, or anything outside the root, is refused.
+        let kind = fs::metadata(&canonical)?;
+        if !canonical.starts_with(root) || !(kind.is_file() || kind.is_dir()) {
             return Err(Error(format!(
                 "transcript escaped its selected source root: {}",
                 entry.file.display()
@@ -81,11 +84,19 @@ pub(super) fn preflight(adapter: &dyn Adapter, root: &Path) -> Result<Preflight>
                 entry.file.display()
             )));
         }
-        let mut parser = adapter.parser(ParserCtx {
+        let mut parser = match adapter.read(ParserCtx {
             file: entry.file.clone(),
             session_id: entry.session_id.clone(),
             project: entry.project.clone(),
-        });
+        }) {
+            Reading::Lines(parser) => parser,
+            // A session kept whole is checked by reading it whole: its loader
+            // refuses a document or database it cannot read, naming it.
+            Reading::Whole(load) => {
+                events += load()?.len() as u64;
+                continue;
+            }
+        };
         if entry.file.to_string_lossy().ends_with(".settings.json") {
             let body = fs::read_to_string(&entry.file)?;
             let value: Value = serde_json::from_str(&body).map_err(|error| {
@@ -168,7 +179,7 @@ fn validate_supported_record(runtime: &str, record: &Value, file: &Path, line: u
         )));
     }
     let Some(kind) = record.get("type").and_then(Value::as_str) else {
-        if runtime == "omp" || runtime == "droid" {
+        if !matches!(runtime, "claude" | "codex" | "kimi") {
             return Ok(());
         }
         return Err(Error(format!(
@@ -208,9 +219,10 @@ fn validate_supported_record(runtime: &str, record: &Value, file: &Path, line: u
                 || kind.contains("_mode.")
         }
         // OMP and Factory Droid preserve otherwise unknown record kinds as
-        // explicit metadata events rather than dropping them.
-        "omp" | "droid" => true,
-        _ => false,
+        // explicit metadata events rather than dropping them. Every other
+        // line adapter turns the records it knows into events and leaves the
+        // rest out; the root must still yield events, checked by the caller.
+        _ => true,
     };
     if supported {
         return Ok(());

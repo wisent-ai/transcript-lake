@@ -67,18 +67,22 @@ pub(super) fn source_roots(data_dir: &Path) -> Result<Vec<PathBuf>> {
         return Ok(vec![selected.root]);
     }
     let home = home_dir();
-    let mut roots = vec![
-        home.join(".claude").join("projects"),
-        home.join(".codex").join("sessions"),
-        home.join(".omp").join("agent").join("sessions"),
-        home.join(".factory").join("sessions"),
-        home.join(".kimi-code").join("sessions"),
-    ];
+    let mut roots: Vec<PathBuf> = crate::adapters::all()
+        .iter()
+        .flat_map(|adapter| adapter.watch_roots(&home))
+        .collect();
     roots.extend(hook_source_roots().roots);
     roots.retain(|root| root.exists());
     roots.sort();
     roots.dedup();
-    Ok(roots)
+    // A root inside another is already watched recursively through it.
+    let mut outermost: Vec<PathBuf> = Vec::new();
+    for root in roots {
+        if !outermost.iter().any(|outer| root.starts_with(outer)) {
+            outermost.push(root);
+        }
+    }
+    Ok(outermost)
 }
 
 mod predecessor;
