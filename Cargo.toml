@@ -7,13 +7,17 @@ description = "Privacy-masked local event archive for coding-agent transcripts"
 license = "MIT"
 repository = "https://github.com/wisent-ai/transcript-lake"
 publish = false
-# No test target is built until the operator approves one with
-# `tama tests approve`.
+# Real native-store journeys are registered explicitly and require their
+# documented inputs; they do not synthesize transcript providers.
 autotests = false
 
 [[bin]]
 name = "transcript-lake"
 path = "src/main.rs"
+
+[[test]]
+name = "harness-ingestion"
+path = "tests/harnesses/ingestion.rs"
 
 [dependencies]
 # preserve_order keeps `extra` in adapter insertion order, so a ported
