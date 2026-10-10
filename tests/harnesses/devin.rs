@@ -20,6 +20,7 @@ pub struct Expected {
     main: Vec<Message>,
     subagent: Chain,
     branch: Chain,
+    hidden_sessions: Vec<String>,
 }
 
 fn messages(events: &[&Value], expected: &[Message], session: &str) {
@@ -50,6 +51,26 @@ fn session_events<'a>(persisted: &'a [Value], session: &str) -> Vec<&'a Value> {
 }
 
 pub fn verify(persisted: &[Value], session: &str, expected: &Expected) {
+    assert!(
+        !expected.hidden_sessions.is_empty(),
+        "supply independently observed hidden native sessions"
+    );
+    for hidden in &expected.hidden_sessions {
+        assert!(!hidden.is_empty(), "hidden session identity must be present");
+        assert_ne!(hidden, session, "the visible session cannot be hidden");
+        let child_prefix = format!("{hidden}:");
+        assert!(
+            persisted.iter().all(|event| {
+                event["runtime"] != "devin"
+                    || (event["session_id"] != hidden.as_str()
+                        && !event["session_id"]
+                            .as_str()
+                            .is_some_and(|id| id.starts_with(&child_prefix))
+                        && event["extra"]["parent_session"] != hidden.as_str())
+            }),
+            "hidden native session or child was ingested: {hidden}"
+        );
+    }
     let main = session_events(persisted, session);
     messages(&main, &expected.main, session);
     for event in main {
