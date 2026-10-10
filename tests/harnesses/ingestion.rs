@@ -63,6 +63,29 @@ fn exercise(work: &Path, case: &Expected, environment: &[(&str, &Path)]) -> Vec<
         case.runtime,
         String::from_utf8_lossy(&first.stderr)
     );
+    let selection_path = lake.join("sources.json");
+    let selection: Value = serde_json::from_slice(
+        &fs::read(&selection_path).expect("adoption persists source selection"),
+    )
+    .expect("persisted source selection JSON");
+    let selected_id = selection["selectedSourceId"]
+        .as_str()
+        .expect("selected source identity");
+    let declarations = selection["sources"].as_array().expect("adopted declarations");
+    let mut selected = declarations.iter().filter(|row| row["id"] == selected_id);
+    let declared = selected.next().expect("selected source is declared");
+    assert!(
+        selected.next().is_none(),
+        "selected source identity is duplicated"
+    );
+    assert_eq!(declared["runtime"], case.runtime);
+    assert_eq!(
+        declared["root"],
+        fs::canonicalize(&case.root)
+            .expect("canonical native root")
+            .to_str()
+            .expect("UTF-8 canonical native root")
+    );
     let before = partitions(&lake.join("events"));
     let persisted: Vec<Value> = before
         .values()
@@ -95,6 +118,14 @@ fn exercise(work: &Path, case: &Expected, environment: &[(&str, &Path)]) -> Vec<
         partitions(&lake.join("events")),
         before,
         "unchanged native source must not duplicate events"
+    );
+    let repeated_selection: Value = serde_json::from_slice(
+        &fs::read(&selection_path).expect("repeat retains source selection"),
+    )
+    .expect("repeated source selection JSON");
+    assert_eq!(
+        repeated_selection, selection,
+        "repeat must preserve source selection"
     );
     let refused_lake = work.join("refused");
     let refused = evidence::run(
