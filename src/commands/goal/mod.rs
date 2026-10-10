@@ -178,7 +178,7 @@ fn input_text(value: Option<&str>, stdin: bool) -> Result<String> {
     if text.is_empty() {
         return Err(Error("goal title input must not be empty".into()));
     }
-    Ok(text.chars().take(6_000).collect())
+    Ok(text.to_string())
 }
 
 fn infer_goal(text: &str) -> Result<Option<String>> {
