@@ -1,6 +1,7 @@
 //! Independent expectations for an existing native Devin conversation graph.
 use serde::Deserialize;
 use serde_json::Value;
+use std::path::Path;
 
 #[derive(Deserialize)]
 pub struct Message {
@@ -50,13 +51,37 @@ fn session_events<'a>(persisted: &'a [Value], session: &str) -> Vec<&'a Value> {
         .collect()
 }
 
+pub fn validate_native(root: &Path, expected: &Expected) {
+    let database = rusqlite::Connection::open_with_flags(
+        root.join("sessions.db"),
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+    )
+    .expect("open native Devin database read-only");
+    let mut query = database
+        .prepare(
+            "SELECT sessions.hidden FROM sessions \
+             INNER JOIN message_nodes ON message_nodes.session_id = sessions.id \
+             WHERE sessions.id = ?1",
+        )
+        .expect("prepare native hidden-session observation");
+    for session in &expected.hidden_sessions {
+        let hidden: bool = query
+            .query_row([session], |row| row.get("hidden"))
+            .expect("expected hidden native session must exist with recorded messages");
+        assert!(hidden, "expected native session is not hidden: {session}");
+    }
+}
+
 pub fn verify(persisted: &[Value], session: &str, expected: &Expected) {
     assert!(
         !expected.hidden_sessions.is_empty(),
         "supply independently observed hidden native sessions"
     );
     for hidden in &expected.hidden_sessions {
-        assert!(!hidden.is_empty(), "hidden session identity must be present");
+        assert!(
+            !hidden.is_empty(),
+            "hidden session identity must be present"
+        );
         assert_ne!(hidden, session, "the visible session cannot be hidden");
         let child_prefix = format!("{hidden}:");
         assert!(

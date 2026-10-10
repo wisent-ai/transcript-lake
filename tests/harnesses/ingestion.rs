@@ -71,7 +71,9 @@ fn exercise(work: &Path, case: &Expected, environment: &[(&str, &Path)]) -> Vec<
     let selected_id = selection["selectedSourceId"]
         .as_str()
         .expect("selected source identity");
-    let declarations = selection["sources"].as_array().expect("adopted declarations");
+    let declarations = selection["sources"]
+        .as_array()
+        .expect("adopted declarations");
     let mut selected = declarations.iter().filter(|row| row["id"] == selected_id);
     let declared = selected.next().expect("selected source is declared");
     assert!(
@@ -270,6 +272,7 @@ fn devin_native_data_directory_is_discovered_and_adopted() {
         absent_devin["available"], false,
         "Devin must not read another data directory: {absent_devin}"
     );
+    devin::validate_native(&case.root, &expected.chains);
     let persisted = exercise(&work, case, &environment);
     devin::verify(&persisted, &case.session_id, &expected.chains);
     assert!(
