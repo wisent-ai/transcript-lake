@@ -21,7 +21,7 @@ use serde_json::Value;
 
 use super::common::{
     chat_messages, database_error, database_of, entry, existing_root, is_file, iso_seconds,
-    open_database, text_field,
+    open_database, text_field, text_of,
 };
 use crate::types::{Adapter, ParserCtx, RawEvent, Reading, SessionEntry};
 use crate::util::Result;
@@ -118,12 +118,15 @@ fn load(ctx: &ParserCtx) -> Result<Vec<RawEvent>> {
         }
         let mut found = chat_messages(
             ctx,
-            &[message],
+            std::slice::from_ref(&message),
             created.and_then(|seconds| iso_seconds(seconds as f64)),
         );
         for event in &mut found {
             event.session_id = Some(session.clone());
             event.project = directory.clone();
+            if message.get("role").and_then(Value::as_str) == Some("system") {
+                event.text = text_of(message.get("content"));
+            }
         }
         events.extend(found);
     }

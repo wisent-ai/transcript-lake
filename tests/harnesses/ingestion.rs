@@ -17,6 +17,13 @@ struct Expected {
     user_text: String,
 }
 
+#[derive(Deserialize)]
+struct DevinExpected {
+    #[serde(flatten)]
+    session: Expected,
+    context_text: String,
+}
+
 fn partitions(root: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
     let mut found = BTreeMap::new();
     for entry in fs::read_dir(root).expect("read canonical partition directory") {
@@ -33,7 +40,7 @@ fn partitions(root: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
     found
 }
 
-fn exercise(work: &Path, case: &Expected, environment: &[(&str, &Path)]) {
+fn exercise(work: &Path, case: &Expected, environment: &[(&str, &Path)]) -> Vec<Value> {
     let lake = work.join("lake");
     let lake_path = lake.to_str().expect("UTF-8 Lake path");
     let source = case.root.to_str().expect("UTF-8 native source path");
@@ -120,6 +127,7 @@ fn exercise(work: &Path, case: &Expected, environment: &[(&str, &Path)]) {
         !refused_lake.join("sources.json").exists(),
         "refused adoption must not select a source"
     );
+    persisted
 }
 
 #[test]
@@ -165,7 +173,13 @@ fn devin_native_data_directory_is_discovered_and_adopted() {
     let manifest = std::env::var_os("LAKE_TEST_DEVIN_EXPECTATION")
         .expect("set LAKE_TEST_DEVIN_EXPECTATION to one independently recorded Devin expectation");
     let body = fs::read(manifest).expect("read native Devin expectation");
-    let case: Expected = serde_json::from_slice(&body).expect("parse native Devin expectation");
+    let expected: DevinExpected =
+        serde_json::from_slice(&body).expect("parse native Devin expectation");
+    let case = &expected.session;
+    assert!(
+        !expected.context_text.is_empty(),
+        "supply known native injected context"
+    );
     assert_eq!(case.runtime, "devin");
     assert_eq!(case.root, data.join("devin").join("cli"));
     assert!(
@@ -223,5 +237,15 @@ fn devin_native_data_directory_is_discovered_and_adopted() {
         absent_devin["available"], false,
         "Devin must not read another data directory: {absent_devin}"
     );
-    exercise(&work, &case, &environment);
+    let persisted = exercise(&work, case, &environment);
+    assert!(
+        persisted.iter().any(|event| {
+            event["runtime"] == case.runtime
+                && event["session_id"] == case.session_id
+                && event["event_type"] == "meta"
+                && event["extra"]["kind"] == "system_prompt"
+                && event["text"] == expected.context_text
+        }),
+        "Devin must retain non-prefix injected system context"
+    );
 }
