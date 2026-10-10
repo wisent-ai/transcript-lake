@@ -1,5 +1,6 @@
 //! Real native-store expectations: runtime, root, session_id, masked user_text.
 //! Vendor stores remain read-only; writes stay in the retained build directory.
+mod devin;
 mod evidence;
 use serde::Deserialize;
 use serde_json::Value;
@@ -22,6 +23,7 @@ struct DevinExpected {
     #[serde(flatten)]
     session: Expected,
     context_text: String,
+    chains: devin::Expected,
 }
 
 fn partitions(root: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
@@ -238,6 +240,7 @@ fn devin_native_data_directory_is_discovered_and_adopted() {
         "Devin must not read another data directory: {absent_devin}"
     );
     let persisted = exercise(&work, case, &environment);
+    devin::verify(&persisted, &case.session_id, &expected.chains);
     assert!(
         persisted.iter().any(|event| {
             event["runtime"] == case.runtime
