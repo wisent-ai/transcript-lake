@@ -1,4 +1,5 @@
 //! Adapter: Devin CLI (Cognition's local `devin`) —
+//!   `$XDG_DATA_HOME/devin/cli/sessions.db`, or the native default
 //!   `~/.local/share/devin/cli/sessions.db`, one SQLite store for every
 //!   session: `sessions (id, working_directory, hidden, main_chain_id, ...)`
 //!   and `message_nodes (session_id, node_id, parent_node_id, chat_message,
@@ -35,7 +36,11 @@ impl Adapter for Devin {
     }
 
     fn roots(&self, home: &Path) -> Vec<PathBuf> {
-        existing_root(home.join(".local").join("share").join("devin").join("cli"))
+        let data = match std::env::var_os("XDG_DATA_HOME") {
+            Some(path) if !path.is_empty() => PathBuf::from(path),
+            _ => home.join(".local").join("share"),
+        };
+        existing_root(data.join("devin").join("cli"))
     }
 
     fn list_sessions(&self, root: &Path) -> Vec<SessionEntry> {
