@@ -97,6 +97,11 @@ impl OmpParser {
             }
         }
         self.flush_text(&mut events, &mut buffer, ts, text_type, &role);
+        for event in &mut events {
+            prune(&mut event.extra, "attribution", msg.get("attribution"));
+            prune(&mut event.extra, "steering", msg.get("steering"));
+            prune(&mut event.extra, "synthetic", msg.get("synthetic"));
+        }
         if role == "assistant" {
             let model = match msg.get("model") {
                 Some(Value::String(model)) => Some(model.clone()),

@@ -155,7 +155,7 @@ pub fn show(rest: &[String]) -> Result<i32> {
     ))?;
     let matched = json_i64(counted.first().and_then(|row| row.get("matched")));
     let events = query_duck_json(&format!(
-        "SELECT ts, event_type, tool_name, model, coalesce(text, '') AS text FROM events \
+        "SELECT ts, event_type, tool_name, model, extra, coalesce(text, '') AS text FROM events \
          WHERE session_id = {quoted_session}{type_filter} ORDER BY ts{limit}"
     ))?;
     let rendered = events.len() as i64;
