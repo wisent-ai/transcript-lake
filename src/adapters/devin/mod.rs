@@ -9,15 +9,21 @@
 //! `docs/registry/devin.md` and its SQL fixture (Devin CLI 3000.11.3). A
 //! node's `chat_message` is `{message_id, role: system | user | assistant |
 //! tool, content, tool_calls: [{id, name, arguments}], tool_call_id}`. The
-//! agent rebuilds its context chain whenever its system prefix changes, so
-//! several nodes repeat one `message_id`: each message is read once, at its
-//! first node. Nodes marked `is_system_prefix` are the rebuilt scaffolding;
-//! sessions marked `hidden` were removed from view by their owner and are
-//! not read.
-use std::collections::HashSet;
+//! node table in order is not the conversation: `chains` rebuilds the chain
+//! `sessions.main_chain_id` heads, each chain a `subagent_heads` row
+//! declares, and each branch a rewind left behind, reading a repeated
+//! `message_id` once at its newest copy. Nodes marked `is_system_prefix` are
+//! the rebuilt scaffolding; sessions marked `hidden` were removed from view
+//! by their owner and are not read. A side chain's events carry the parent
+//! session in `extra.parent_session` and the chain's name in `extra.chain`.
+mod chains;
+
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use serde_json::Value;
+
+use chains::{Identity, Node};
 
 use super::common::{
     chat_messages, database_error, database_of, entry, existing_root, is_file, iso_seconds,
@@ -72,63 +78,157 @@ impl Adapter for Devin {
     }
 }
 
-const NODES: &str =
-    "SELECT message_nodes.session_id AS session_id, message_nodes.chat_message AS chat_message, \
-     message_nodes.created_at AS created_at, message_nodes.metadata AS metadata, \
-     sessions.working_directory AS directory \
-     FROM message_nodes JOIN sessions ON sessions.id = message_nodes.session_id \
-     WHERE sessions.hidden = 0 ORDER BY message_nodes.session_id, message_nodes.node_id";
+const SESSIONS: &str = "SELECT id, working_directory, main_chain_id FROM sessions \
+     WHERE hidden = 0 ORDER BY id";
 
-fn load(ctx: &ParserCtx) -> Result<Vec<RawEvent>> {
-    let path = &ctx.file;
-    let database = open_database(path)?;
+const NODES: &str = "SELECT node_id, parent_node_id, chat_message, created_at, metadata \
+     FROM message_nodes WHERE session_id = ?1 ORDER BY node_id";
+
+const HEADS: &str =
+    "SELECT agent_id, chain_node_id FROM subagent_heads WHERE session_id = ?1 ORDER BY agent_id";
+
+/// One stored node with the message it carries, when the message parses.
+struct Stored {
+    node: Node,
+    message: Option<Value>,
+    created: Option<i64>,
+}
+
+fn stored_nodes(
+    database: &rusqlite::Connection,
+    path: &Path,
+    session: &str,
+) -> Result<BTreeMap<i64, Stored>> {
     let mut statement = database
         .prepare(NODES)
         .map_err(|error| database_error(path, "its message nodes", error))?;
     let rows = statement
-        .query_map([], |row| {
+        .query_map([session], |row| {
             Ok((
-                row.get::<_, String>("session_id")?,
+                row.get::<_, i64>("node_id")?,
+                row.get::<_, Option<i64>>("parent_node_id")?,
                 row.get::<_, String>("chat_message")?,
                 row.get::<_, Option<i64>>("created_at")?,
                 row.get::<_, Option<String>>("metadata")?,
-                row.get::<_, Option<String>>("directory")?,
             ))
         })
         .map_err(|error| database_error(path, "its message nodes", error))?;
-    let mut seen: HashSet<(String, String)> = HashSet::new();
-    let mut events = Vec::new();
+    let mut nodes = BTreeMap::new();
     for row in rows {
-        let (session, message, created, metadata, directory) =
+        let (id, parent, message, created, metadata) =
             row.map_err(|error| database_error(path, "a message node", error))?;
         let scaffolding = metadata
             .and_then(|metadata| serde_json::from_str::<Value>(&metadata).ok())
             .and_then(|metadata| metadata.get("is_system_prefix").and_then(Value::as_bool))
             == Some(true);
-        let Ok(message) = serde_json::from_str::<Value>(&message) else {
-            continue;
-        };
-        if scaffolding {
-            continue;
-        }
-        if let Some(id) = text_field(&message, "message_id") {
-            if !seen.insert((session.clone(), id)) {
-                continue;
-            }
-        }
-        let mut found = chat_messages(
-            ctx,
-            std::slice::from_ref(&message),
-            created.and_then(|seconds| iso_seconds(seconds as f64)),
+        let message = serde_json::from_str::<Value>(&message).ok();
+        let message_id = message
+            .as_ref()
+            .and_then(|message| text_field(message, "message_id"));
+        nodes.insert(
+            id,
+            Stored {
+                node: Node {
+                    parent,
+                    message_id,
+                    scaffolding,
+                },
+                message,
+                created,
+            },
         );
-        for event in &mut found {
-            event.session_id = Some(session.clone());
-            event.project = directory.clone();
-            if message.get("role").and_then(Value::as_str) == Some("system") {
-                event.text = text_of(message.get("content"));
+    }
+    Ok(nodes)
+}
+
+fn subagent_heads(
+    database: &rusqlite::Connection,
+    path: &Path,
+    session: &str,
+) -> Result<BTreeMap<String, i64>> {
+    let mut statement = database
+        .prepare(HEADS)
+        .map_err(|error| database_error(path, "its subagent heads", error))?;
+    let rows = statement
+        .query_map([session], |row| {
+            Ok((
+                row.get::<_, String>("agent_id")?,
+                row.get::<_, i64>("chain_node_id")?,
+            ))
+        })
+        .map_err(|error| database_error(path, "its subagent heads", error))?;
+    rows.collect::<std::result::Result<BTreeMap<_, _>, _>>()
+        .map_err(|error| database_error(path, "a subagent head", error))
+}
+
+fn load(ctx: &ParserCtx) -> Result<Vec<RawEvent>> {
+    let path = &ctx.file;
+    let database = open_database(path)?;
+    let mut statement = database
+        .prepare(SESSIONS)
+        .map_err(|error| database_error(path, "its sessions", error))?;
+    let sessions = statement
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>("id")?,
+                row.get::<_, Option<String>>("working_directory")?,
+                row.get::<_, Option<i64>>("main_chain_id")?,
+            ))
+        })
+        .map_err(|error| database_error(path, "its sessions", error))?
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .map_err(|error| database_error(path, "a session", error))?;
+    let mut events = Vec::new();
+    for (session, directory, main_head) in sessions {
+        let stored = stored_nodes(&database, path, &session)?;
+        let nodes: BTreeMap<i64, Node> = stored
+            .iter()
+            .map(|(id, stored)| (*id, stored.node.clone()))
+            .collect();
+        let heads = subagent_heads(&database, path, &session)?;
+        let chains = chains::chains(&nodes, main_head, &heads).map_err(|detail| {
+            crate::util::Error(format!(
+                "{}: session {session}: its conversation chains cannot be rebuilt: {detail}",
+                path.display()
+            ))
+        })?;
+        for chain in chains {
+            let (session_id, chain_name) = match &chain.identity {
+                Identity::Main => (session.clone(), None),
+                Identity::Subagent(agent) => (format!("{session}:{agent}"), Some(agent.clone())),
+                Identity::Branch(root) => (
+                    format!("{session}:branch-{root}"),
+                    Some(format!("branch-{root}")),
+                ),
+            };
+            for id in chain.nodes {
+                let node = &stored[&id];
+                let Some(message) = &node.message else {
+                    continue;
+                };
+                let mut found = chat_messages(
+                    ctx,
+                    std::slice::from_ref(message),
+                    node.created.and_then(|seconds| iso_seconds(seconds as f64)),
+                );
+                for event in &mut found {
+                    event.session_id = Some(session_id.clone());
+                    event.project = directory.clone();
+                    if message.get("role").and_then(Value::as_str) == Some("system") {
+                        event.text = text_of(message.get("content"));
+                    }
+                    if let Some(name) = &chain_name {
+                        event
+                            .extra
+                            .insert("parent_session".to_string(), Value::String(session.clone()));
+                        event
+                            .extra
+                            .insert("chain".to_string(), Value::String(name.clone()));
+                    }
+                }
+                events.extend(found);
             }
         }
-        events.extend(found);
     }
     Ok(events)
 }
