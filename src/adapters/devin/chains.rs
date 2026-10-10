@@ -166,5 +166,10 @@ pub fn chains(
             nodes: keep(nodes, &head_first, &mut covered, &mut kept_messages),
         });
     }
+    if let Some(id) = nodes.keys().find(|id| !covered.contains(id)) {
+        return Err(format!(
+            "node {id} is outside every headed or leaf chain: its parent links form a cycle"
+        ));
+    }
     Ok(found)
 }
