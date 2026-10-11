@@ -22,13 +22,17 @@ pub(super) struct Segment {
 
 /// A segment is trusted only when it is a plain regular file that has not changed
 /// under us, is complete (header, in-sequence event frames, footer), and hashes to
-/// the digest its own footer claims.
+/// the digest its own footer claims. A segment whose metadata or bytes cannot be
+/// read is said on stderr with the cause, so it is not taken for a malformed one.
 pub(super) fn validate_hook_segment(path: &Path) -> Option<Segment> {
-    let before = fs::symlink_metadata(path).ok()?;
+    let unreadable = |error: std::io::Error| {
+        eprintln!("hook segment {} cannot be read: {error}", path.display());
+    };
+    let before = fs::symlink_metadata(path).map_err(unreadable).ok()?;
     if !before.is_file() || before.file_type().is_symlink() {
         return None;
     }
-    let bytes = fs::read(path).ok()?;
+    let bytes = fs::read(path).map_err(unreadable).ok()?;
     if bytes.is_empty() || bytes.last() != Some(&b'\n') {
         return None;
     }
