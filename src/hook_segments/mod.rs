@@ -70,6 +70,20 @@ pub fn stream_hook_segment(
     Ok(report)
 }
 
+/// The closed segments' directory; none when it does not exist yet. One that
+/// cannot be listed is the error: read as empty, a replay or catch-up
+/// reported nothing to do while every closed segment in it stayed unread.
+fn ready_entries(ready_dir: &Path) -> Result<Option<fs::ReadDir>> {
+    match fs::read_dir(ready_dir) {
+        Ok(entries) => Ok(Some(entries)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(crate::util::Error(format!(
+            "cannot list closed hook segments in {}: {error}",
+            ready_dir.display()
+        ))),
+    }
+}
+
 /// Replay every closed segment in stable filename order.
 pub fn replay_closed_hook_segments(
     ready_dir: &Path,
@@ -77,7 +91,7 @@ pub fn replay_closed_hook_segments(
     cursors: &mut Cursors,
     sink: &mut dyn EventSink,
 ) -> Result<SegmentReport> {
-    let Ok(entries) = fs::read_dir(ready_dir) else {
+    let Some(entries) = ready_entries(ready_dir)? else {
         return Ok(SegmentReport::default());
     };
     let mut names: Vec<String> = entries
@@ -109,7 +123,7 @@ pub fn catch_up_closed_hook_segments(
     cursors: &mut Cursors,
     sink: &mut dyn EventSink,
 ) -> Result<SegmentReport> {
-    let Ok(entries) = fs::read_dir(ready_dir) else {
+    let Some(entries) = ready_entries(ready_dir)? else {
         return Ok(SegmentReport::default());
     };
     let acked_dir = ready_dir
