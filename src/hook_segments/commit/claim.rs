@@ -107,14 +107,30 @@ pub(super) fn acquire_claim(root: &Path, segment_id: &str) -> Result<Option<Clai
                 if error.kind() != std::io::ErrorKind::AlreadyExists {
                     return Err(error.into());
                 }
-                let incumbent = fs::read_to_string(&path).ok().and_then(|raw| parse(&raw));
+                // A claim that cannot be read is not a dead one: removing it
+                // let two processes commit one segment. A claim gone since
+                // the link failed is retried.
+                let incumbent = match fs::read_to_string(&path) {
+                    Ok(raw) => parse(&raw),
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                    Err(error) => {
+                        return Err(Error(format!(
+                            "cannot read hook segment claim {}: {error}",
+                            path.display()
+                        )))
+                    }
+                };
                 if owner_alive(incumbent.as_ref(), segment_id) {
                     warn(&format!("hook segment already claimed: {segment_id}"));
                     return Ok(None);
                 }
-                if fs::remove_file(&path).is_err() || sync_directory(root).is_err() {
-                    return Ok(None);
+                if let Err(error) = fs::remove_file(&path) {
+                    return Err(Error(format!(
+                        "cannot remove the stale hook segment claim {}: {error}",
+                        path.display()
+                    )));
                 }
+                sync_directory(root)?;
                 if retry {
                     return Ok(None);
                 }

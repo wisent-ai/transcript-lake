@@ -45,7 +45,15 @@ pub(super) fn publish_ack(ready_dir: &Path, segment: &Segment, commit: &Value) -
     if !path.exists() {
         return durable_write(&path, content.as_bytes());
     }
-    let prior = fs::read_to_string(&path).ok().and_then(|raw| parse(&raw));
+    // An acknowledgement that cannot be read is not a data conflict; saying
+    // "conflict" sent the operator after a disagreement that never existed.
+    let raw = fs::read_to_string(&path).map_err(|error| {
+        Error(format!(
+            "cannot read hook segment acknowledgement {}: {error}",
+            path.display()
+        ))
+    })?;
+    let prior = parse(&raw);
     // A conflict is a disagreement about the DATA: a different source, a different
     // payload, a different event count, or different outputs. The commit id
     // identifies the process that wrote them, and one segment can be committed by
