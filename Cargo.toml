@@ -35,6 +35,10 @@ path = "tests/junie/damaged_line.rs"
 name = "cursor-damaged-record"
 path = "tests/cursor/damaged_record.rs"
 
+[[test]]
+name = "devin-damaged-node"
+path = "tests/devin/damaged_node.rs"
+
 [dependencies]
 # preserve_order keeps `extra` in adapter insertion order, so a ported
 # partition line is byte-identical to the one the previous implementation wrote.

@@ -117,11 +117,33 @@ fn stored_nodes(
     for row in rows {
         let (id, parent, message, created, metadata) =
             row.map_err(|error| database_error(path, "a message node", error))?;
+        // A message or metadata that is not JSON is said with its node: the
+        // node keeps its place in the chain, but its text is lost, and a
+        // system prefix whose metadata cannot be read would read as part of
+        // the conversation. Both used to pass without a word.
+        let metadata = metadata.and_then(|metadata| match serde_json::from_str::<Value>(&metadata) {
+            Ok(parsed) => Some(parsed),
+            Err(error) => {
+                eprintln!(
+                    "sessions: the metadata of node {id} of session {session} in {} is not JSON: {error}",
+                    path.display()
+                );
+                None
+            }
+        });
         let scaffolding = metadata
-            .and_then(|metadata| serde_json::from_str::<Value>(&metadata).ok())
             .and_then(|metadata| metadata.get("is_system_prefix").and_then(Value::as_bool))
             == Some(true);
-        let message = serde_json::from_str::<Value>(&message).ok();
+        let message = match serde_json::from_str::<Value>(&message) {
+            Ok(parsed) => Some(parsed),
+            Err(error) => {
+                eprintln!(
+                    "sessions: the message of node {id} of session {session} in {} is not JSON and carries no text: {error}",
+                    path.display()
+                );
+                None
+            }
+        };
         let message_id = message
             .as_ref()
             .and_then(|message| text_field(message, "message_id"));
