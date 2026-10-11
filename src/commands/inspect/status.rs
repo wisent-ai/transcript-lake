@@ -46,7 +46,17 @@ pub fn status(rest: &[String]) -> Result<i32> {
     let parsed = parse_options("status", rest, &[], &["json"])?;
     require_flags_only("status", &parsed)?;
     let report = status_snapshot()?;
-    let status = i32::from(report.cursors.state == "invalid" || report.stream.state == "invalid");
+    // A partition directory that could not be listed leaves its counts short,
+    // so status fails like an invalid cursor store rather than reporting them.
+    let unreadable_partitions = report
+        .partitions
+        .iter()
+        .any(|row| !row.unreadable.is_empty());
+    let status = i32::from(
+        report.cursors.state == "invalid"
+            || report.stream.state == "invalid"
+            || unreadable_partitions,
+    );
     if parsed.flag("json") {
         write_json(&report)?;
         return Ok(status);
@@ -76,6 +86,9 @@ pub fn status(rest: &[String]) -> Result<i32> {
             "  {}: {} partition files, {} bytes",
             row.runtime, row.parts, row.bytes
         )?;
+        for unreadable in &row.unreadable {
+            writeln!(out, "    not counted, cannot be listed: {unreadable}")?;
+        }
     }
     let newest = match &report.cursors.newest_source_mtime {
         Some(stamp) => format!(", newest {stamp}"),

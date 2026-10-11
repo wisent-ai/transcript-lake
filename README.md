@@ -166,7 +166,7 @@ The CLI is the canonical human and automation interface.
 | Health | `doctor [--json]` | Cursor, source, DuckDB, and Oko checks with meaningful exit status |
 | Real-time stream | `stream [--json]` | Long-running event-driven source tail with direct Lake and Oko commits |
 | Safe recovery | `rebuild --to <empty-path> [--source <runtime>]` | Historical replay into a separate empty Lake |
-| Inspect | `status [--json]` | Partition, cursor, stream-state, and Oko freshness inventory |
+| Inspect | `status [--json]` | Partition, cursor, stream-state, and Oko freshness inventory; a partition directory that cannot be listed is named under its runtime (`partitions[].unreadable` in JSON) and the command exits 1, as for an invalid cursor or stream state |
 | Sessions and events | `sessions [--interrupted] [--limit <n>]`, `events [--limit <n>]` | Every matching normalized record, newest first, each event with its whole masked text; `--limit` keeps the newest n and zero is refused; `--interrupted` keeps only conversations left without an answer |
 | Text search | `search <text> [--runtime <r>] [--session <id>] [--type <t>] [--limit <n>] [--json]` | Every newest-first literal substring match over masked event text, with the whole text; `--limit` keeps the newest n |
 | Conversation restore | `show <session-id> [--include <types>] [--limit <n>] [--out <path>] [--json]` | One conversation reconstructed oldest turn first, full masked text, with a rendered/matched footer; `--out` saves that record to a file itself, so nobody needs a shell redirection that truncates the target before the read even runs |
