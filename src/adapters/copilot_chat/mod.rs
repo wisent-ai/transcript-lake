@@ -105,9 +105,24 @@ impl Adapter for CopilotChat {
     }
 }
 
-/// The local folder a workspace's `workspace.json` names.
+/// The local folder a workspace's `workspace.json` names. A workspace without
+/// the file names no folder; one whose file cannot be read or parsed is said
+/// on stderr, so its sessions are not silently left without a project.
 fn workspace_folder(sessions: &Path) -> Option<String> {
-    let workspace = read_json(&sessions.parent()?.join("workspace.json")).ok()?;
+    let file = sessions.parent()?.join("workspace.json");
+    if let Err(error) = std::fs::symlink_metadata(&file) {
+        if error.kind() != std::io::ErrorKind::NotFound {
+            eprintln!("copilot chat: cannot inspect {}: {error}", file.display());
+        }
+        return None;
+    }
+    let workspace = match read_json(&file) {
+        Ok(workspace) => workspace,
+        Err(error) => {
+            eprintln!("copilot chat: {error}; its sessions get no project");
+            return None;
+        }
+    };
     Some(
         text_field(&workspace, "folder")?
             .strip_prefix("file://")?
