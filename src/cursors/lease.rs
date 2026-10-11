@@ -167,11 +167,25 @@ pub(super) fn acquire_lock(data_dir: &Path, lock_path: &Path) -> Result<String> 
     }
 }
 
+/// Release the lease this run holds. A lock already gone was released; an
+/// owner record that cannot be read, or a lock that cannot be removed, is
+/// said with its path and cause, because the next writer then waits on a
+/// lease nobody holds until its owner is seen dead.
 pub(super) fn release_lock(data_dir: &Path, lock_path: &Path, token: &str) {
-    let owner = fs::read_to_string(lock_path.join("owner.json"))
+    let owner_path = lock_path.join("owner.json");
+    let raw = match fs::read_to_string(&owner_path) {
+        Ok(raw) => raw,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return,
+        Err(error) => {
+            eprintln!(
+                "cursors: lease owner {} cannot be read to release it: {error}",
+                owner_path.display()
+            );
+            return;
+        }
+    };
+    let matches = serde_json::from_str::<Value>(&raw)
         .ok()
-        .and_then(|raw| serde_json::from_str::<Value>(&raw).ok());
-    let matches = owner
         .as_ref()
         .and_then(|owner| owner.get("token"))
         .and_then(Value::as_str)
@@ -179,7 +193,13 @@ pub(super) fn release_lock(data_dir: &Path, lock_path: &Path, token: &str) {
     if !matches {
         return;
     }
-    let _ = fs::remove_dir_all(lock_path);
+    if let Err(error) = fs::remove_dir_all(lock_path) {
+        eprintln!(
+            "cursors: lease {} cannot be released: {error}",
+            lock_path.display()
+        );
+        return;
+    }
     let _ = sync_directory(data_dir);
 }
 
