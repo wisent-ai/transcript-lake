@@ -165,11 +165,19 @@ impl Adapter for OmpStore {
     }
 }
 
-/// Every directory read failure is tolerated here, exactly as the previous
-/// implementation's bare `catch { return [] }` did. Names come back in byte order,
-/// because Node's `readdirSync` sorts with strcmp and the walk order is observable.
+/// The entries of `dir`, names in byte order, because Node's `readdirSync`
+/// sorts with strcmp and the walk order is observable. A directory that is not
+/// there has none; one that cannot be listed is said on stderr with its cause,
+/// so its sessions are not read as never having existed.
 fn read_dirents(dir: &Path) -> Option<Vec<(String, fs::FileType)>> {
-    let iter = fs::read_dir(dir).ok()?;
+    let iter = match fs::read_dir(dir) {
+        Ok(iter) => iter,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return None,
+        Err(error) => {
+            eprintln!("omp sessions: cannot list {}: {error}", dir.display());
+            return None;
+        }
+    };
     let mut out = Vec::new();
     for entry in iter.flatten() {
         let Ok(file_type) = entry.file_type() else {
