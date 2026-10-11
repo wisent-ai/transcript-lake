@@ -129,7 +129,7 @@ fn export_oko_locked(full: bool, reindex: bool, data_dir: &Path) -> Result<Value
     let cursors = if full {
         None
     } else {
-        read_export_cursors(&cursor_file)
+        read_export_cursors(&cursor_file)?
     };
     let result = match &cursors {
         None => full_export(&partitions, &output_root, &staging_root, &mut tally)?,

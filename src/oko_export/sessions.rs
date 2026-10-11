@@ -107,7 +107,12 @@ pub(crate) fn materialize_session(
     entry: &StagedSession,
     output_root: &Path,
 ) -> Result<SessionWrite> {
-    let staged = read_text(&entry.staged_file).unwrap_or_default();
+    let staged = read_text(&entry.staged_file)?.ok_or_else(|| {
+        crate::util::Error(format!(
+            "staged session {} is missing, so its export is not rewritten empty",
+            entry.staged_file.display()
+        ))
+    })?;
     let mut rows = Vec::new();
     for line in staged.split('\n') {
         if line.is_empty() {
@@ -121,7 +126,7 @@ pub(crate) fn materialize_session(
     rows.sort_by(row_order);
     let file = session_file(output_root, &entry.runtime, &entry.session_hash);
     let content = render(&rows)?;
-    let existing = read_text(&file);
+    let existing = read_text(&file)?;
     if existing.as_deref() == Some(content.as_str()) {
         return Ok(SessionWrite {
             file,
@@ -167,7 +172,7 @@ pub(crate) fn merge_incremental_session(
     output_root: &Path,
 ) -> Result<SessionWrite> {
     let file = session_file(output_root, &entry.runtime, &entry.session_hash);
-    let existing = read_text(&file);
+    let existing = read_text(&file)?;
     let mut rows = Vec::new();
     if let Some(existing) = &existing {
         for line in existing.split('\n') {

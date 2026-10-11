@@ -12,13 +12,15 @@ use crate::oko_export::sessions::IncrementalSession;
 use crate::oko_export::{hash_text, read_text, session_key, Tally};
 use crate::util::Result;
 
-pub(super) fn read_export_cursors(file: &Path) -> Option<Map<String, Value>> {
-    if !file.exists() {
-        return None;
-    }
-    match serde_json::from_str::<Value>(&read_text(file)?) {
-        Ok(Value::Object(store)) => Some(store),
-        _ => None,
+/// The recorded cursors; `None` when there is no store or it does not parse,
+/// which a full export rebuilds. A store that cannot be read is the error.
+pub(super) fn read_export_cursors(file: &Path) -> Result<Option<Map<String, Value>>> {
+    let Some(text) = read_text(file)? else {
+        return Ok(None);
+    };
+    match serde_json::from_str::<Value>(&text) {
+        Ok(Value::Object(store)) => Ok(Some(store)),
+        _ => Ok(None),
     }
 }
 

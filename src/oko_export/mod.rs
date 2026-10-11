@@ -79,8 +79,16 @@ pub(crate) fn remove_tree(path: &Path) -> Result<()> {
     }
 }
 
-pub(crate) fn read_text(file: &Path) -> Option<String> {
-    fs::read(file)
-        .ok()
-        .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
+/// The text of `file`, or `None` only when there is no such file. Any other
+/// read failure is the error: callers rewrite the export from what they read,
+/// and an unread file taken for an empty one lost every row it held.
+pub(crate) fn read_text(file: &Path) -> Result<Option<String>> {
+    match fs::read(file) {
+        Ok(bytes) => Ok(Some(String::from_utf8_lossy(&bytes).into_owned())),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(crate::util::Error(format!(
+            "cannot read {}: {error}",
+            file.display()
+        ))),
+    }
 }
