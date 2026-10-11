@@ -34,7 +34,7 @@ pub fn status_snapshot() -> Result<StatusReport> {
     let paths = lake_paths();
     Ok(StatusReport {
         selected_source: crate::sources::selected_source(&paths.data_dir)?,
-        partitions: partition_report(&paths.data_dir),
+        partitions: partition_report(&paths.data_dir)?,
         cursors: read_cursor_status(&paths.cursors),
         stream: read_stream_status(&paths.stream_status),
         oko: crate::oko_export::freshness(),

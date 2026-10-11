@@ -21,7 +21,7 @@ pub fn compact(rest: &[String]) -> Result<i32> {
     require_flags_only("compact", &parsed)?;
     let source = require_runtime(parsed.value("source"))?;
     let data_dir = resolve_data_dir(None);
-    let mut rows = partition_report(&data_dir);
+    let mut rows = partition_report(&data_dir)?;
     if let Some(source) = &source {
         rows.retain(|row| &row.runtime == source);
     }
@@ -155,21 +155,41 @@ pub fn projection(rest: &[String]) -> Result<i32> {
     }
 }
 
+/// What `clean --target` may name.
+#[derive(Clone, Copy)]
+enum CleanTarget {
+    Parquet,
+    Oko,
+    All,
+}
+
+impl CleanTarget {
+    /// The target a `--target` value names, by its exact spelling.
+    fn named(name: &str) -> Option<CleanTarget> {
+        match name {
+            "parquet" => Some(CleanTarget::Parquet),
+            "oko" => Some(CleanTarget::Oko),
+            "all" => Some(CleanTarget::All),
+            _ => None,
+        }
+    }
+}
+
 /// Preview or remove derived data. Only rebuildable artifacts are ever
 /// selected: the Parquet mirrors, the Oko export, and its staging scratch.
 pub fn clean(rest: &[String]) -> Result<i32> {
     let parsed = parse_options("clean", rest, &["target"], &["apply", "json"])?;
     require_flags_only("clean", &parsed)?;
     let target = parsed.value("target").unwrap_or("all");
-    if !["parquet", "oko", "all"].contains(&target) {
+    let Some(target) = CleanTarget::named(target) else {
         return Err(Error("--target must be parquet, oko, or all".to_string()));
-    }
+    };
     let paths = lake_paths();
     let mut selected: Vec<(&str, PathBuf)> = Vec::new();
-    if target == "parquet" || target == "all" {
+    if matches!(target, CleanTarget::Parquet | CleanTarget::All) {
         selected.push(("parquet", paths.parquet));
     }
-    if target == "oko" || target == "all" {
+    if matches!(target, CleanTarget::Oko | CleanTarget::All) {
         selected.push(("oko", paths.oko_export));
         selected.push(("oko-staging", paths.oko_staging));
     }

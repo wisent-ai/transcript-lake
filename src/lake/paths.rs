@@ -86,21 +86,22 @@ pub struct PartitionRow {
 }
 
 /// Per-runtime partition file counts and byte totals, sorted by runtime. No
-/// events directory is no partitions. One that cannot be listed is said on
-/// stderr, and a runtime or date directory that cannot be listed is named in
-/// its row, so a short count is never read as the whole lake.
-pub fn partition_report(data_dir: &Path) -> Vec<PartitionRow> {
+/// events directory is no partitions. One that cannot be listed is refused
+/// naming it: answered as no partitions, `compact` said "start the stream
+/// first" about a lake full of events. A runtime or date directory that
+/// cannot be listed is named in its row, so a short count is never read as
+/// the whole lake.
+pub fn partition_report(data_dir: &Path) -> Result<Vec<PartitionRow>> {
     let events_dir = data_dir.join("events");
     let mut rows = Vec::new();
     let runtimes = match fs::read_dir(&events_dir) {
         Ok(runtimes) => runtimes,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return rows,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(rows),
         Err(error) => {
-            eprintln!(
-                "partitions: cannot list {}, so no partition is counted: {error}",
+            return Err(crate::util::Error(format!(
+                "partitions: cannot list {}, so no partition can be counted: {error}",
                 events_dir.display()
-            );
-            return rows;
+            )))
         }
     };
     for runtime_entry in runtimes.flatten() {
@@ -146,7 +147,7 @@ pub fn partition_report(data_dir: &Path) -> Vec<PartitionRow> {
         });
     }
     rows.sort_by(|left, right| left.runtime.cmp(&right.runtime));
-    rows
+    Ok(rows)
 }
 
 #[derive(Debug, Serialize)]
