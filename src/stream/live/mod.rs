@@ -179,8 +179,17 @@ fn stream_paths_locked(data_dir: &Path, paths: &[PathBuf]) -> Result<Value> {
         let Some((adapter, entry)) = owner::owner(&adapters, selected.as_ref(), &home, path) else {
             continue;
         };
-        let Ok(meta) = fs::metadata(&entry.file) else {
-            continue;
+        // A file that vanished since the notification has nothing to stream;
+        // one that cannot be inspected is a failure with its cause, not a
+        // file silently left unread.
+        let meta = match fs::metadata(&entry.file) {
+            Ok(meta) => meta,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => {
+                warn(&format!("{}: {error}", entry.file.display()));
+                tallies.entry(adapter.runtime()).or_default().failures += 1;
+                continue;
+            }
         };
         let tally = tallies.entry(adapter.runtime()).or_default();
         let key = entry.file.to_string_lossy().to_string();

@@ -27,6 +27,7 @@ use std::path::{Path, PathBuf};
 
 use serde_json::{Map, Value};
 
+use crate::adapters::common::dirent_type;
 use crate::types::{Adapter, ParserCtx, Reading, SessionEntry};
 
 const JSONL_EXT: &str = ".jsonl";
@@ -206,13 +207,6 @@ fn read_dirents(dir: &Path) -> Option<Vec<(String, fs::FileType)>> {
     }
     out.sort_unstable_by(|left, right| left.0.cmp(&right.0));
     Some(out)
-}
-
-/// The type `read_dirents` would have reported for a path the caller already knows,
-/// taken without following a symlink so that an entry the scan skips is skipped here
-/// too. A path that vanished between notification and read has no type at all.
-fn dirent_type(path: &Path) -> Option<fs::FileType> {
-    fs::symlink_metadata(path).ok().map(|meta| meta.file_type())
 }
 
 /// The entry a scan yields for one name inside a session directory: `.jsonl` files

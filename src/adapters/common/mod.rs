@@ -72,9 +72,21 @@ pub(crate) fn read_dirents(dir: &Path) -> Vec<(String, fs::FileType)> {
 }
 
 /// The type of a path the caller already knows, without following a symlink,
-/// so an entry a scan skips is skipped here too.
+/// so an entry a scan skips is skipped here too. A path that vanished has no
+/// type; one whose type cannot be read is said on stderr with its cause, as
+/// the scan says an entry it cannot read, rather than skipped in silence.
 pub(crate) fn dirent_type(path: &Path) -> Option<fs::FileType> {
-    fs::symlink_metadata(path).ok().map(|meta| meta.file_type())
+    match fs::symlink_metadata(path) {
+        Ok(meta) => Some(meta.file_type()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) => {
+            eprintln!(
+                "sessions: cannot read the type of {}: {error}",
+                path.display()
+            );
+            None
+        }
+    }
 }
 
 /// Whether `path` is a regular file (not a symlink, not a directory).
