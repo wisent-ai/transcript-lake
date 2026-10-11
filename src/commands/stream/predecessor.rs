@@ -37,7 +37,6 @@ pub(super) fn retire() {
 
 #[cfg(target_os = "macos")]
 fn launchd(predecessor: &str) {
-    use std::path::PathBuf;
     use std::process::Command;
 
     extern "C" {
@@ -45,9 +44,7 @@ fn launchd(predecessor: &str) {
     }
     // SAFETY: getuid has no preconditions and cannot fail.
     let target = format!("gui/{}/{predecessor}", unsafe { getuid() });
-    let plist = std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .unwrap_or_default()
+    let plist = crate::util::home_dir()
         .join("Library/LaunchAgents")
         .join(format!("{predecessor}.plist"));
     let loaded = Command::new("/bin/launchctl")

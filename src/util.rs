@@ -99,11 +99,12 @@ pub fn absolute(path: impl AsRef<Path>) -> PathBuf {
         .join(path)
 }
 
-/// `$HOME`, or `.` when the environment has none.
+/// `$HOME`, else the home the user database records. With neither it stops
+/// with the cause: answering `.` put the lake, cursors and harness transcript
+/// roots under whatever directory the command started from, where every
+/// source read as empty.
 pub fn home_dir() -> PathBuf {
-    env::var_os("HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("."))
+    env::home_dir().expect("neither HOME nor the user database names a home directory")
 }
 
 /// Local host name as the cursor lease and canonical events record it.
