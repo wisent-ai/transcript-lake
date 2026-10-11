@@ -237,16 +237,27 @@ pub fn read_stream_status(path: &Path) -> StreamStatus {
     }
 }
 
-/// Recursive byte size of a path, following no symlinks.
+/// Recursive byte size of a path, following no symlinks. A path that is not
+/// there holds no bytes; one whose metadata cannot be read is the error, not
+/// a size of nothing.
 pub fn path_size(path: &Path) -> Result<u64> {
-    let Ok(meta) = fs::symlink_metadata(path) else {
-        return Ok(0);
+    let meta = match fs::symlink_metadata(path) {
+        Ok(meta) => meta,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(0),
+        Err(error) => {
+            return Err(crate::util::Error(format!(
+                "cannot read {}: {error}",
+                path.display()
+            )))
+        }
     };
     if !meta.is_dir() {
         return Ok(meta.len());
     }
     let mut total = 0;
-    for entry in fs::read_dir(path)?.flatten() {
+    let entries = fs::read_dir(path)
+        .map_err(|error| crate::util::Error(format!("cannot list {}: {error}", path.display())))?;
+    for entry in entries.flatten() {
         total += path_size(&entry.path())?;
     }
     Ok(total)
