@@ -174,8 +174,19 @@ fn read_work_dir_index(root: &Path) -> HashMap<String, String> {
     let Some(parent) = root.parent() else {
         return map;
     };
-    let Ok(text) = fs::read_to_string(parent.join("session_index.jsonl")) else {
-        return map;
+    // No index is no attribution; an index that cannot be read costs every
+    // session its project, so it is named, as an unlistable root is.
+    let index = parent.join("session_index.jsonl");
+    let text = match fs::read_to_string(&index) {
+        Ok(text) => text,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return map,
+        Err(error) => {
+            eprintln!(
+                "stream: session index {} cannot be read, so no session under it is attributed to a project: {error}",
+                index.display()
+            );
+            return map;
+        }
     };
     for line in text.split('\n') {
         if line.trim().is_empty() {
