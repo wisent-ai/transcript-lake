@@ -113,8 +113,20 @@ fn values(ctx: &ParserCtx, prefix: &str) -> Result<HashMap<String, Value>> {
     let mut found = HashMap::new();
     for row in rows {
         let (key, value) = row.map_err(|error| database_error(path, "a chat record", error))?;
-        if let Some(value) = value.and_then(|value| serde_json::from_str::<Value>(&value).ok()) {
-            found.insert(key, value);
+        // A record with no value holds nothing. One whose value is not JSON
+        // is a damaged chat record: it carries no message and is said with
+        // its key, where it used to vanish from the conversation.
+        let Some(value) = value else {
+            continue;
+        };
+        match serde_json::from_str::<Value>(&value) {
+            Ok(parsed) => {
+                found.insert(key, parsed);
+            }
+            Err(error) => eprintln!(
+                "sessions: chat record {key} in {} is not JSON and carries no message: {error}",
+                path.display()
+            ),
         }
     }
     Ok(found)
