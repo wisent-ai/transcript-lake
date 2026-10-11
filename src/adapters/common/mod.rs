@@ -30,16 +30,40 @@ const VS_CODE_EDITORS: &[&str] = &[
     "Antigravity",
 ];
 
-/// Every entry of `dir` with its type, in byte order of the name; an
-/// unreadable or vanished directory has none.
+/// Every entry of `dir` with its type, in byte order of the name. A vanished
+/// directory has none; one that cannot be listed, and an entry whose type
+/// cannot be read, is said on stderr with its cause, so the sessions under it
+/// are not read as never having existed.
 pub(crate) fn read_dirents(dir: &Path) -> Vec<(String, fs::FileType)> {
-    let Ok(iter) = fs::read_dir(dir) else {
-        return Vec::new();
+    let iter = match fs::read_dir(dir) {
+        Ok(iter) => iter,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Vec::new(),
+        Err(error) => {
+            eprintln!("sessions: cannot list {}: {error}", dir.display());
+            return Vec::new();
+        }
     };
     let mut out = Vec::new();
-    for entry in iter.flatten() {
-        let Ok(file_type) = entry.file_type() else {
-            continue;
+    for entry in iter {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(error) => {
+                eprintln!(
+                    "sessions: cannot read an entry of {}: {error}",
+                    dir.display()
+                );
+                continue;
+            }
+        };
+        let file_type = match entry.file_type() {
+            Ok(file_type) => file_type,
+            Err(error) => {
+                eprintln!(
+                    "sessions: cannot read the type of {}: {error}",
+                    entry.path().display()
+                );
+                continue;
+            }
         };
         out.push((entry.file_name().to_string_lossy().to_string(), file_type));
     }
