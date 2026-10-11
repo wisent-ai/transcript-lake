@@ -141,9 +141,19 @@ pub(super) fn acquire_lock(data_dir: &Path, lock_path: &Path) -> Result<String> 
             }
         }
 
-        let incumbent = fs::read_to_string(lock_path.join("owner.json"))
-            .ok()
-            .and_then(|raw| serde_json::from_str::<Value>(&raw).ok());
+        // A missing or malformed owner is abandoned: claims are published
+        // whole by one rename. An owner that exists and cannot be read proves
+        // nothing about its writer, so it is refused rather than broken.
+        let incumbent = match fs::read_to_string(lock_path.join("owner.json")) {
+            Ok(raw) => serde_json::from_str::<Value>(&raw).ok(),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+            Err(error) => {
+                return Err(Error(format!(
+                    "state writer lock owner {} cannot be read: {error}",
+                    lock_path.join("owner.json").display()
+                )))
+            }
+        };
         if owner_is_alive(incumbent.as_ref()) {
             let incumbent = incumbent.unwrap_or(Value::Null);
             let host = incumbent
