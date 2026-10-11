@@ -140,19 +140,37 @@ pub(super) fn acquire_claim(root: &Path, segment_id: &str) -> Result<Option<Clai
     Ok(None)
 }
 
+/// Release a claim this run holds. A claim file that is already gone was
+/// released; one that cannot be read, or cannot be removed, is said with its
+/// path and cause, because the segment then stays claimed until its owner is
+/// seen dead.
 pub(super) fn release_claim(claim: &Claim) {
-    let owner = fs::read_to_string(&claim.path)
-        .ok()
-        .and_then(|raw| parse(&raw));
-    let held = owner
+    let raw = match fs::read_to_string(&claim.path) {
+        Ok(raw) => raw,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return,
+        Err(error) => {
+            warn(&format!(
+                "hook segment claim {} cannot be read to release it: {error}",
+                claim.path.display()
+            ));
+            return;
+        }
+    };
+    let held = parse(&raw)
         .as_ref()
         .and_then(|owner| string_field(owner, "nonce"));
     if held.as_deref() != Some(claim.nonce.as_str()) {
         return;
     }
-    if fs::remove_file(&claim.path).is_ok() {
-        if let Some(parent) = claim.path.parent() {
-            let _ = sync_directory(parent);
+    match fs::remove_file(&claim.path) {
+        Ok(()) => {
+            if let Some(parent) = claim.path.parent() {
+                let _ = sync_directory(parent);
+            }
         }
+        Err(error) => warn(&format!(
+            "hook segment claim {} cannot be released: {error}",
+            claim.path.display()
+        )),
     }
 }
