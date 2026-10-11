@@ -1,10 +1,6 @@
-//! Real CLI journey: a Devin store with one message node whose chat message
-//! is not JSON is adopted with every readable message, and the damaged node
-//! is named on stderr with its session - it used to lose its text without a
-//! word. The store is the observed-format registry's Devin fixture (beside
-//! this file) plus that one damaged node, placed where the adapter discovers
-//! it (`$XDG_DATA_HOME/devin/cli`); it is the vendor's store the adapter
-//! reads, not product data. The journey is retained by `evidence`.
+//! Real CLI refusal against the observed-format Devin SQLite store.
+//! A malformed message must name its node, session and parse failure,
+//! rather than returning a successful shortened conversation.
 #[path = "../harnesses/evidence.rs"]
 mod evidence;
 
@@ -35,7 +31,7 @@ fn store(work: &Path) -> (PathBuf, PathBuf) {
 }
 
 #[test]
-fn a_damaged_node_is_named_and_the_session_is_adopted() {
+fn a_damaged_node_refuses_adoption_and_names_its_cause() {
     let work = evidence::directory();
     let (data, root) = store(&work);
     let lake = work.join("lake");
@@ -55,10 +51,17 @@ fn a_damaged_node_is_named_and_the_session_is_adopted() {
         &[("XDG_DATA_HOME", data.as_path())],
     );
     let said = String::from_utf8_lossy(&output.stderr);
-    assert!(output.status.success(), "adopt failed: {said}");
+    assert!(
+        !output.status.success(),
+        "damaged message was accepted: {said}"
+    );
     assert!(
         said.contains("the message of node 77 of session registry-devin-sub")
             && said.contains("is not JSON"),
         "the damaged node was not named: {said}"
+    );
+    assert!(
+        said.contains(&root.join("sessions.db").display().to_string()),
+        "{said}"
     );
 }

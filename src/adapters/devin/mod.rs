@@ -87,10 +87,10 @@ const NODES: &str = "SELECT node_id, parent_node_id, chat_message, created_at, m
 const HEADS: &str =
     "SELECT agent_id, chain_node_id FROM subagent_heads WHERE session_id = ?1 ORDER BY agent_id";
 
-/// One stored node with the message it carries, when the message parses.
+/// One stored node with its parsed message.
 struct Stored {
     node: Node,
-    message: Option<Value>,
+    message: Value,
     created: Option<i64>,
 }
 
@@ -117,36 +117,26 @@ fn stored_nodes(
     for row in rows {
         let (id, parent, message, created, metadata) =
             row.map_err(|error| database_error(path, "a message node", error))?;
-        // A message or metadata that is not JSON is said with its node: the
-        // node keeps its place in the chain, but its text is lost, and a
-        // system prefix whose metadata cannot be read would read as part of
-        // the conversation. Both used to pass without a word.
-        let metadata = metadata.and_then(|metadata| match serde_json::from_str::<Value>(&metadata) {
-            Ok(parsed) => Some(parsed),
-            Err(error) => {
-                eprintln!(
-                    "sessions: the metadata of node {id} of session {session} in {} is not JSON: {error}",
-                    path.display()
-                );
-                None
-            }
-        });
+        let metadata = metadata
+            .map(|metadata| {
+                serde_json::from_str::<Value>(&metadata).map_err(|error| {
+                    crate::util::Error(format!(
+                        "the metadata of node {id} of session {session} in {} is not JSON: {error}",
+                        path.display()
+                    ))
+                })
+            })
+            .transpose()?;
         let scaffolding = metadata
             .and_then(|metadata| metadata.get("is_system_prefix").and_then(Value::as_bool))
             == Some(true);
-        let message = match serde_json::from_str::<Value>(&message) {
-            Ok(parsed) => Some(parsed),
-            Err(error) => {
-                eprintln!(
-                    "sessions: the message of node {id} of session {session} in {} is not JSON and carries no text: {error}",
-                    path.display()
-                );
-                None
-            }
-        };
-        let message_id = message
-            .as_ref()
-            .and_then(|message| text_field(message, "message_id"));
+        let message = serde_json::from_str::<Value>(&message).map_err(|error| {
+            crate::util::Error(format!(
+                "the message of node {id} of session {session} in {} is not JSON: {error}",
+                path.display()
+            ))
+        })?;
+        let message_id = text_field(&message, "message_id");
         nodes.insert(
             id,
             Stored {
@@ -225,9 +215,7 @@ fn load(ctx: &ParserCtx) -> Result<Vec<RawEvent>> {
             };
             for id in chain.nodes {
                 let node = &stored[&id];
-                let Some(message) = &node.message else {
-                    continue;
-                };
+                let message = &node.message;
                 let mut found = chat_messages(
                     ctx,
                     std::slice::from_ref(message),
