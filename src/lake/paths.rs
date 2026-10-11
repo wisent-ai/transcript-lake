@@ -80,14 +80,28 @@ pub struct PartitionRow {
     pub runtime: String,
     pub parts: u64,
     pub bytes: u64,
+    /// Partition directories under this runtime that could not be listed:
+    /// their files are missing from `parts` and `bytes`.
+    pub unreadable: Vec<String>,
 }
 
-/// Per-runtime partition file counts and byte totals, sorted by runtime.
+/// Per-runtime partition file counts and byte totals, sorted by runtime. No
+/// events directory is no partitions. One that cannot be listed is said on
+/// stderr, and a runtime or date directory that cannot be listed is named in
+/// its row, so a short count is never read as the whole lake.
 pub fn partition_report(data_dir: &Path) -> Vec<PartitionRow> {
     let events_dir = data_dir.join("events");
     let mut rows = Vec::new();
-    let Ok(runtimes) = fs::read_dir(&events_dir) else {
-        return rows;
+    let runtimes = match fs::read_dir(&events_dir) {
+        Ok(runtimes) => runtimes,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return rows,
+        Err(error) => {
+            eprintln!(
+                "partitions: cannot list {}, so no partition is counted: {error}",
+                events_dir.display()
+            );
+            return rows;
+        }
     };
     for runtime_entry in runtimes.flatten() {
         let name = runtime_entry.file_name().to_string_lossy().to_string();
@@ -96,30 +110,39 @@ pub fn partition_report(data_dir: &Path) -> Vec<PartitionRow> {
         }
         let mut parts = 0u64;
         let mut bytes = 0u64;
-        if let Ok(dates) = fs::read_dir(runtime_entry.path()) {
-            for date_entry in dates.flatten() {
-                if !date_entry.path().is_dir() {
-                    continue;
-                }
-                let Ok(files) = fs::read_dir(date_entry.path()) else {
-                    continue;
-                };
-                for file in files.flatten() {
-                    let file_name = file.file_name().to_string_lossy().to_string();
-                    if !file_name.ends_with(".ndjson") || !file.path().is_file() {
+        let mut unreadable = Vec::new();
+        match fs::read_dir(runtime_entry.path()) {
+            Ok(dates) => {
+                for date_entry in dates.flatten() {
+                    if !date_entry.path().is_dir() {
                         continue;
                     }
-                    if let Ok(meta) = file.metadata() {
-                        bytes += meta.len();
+                    let files = match fs::read_dir(date_entry.path()) {
+                        Ok(files) => files,
+                        Err(error) => {
+                            unreadable.push(format!("{}: {error}", date_entry.path().display()));
+                            continue;
+                        }
+                    };
+                    for file in files.flatten() {
+                        let file_name = file.file_name().to_string_lossy().to_string();
+                        if !file_name.ends_with(".ndjson") || !file.path().is_file() {
+                            continue;
+                        }
+                        if let Ok(meta) = file.metadata() {
+                            bytes += meta.len();
+                        }
+                        parts += 1;
                     }
-                    parts += 1;
                 }
             }
+            Err(error) => unreadable.push(format!("{}: {error}", runtime_entry.path().display())),
         }
         rows.push(PartitionRow {
             runtime: name.trim_start_matches("runtime=").to_string(),
             parts,
             bytes,
+            unreadable,
         });
     }
     rows.sort_by(|left, right| left.runtime.cmp(&right.runtime));
