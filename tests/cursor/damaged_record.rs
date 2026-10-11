@@ -1,10 +1,5 @@
-//! Real CLI journey: a Cursor store whose chat holds one record that is not
-//! JSON is adopted with every readable message, and the damaged record is
-//! named on stderr with its key - it used to vanish from the conversation.
-//! The store is a real `state.vscdb` written with the product's own SQLite
-//! where `transcript-lake adopt --root` reads it; it is the vendor's store the
-//! adapter reads, not product data. The journey, its inputs and outputs are
-//! retained under the package's build directory by `evidence`.
+//! Real CLI refusal and recovery against an isolated native Cursor SQLite store.
+//! Malformed stored JSON must not publish a shortened conversation.
 #[path = "../harnesses/evidence.rs"]
 mod evidence;
 
@@ -17,7 +12,11 @@ const CHAT: &str = "cursor-damaged-record";
 const DAMAGED: &str = "bubbleId:cursor-damaged-record:b2";
 
 fn store(work: &Path) -> PathBuf {
-    let root = work.join("Cursor").join("User").join("globalStorage");
+    let root = work
+        .join(".config")
+        .join("Cursor")
+        .join("User")
+        .join("globalStorage");
     fs::create_dir_all(&root).expect("the Cursor storage directory is created");
     let database =
         rusqlite::Connection::open(root.join("state.vscdb")).expect("the vendor store is created");
@@ -37,7 +36,12 @@ fn adopted(lake: &Path) -> Vec<Value> {
     let mut events = Vec::new();
     let mut directories = vec![lake.join("events")];
     while let Some(directory) = directories.pop() {
-        for entry in fs::read_dir(&directory).expect("read a partition directory") {
+        let entries = match fs::read_dir(&directory) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => panic!("cannot read {}: {error}", directory.display()),
+        };
+        for entry in entries {
             let path = entry.expect("read a partition entry").path();
             if path.is_dir() {
                 directories.push(path);
@@ -54,7 +58,7 @@ fn adopted(lake: &Path) -> Vec<Value> {
 }
 
 #[test]
-fn a_damaged_chat_record_is_named_and_the_rest_is_adopted() {
+fn a_damaged_chat_record_refuses_and_recovers_after_repair() {
     let work = evidence::directory();
     let root = store(&work);
     let lake = work.join("lake");
@@ -71,18 +75,103 @@ fn a_damaged_chat_record_is_named_and_the_rest_is_adopted() {
             root.to_str().expect("UTF-8 native root"),
             "--json",
         ],
-        &[],
+        &[("HOME", work.as_path())],
     );
     let said = String::from_utf8_lossy(&output.stderr);
-    assert!(output.status.success(), "adopt failed: {said}");
+    assert!(
+        !output.status.success(),
+        "damaged record was accepted: {said}"
+    );
     assert!(
         said.contains(&format!("chat record {DAMAGED}")) && said.contains("is not JSON"),
         "the damaged record was not named: {said}"
     );
-    let questions: Vec<String> = adopted(&lake)
+    assert!(
+        said.contains(&root.join("state.vscdb").display().to_string()),
+        "{said}"
+    );
+    assert!(
+        adopted(&lake).is_empty(),
+        "refusal published an incomplete conversation"
+    );
+    let database = rusqlite::Connection::open(root.join("state.vscdb")).expect("open owned store");
+    database.execute(
+        "UPDATE cursorDiskKV SET value = (SELECT value FROM cursorDiskKV WHERE key = ?1) WHERE key = ?2",
+        rusqlite::params![format!("bubbleId:{CHAT}:b1"), DAMAGED],
+    ).expect("repair damaged record using the owned store's readable native message");
+    let recovered = evidence::run(
+        &work,
+        "adopt-repaired-record",
+        &[
+            "--data-dir",
+            lake.to_str().expect("UTF-8 Lake path"),
+            "adopt",
+            "--source",
+            "cursor",
+            "--root",
+            root.to_str().expect("UTF-8 native root"),
+            "--json",
+        ],
+        &[("HOME", work.as_path())],
+    );
+    assert!(
+        recovered.status.success(),
+        "{}",
+        String::from_utf8_lossy(&recovered.stderr)
+    );
+    let expected: Value = serde_json::from_str(
+        &database
+            .query_row(
+                "SELECT value FROM cursorDiskKV WHERE key = ?1",
+                [DAMAGED],
+                |row| row.get::<_, String>("value"),
+            )
+            .expect("read repaired native record"),
+    )
+    .expect("repaired native JSON");
+    let committed = adopted(&lake);
+    let messages: Vec<_> = committed
         .iter()
-        .filter(|event| event["session_id"] == CHAT && event["event_type"] == "user")
-        .filter_map(|event| event["text"].as_str().map(str::to_string))
+        .filter(|event| event["session_id"] == CHAT)
+        .map(|event| event["text"].clone())
         .collect();
-    assert_eq!(questions, vec!["the readable question".to_string()]);
+    let mut statement = database
+        .prepare("SELECT key FROM cursorDiskKV WHERE key LIKE ?1")
+        .expect("read native bubble identities");
+    let expected_messages: Vec<_> = statement
+        .query_map([format!("bubbleId:{CHAT}:%")], |_| {
+            Ok(expected["text"].clone())
+        })
+        .expect("enumerate native bubbles")
+        .collect::<Result<_, _>>()
+        .expect("read every native bubble");
+    assert_eq!(
+        messages, expected_messages,
+        "recovery lost or duplicated a native message"
+    );
+    let replay = evidence::run(
+        &work,
+        "replay-repaired-record",
+        &[
+            "--data-dir",
+            lake.to_str().expect("UTF-8 Lake path"),
+            "adopt",
+            "--source",
+            "cursor",
+            "--root",
+            root.to_str().expect("UTF-8 native root"),
+            "--json",
+        ],
+        &[("HOME", work.as_path())],
+    );
+    assert!(
+        replay.status.success(),
+        "{}",
+        String::from_utf8_lossy(&replay.stderr)
+    );
+    assert_eq!(
+        adopted(&lake),
+        committed,
+        "replay changed persisted occurrences"
+    );
 }
