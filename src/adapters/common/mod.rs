@@ -172,8 +172,9 @@ pub(crate) fn read_json(path: &Path) -> Result<Value> {
 }
 
 /// Every complete JSON line of a file read whole; a last line still being
-/// written (no newline yet) is left for the next read, and a line that is not
-/// JSON carries no record.
+/// written (no newline yet) is left for the next read. A complete line that
+/// is not JSON carries no record and is said on stderr with where it starts -
+/// it used to vanish, so a damaged transcript read as a shorter one.
 pub(crate) fn read_json_lines(path: &Path) -> Result<Vec<Value>> {
     let text = fs::read_to_string(path)
         .map_err(|error| Error(format!("cannot read {}: {error}", path.display())))?;
@@ -181,11 +182,18 @@ pub(crate) fn read_json_lines(path: &Path) -> Result<Vec<Value>> {
         Some(end) => &text[..end],
         None => "",
     };
-    Ok(complete
-        .lines()
-        .filter(|line| !line.trim().is_empty())
-        .filter_map(|line| serde_json::from_str(line).ok())
-        .collect())
+    let mut records = Vec::new();
+    for line in complete.lines().filter(|line| !line.trim().is_empty()) {
+        match serde_json::from_str(line) {
+            Ok(record) => records.push(record),
+            Err(error) => eprintln!(
+                "sessions: the line at byte {} of {} is not JSON and carries no record: {error}",
+                line.as_ptr() as usize - complete.as_ptr() as usize,
+                path.display()
+            ),
+        }
+    }
+    Ok(records)
 }
 
 /// A SQLite database opened read-only, so reading a harness's store never

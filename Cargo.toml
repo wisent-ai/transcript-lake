@@ -27,6 +27,10 @@ path = "tests/devin/chains.rs"
 name = "partitions-unlistable"
 path = "tests/partitions/unlistable.rs"
 
+[[test]]
+name = "junie-damaged-line"
+path = "tests/junie/damaged_line.rs"
+
 [dependencies]
 # preserve_order keeps `extra` in adapter insertion order, so a ported
 # partition line is byte-identical to the one the previous implementation wrote.

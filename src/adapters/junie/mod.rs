@@ -70,15 +70,27 @@ impl Adapter for Junie {
     }
 }
 
-/// Each session's project, from the index beside the sessions.
+/// Each session's project, from the index beside the sessions. An absent
+/// index records no projects; one that cannot be read is said on stderr, so
+/// its sessions are not read as having no project for no reason.
 fn projects(root: &Path) -> HashMap<String, String> {
-    read_json_lines(&root.join("index.jsonl"))
-        .into_iter()
-        .flatten()
+    let index = root.join("index.jsonl");
+    if !is_file(&index) {
+        return HashMap::new();
+    }
+    let lines = match read_json_lines(&index) {
+        Ok(lines) => lines,
+        Err(error) => {
+            eprintln!("junie sessions: no session projects: {error}");
+            return HashMap::new();
+        }
+    };
+    lines
+        .iter()
         .filter_map(|line| {
             Some((
-                text_field(&line, "sessionId").or_else(|| text_field(&line, "id"))?,
-                text_field(&line, "projectDir")?,
+                text_field(line, "sessionId").or_else(|| text_field(line, "id"))?,
+                text_field(line, "projectDir")?,
             ))
         })
         .collect()
