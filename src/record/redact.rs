@@ -41,9 +41,20 @@ struct EntropyFormat {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct DeclaredFormats {
+    #[serde(deserialize_with = "required_nullable")]
     assignment: Option<String>,
+    #[serde(deserialize_with = "required_nullable")]
     token: Option<String>,
+    #[serde(deserialize_with = "required_nullable")]
     entropy: Option<EntropyFormat>,
+}
+
+fn required_nullable<'de, D, T>(deserializer: D) -> std::result::Result<Option<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    Option::<T>::deserialize(deserializer)
 }
 
 struct EntropyRule {
