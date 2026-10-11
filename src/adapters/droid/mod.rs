@@ -104,9 +104,28 @@ fn read_dirents(dir: &Path) -> Option<Vec<(String, fs::FileType)>> {
         }
     };
     let mut out = Vec::new();
-    for entry in iter.flatten() {
-        let Ok(file_type) = entry.file_type() else {
-            continue;
+    for entry in iter {
+        // An entry that cannot be read is a session the scan cannot show,
+        // said with its cause like the directory itself.
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(error) => {
+                eprintln!(
+                    "droid sessions: cannot read an entry of {}: {error}",
+                    dir.display()
+                );
+                continue;
+            }
+        };
+        let file_type = match entry.file_type() {
+            Ok(file_type) => file_type,
+            Err(error) => {
+                eprintln!(
+                    "droid sessions: cannot read the type of {}: {error}",
+                    entry.path().display()
+                );
+                continue;
+            }
         };
         out.push((entry.file_name().to_string_lossy().to_string(), file_type));
     }

@@ -11,11 +11,11 @@
 //! Record types user | assistant | system | summary carry
 //! messages; permission-mode, file-history-snapshot, attachment, ai-title, last-prompt,
 //! queue-operation, progress and mode records are bookkeeping noise and are dropped.
-use std::fs;
 use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 
+use super::common::{dirent_type, read_dirents};
 use crate::types::{Adapter, ParserCtx, Reading, SessionEntry};
 
 /// One harness that writes Claude Code's transcripts: its runtime id and the
@@ -110,47 +110,6 @@ impl Adapter for ClaudeStore {
     fn read(&self, ctx: ParserCtx) -> Reading {
         Reading::Lines(Box::new(ClaudeParser::new(ctx)))
     }
-}
-
-/// A root or project directory may vanish between scan and read; that is not an error
-/// state worth failing the stream over. Anything else (permissions, IO) was fatal in the
-/// previous implementation, which could throw out of `listSessions`; the frozen Rust
-/// signature cannot, so it is reported on stderr with the driver's own prefix instead.
-/// Names come back in byte order, because Node's `readdirSync` sorts with strcmp and
-/// the walk order decides which partition file a record lands in.
-fn read_dirents(dir: &Path) -> Vec<(String, fs::FileType)> {
-    let iter = match fs::read_dir(dir) {
-        Ok(iter) => iter,
-        Err(error) => {
-            // ENOENT and ENOTDIR: the tree moved under us.
-            if !matches!(
-                error.kind(),
-                std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
-            ) {
-                eprintln!(
-                    "stream: listSessions failed under {}: {error}",
-                    dir.display()
-                );
-            }
-            return Vec::new();
-        }
-    };
-    let mut out = Vec::new();
-    for entry in iter.flatten() {
-        let Ok(file_type) = entry.file_type() else {
-            continue;
-        };
-        out.push((entry.file_name().to_string_lossy().to_string(), file_type));
-    }
-    out.sort_unstable_by(|left, right| left.0.cmp(&right.0));
-    out
-}
-
-/// The type `read_dirents` would have reported for a path the caller already knows,
-/// taken without following a symlink so that an entry the scan skips is skipped here
-/// too. A path that vanished between notification and read has no type at all.
-fn dirent_type(path: &Path) -> Option<fs::FileType> {
-    fs::symlink_metadata(path).ok().map(|meta| meta.file_type())
 }
 
 /// Directory names encode the cwd with '/' turned into '-'; the reverse mapping is best

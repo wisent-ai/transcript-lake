@@ -10,12 +10,12 @@
 //! (user_message / agent_message / agent_reasoning). To avoid double counting we take
 //! user turns from event_msg/user_message (response_item role=user also carries
 //! injected environment context) and everything else from response_item records.
-use std::fs;
 use std::path::{Path, PathBuf};
 
 use regex::Regex;
 use serde_json::Value;
 
+use super::common::{dirent_type, read_dirents, subdirectories};
 use crate::types::{Adapter, ParserCtx, Reading, SessionEntry};
 
 /// Filenames look like `rollout-<ISO-stamp>-<uuid>.jsonl`; the uuid is the session id.
@@ -59,9 +59,9 @@ impl Adapter for CodexStore {
 
     fn list_sessions(&self, root: &Path) -> Vec<SessionEntry> {
         let mut sessions = Vec::new();
-        for year in subdirs(root) {
-            for month in subdirs(&year) {
-                for day in subdirs(&month) {
+        for year in subdirectories(root) {
+            for month in subdirectories(&year) {
+                for day in subdirectories(&month) {
                     for (name, file_type) in read_dirents(&day) {
                         if !file_type.is_file() {
                             continue;
@@ -105,55 +105,6 @@ impl Adapter for CodexStore {
     fn read(&self, ctx: ParserCtx) -> Reading {
         Reading::Lines(Box::new(CodexParser::new(ctx)))
     }
-}
-
-/// A directory may vanish between scan and read; that is not an error state worth
-/// failing the stream over. Anything else (permissions, IO) was fatal in the previous
-/// implementation, which could throw out of `listSessions`; the frozen Rust signature
-/// cannot, so it is reported on stderr with the driver's own prefix instead. Names come
-/// back in byte order, because Node's `readdirSync` sorts with strcmp and the walk
-/// order decides which partition file a record lands in.
-fn read_dirents(dir: &Path) -> Vec<(String, fs::FileType)> {
-    let iter = match fs::read_dir(dir) {
-        Ok(iter) => iter,
-        Err(error) => {
-            // ENOENT and ENOTDIR: the tree moved under us.
-            if !matches!(
-                error.kind(),
-                std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
-            ) {
-                eprintln!(
-                    "stream: listSessions failed under {}: {error}",
-                    dir.display()
-                );
-            }
-            return Vec::new();
-        }
-    };
-    let mut out = Vec::new();
-    for entry in iter.flatten() {
-        let Ok(file_type) = entry.file_type() else {
-            continue;
-        };
-        out.push((entry.file_name().to_string_lossy().to_string(), file_type));
-    }
-    out.sort_unstable_by(|left, right| left.0.cmp(&right.0));
-    out
-}
-
-fn subdirs(dir: &Path) -> Vec<PathBuf> {
-    read_dirents(dir)
-        .into_iter()
-        .filter(|(_, file_type)| file_type.is_dir())
-        .map(|(name, _)| dir.join(name))
-        .collect()
-}
-
-/// The type `read_dirents` would have reported for a path the caller already knows,
-/// taken without following a symlink so that an entry the scan skips is skipped here
-/// too. A path that vanished between notification and read has no type at all.
-fn dirent_type(path: &Path) -> Option<fs::FileType> {
-    fs::symlink_metadata(path).ok().map(|meta| meta.file_type())
 }
 
 /// The entry a scan yields for one name inside a day directory: `rollout-*.jsonl` only,
