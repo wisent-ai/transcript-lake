@@ -98,12 +98,12 @@ pub(super) fn acquire_claim(root: &Path, segment_id: &str) -> Result<Option<Clai
         drop(file);
         match fs::hard_link(&temporary, &path) {
             Ok(()) => {
-                let _ = fs::remove_file(&temporary);
+                discard_draft(&temporary);
                 sync_directory(root)?;
                 return Ok(Some(Claim { path, nonce }));
             }
             Err(error) => {
-                let _ = fs::remove_file(&temporary);
+                discard_draft(&temporary);
                 if error.kind() != std::io::ErrorKind::AlreadyExists {
                     return Err(error.into());
                 }
@@ -138,6 +138,17 @@ pub(super) fn acquire_claim(root: &Path, segment_id: &str) -> Result<Option<Clai
         }
     }
     Ok(None)
+}
+
+/// The claim's draft is removed once linked or refused; a draft that stays is
+/// said with its path and cause, since nothing else ever removes it.
+fn discard_draft(temporary: &Path) {
+    if let Err(error) = fs::remove_file(temporary) {
+        warn(&format!(
+            "hook segment claim draft {} was left behind: {error}",
+            temporary.display()
+        ));
+    }
 }
 
 /// Release a claim this run holds. A claim file that is already gone was
