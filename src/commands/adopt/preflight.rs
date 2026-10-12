@@ -178,8 +178,9 @@ fn validate_supported_record(runtime: &str, record: &Value, file: &Path, line: u
             file.display()
         )));
     }
+    let checked = Checked::of(runtime);
     let Some(kind) = record.get("type").and_then(Value::as_str) else {
-        if !matches!(runtime, "claude" | "codex" | "kimi") {
+        if checked.is_none() {
             return Ok(());
         }
         return Err(Error(format!(
@@ -187,48 +188,70 @@ fn validate_supported_record(runtime: &str, record: &Value, file: &Path, line: u
             file.display()
         )));
     };
-    let supported = match runtime {
-        "claude" => matches!(
-            kind,
-            "user"
-                | "assistant"
-                | "system"
-                | "summary"
-                | "progress"
-                | "file-history-snapshot"
-                | "queue-operation"
-        ),
-        "codex" => matches!(
-            kind,
-            "session_meta" | "turn_context" | "event_msg" | "response_item" | "compacted"
-        ),
-        "kimi" => {
-            matches!(
-                kind,
-                "context.append_loop_event"
-                    | "context.append_message"
-                    | "usage.record"
-                    | "metadata"
-                    | "config.update"
-                    | "context.apply_compaction"
-                    | "turn.cancel"
-                    | "turn.prompt"
-                    | "turn.steer"
-            ) || kind.starts_with("tools.")
-                || kind.starts_with("permission.")
-                || kind.contains("_mode.")
-        }
-        // OMP and Factory Droid preserve otherwise unknown record kinds as
-        // explicit metadata events rather than dropping them. Every other
-        // line adapter turns the records it knows into events and leaves the
-        // rest out; the root must still yield events, checked by the caller.
-        _ => true,
-    };
-    if supported {
-        return Ok(());
+    match checked {
+        Some(format) if !format.writes(kind) => Err(Error(format!(
+            "unsupported {runtime} record type '{kind}' in {} at line {line}; no source data was ingested",
+            file.display()
+        ))),
+        _ => Ok(()),
     }
-    Err(Error(format!(
-        "unsupported {runtime} record type '{kind}' in {} at line {line}; no source data was ingested",
-        file.display()
-    )))
+}
+
+/// A runtime whose JSONL record kinds this adopter checks before ingesting.
+/// OMP and Factory Droid preserve otherwise unknown record kinds as explicit
+/// metadata events rather than dropping them, and every other line adapter
+/// turns the records it knows into events and leaves the rest out; the root
+/// must still yield events, checked by the caller.
+#[derive(Clone, Copy)]
+enum Checked {
+    Claude,
+    Codex,
+    Kimi,
+}
+
+impl Checked {
+    fn of(runtime: &str) -> Option<Checked> {
+        match runtime {
+            "claude" => Some(Checked::Claude),
+            "codex" => Some(Checked::Codex),
+            "kimi" => Some(Checked::Kimi),
+            _ => None,
+        }
+    }
+
+    /// Whether `kind` is a record type this runtime writes.
+    fn writes(self, kind: &str) -> bool {
+        match self {
+            Checked::Claude => matches!(
+                kind,
+                "user"
+                    | "assistant"
+                    | "system"
+                    | "summary"
+                    | "progress"
+                    | "file-history-snapshot"
+                    | "queue-operation"
+            ),
+            Checked::Codex => matches!(
+                kind,
+                "session_meta" | "turn_context" | "event_msg" | "response_item" | "compacted"
+            ),
+            Checked::Kimi => {
+                matches!(
+                    kind,
+                    "context.append_loop_event"
+                        | "context.append_message"
+                        | "usage.record"
+                        | "metadata"
+                        | "config.update"
+                        | "context.apply_compaction"
+                        | "turn.cancel"
+                        | "turn.prompt"
+                        | "turn.steer"
+                ) || kind.starts_with("tools.")
+                    || kind.starts_with("permission.")
+                    || kind.contains("_mode.")
+            }
+        }
+    }
 }
