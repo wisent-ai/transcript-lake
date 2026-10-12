@@ -171,7 +171,10 @@ fn durable_write(path: &Path, bytes: &[u8]) -> Result<()> {
         Ok(())
     })();
     if result.is_err() {
-        let _ = fs::remove_file(&temporary);
+        // A temporary file that stays is said; nothing else removes it.
+        if let Err(error) = fs::remove_file(&temporary) {
+            crate::stream::warn(&format!("{} was left behind: {error}", temporary.display()));
+        }
     }
     result
 }

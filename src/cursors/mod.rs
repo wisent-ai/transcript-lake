@@ -186,7 +186,13 @@ impl Cursors {
                 Ok(())
             })();
             if let Err(error) = write {
-                let _ = fs::remove_file(&tmp_path);
+                // A temporary file that stays is said; nothing else removes it.
+                if let Err(stayed) = fs::remove_file(&tmp_path) {
+                    crate::stream::warn(&format!(
+                        "{} was left behind: {stayed}",
+                        tmp_path.display()
+                    ));
+                }
                 return Err(error);
             }
             Ok(merged)

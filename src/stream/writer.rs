@@ -201,7 +201,10 @@ fn durable_write(path: &Path, content: &str) -> Result<()> {
         sync_directory(parent)
     })();
     if write.is_err() {
-        let _ = fs::remove_file(&temporary);
+        // A temporary file that stays is said; nothing else removes it.
+        if let Err(error) = fs::remove_file(&temporary) {
+            crate::stream::warn(&format!("{} was left behind: {error}", temporary.display()));
+        }
     }
     write
 }
