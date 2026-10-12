@@ -110,14 +110,33 @@ impl OmpParser {
             for event in &mut events {
                 event.model = model.clone();
             }
+            // OMP's usage keeps the fresh input apart from the cache it
+            // wrote and read; tokens_in is the whole, as the Claude adapter
+            // writes it, and the three parts travel in extra beside the
+            // credential the call was billed to.
             if let Some(head) = events.first_mut() {
                 if let Some(usage) = msg.get("usage").filter(|value| value.is_object()) {
-                    if let Some(tokens) = usage.get("input").and_then(number) {
-                        head.tokens_in = Some(tokens);
+                    let fresh = usage.get("input").and_then(number);
+                    let cache_write = usage.get("cacheWrite").and_then(number);
+                    let cache_read = usage.get("cacheRead").and_then(number);
+                    if fresh.is_some() || cache_write.is_some() || cache_read.is_some() {
+                        head.tokens_in = Some([fresh, cache_write, cache_read].into_iter().flatten().sum());
+                    }
+                    if let Some(tokens) = fresh {
+                        head.extra.insert("input_non_cached_tokens".into(), Value::from(tokens));
+                    }
+                    if let Some(tokens) = cache_write {
+                        head.extra.insert("cache_creation_tokens".into(), Value::from(tokens));
+                    }
+                    if let Some(tokens) = cache_read {
+                        head.extra.insert("cache_read_tokens".into(), Value::from(tokens));
                     }
                     if let Some(tokens) = usage.get("output").and_then(number) {
                         head.tokens_out = Some(tokens);
                     }
+                }
+                if let Some(credential) = msg.get("credentialId").and_then(Value::as_i64) {
+                    head.extra.insert("credential_id".into(), Value::from(credential));
                 }
             }
         }
