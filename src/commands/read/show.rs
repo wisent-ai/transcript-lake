@@ -107,8 +107,11 @@ fn write_record(path: &Path, body: &str) -> Result<u64> {
     fs::write(&partial, body)
         .map_err(|error| Error(format!("cannot write {}: {error}", partial.display())))?;
     fs::rename(&partial, path).map_err(|error| {
-        let _ = fs::remove_file(&partial);
-        Error(format!("cannot place {}: {error}", path.display()))
+        let left = match fs::remove_file(&partial) {
+            Ok(()) => String::new(),
+            Err(stayed) => format!("; {} was left behind: {stayed}", partial.display()),
+        };
+        Error(format!("cannot place {}: {error}{left}", path.display()))
     })?;
     Ok(body.len() as u64)
 }

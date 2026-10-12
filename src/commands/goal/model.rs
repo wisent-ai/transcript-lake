@@ -79,7 +79,16 @@ pub(super) fn resolve_checkpoint(data_dir: &Path, model: &Path) -> Result<PathBu
     fs::create_dir_all(&directory)?;
     let linked = directory.join(MODEL_NAME);
     if fs::read_link(&linked).ok().as_deref() != Some(model) {
-        let _ = fs::remove_file(&linked);
+        match fs::remove_file(&linked) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(Error(format!(
+                    "cannot replace the checkpoint link {}: {error}",
+                    linked.display()
+                )))
+            }
+        }
         std::os::unix::fs::symlink(model, &linked)?;
     }
     let base = base_model(data_dir)?;
@@ -203,9 +212,15 @@ pub(super) fn download(url: &str, destination: &Path) -> Result<()> {
         .status()
         .map_err(|error| Error(format!("failed to start curl for model artifact: {error}")))?;
     if !status.success() {
-        let _ = fs::remove_file(&temporary);
+        // curl may leave nothing or a partial file; a partial file that cannot
+        // be removed is named with the failure.
+        let left = match fs::remove_file(&temporary) {
+            Ok(()) => String::new(),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
+            Err(error) => format!("; {} was left behind: {error}", temporary.display()),
+        };
         return Err(Error(format!(
-            "model artifact download failed with status {status}"
+            "model artifact download from {url} failed with status {status}{left}"
         )));
     }
     fs::rename(&temporary, destination)?;
