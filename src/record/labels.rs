@@ -9,23 +9,49 @@
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::sync::LazyLock;
 
-use regex::Regex;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 use crate::util::{now_iso, Error, Result};
 
 const STORE_DIR: &str = "labels";
 const STORE_FILE: &str = "labels.ndjson";
-const MANUAL: &str = "manual";
 
-/// Namespaced provenance: bare manual/human/model/brama, or with a detail
-/// suffix (brama:claude-opus-4.6, model:hf-distilbert-topic).
-const SOURCE_PATTERN: &str = r"^(manual|human|model|brama)(:[A-Za-z0-9._/-]+)?$";
+/// Who assigned a label. A source may name it more closely after a colon
+/// (brama:claude-opus-4.6, model:hf-distilbert-topic).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum LabelOrigin {
+    Manual,
+    Human,
+    Model,
+    Brama,
+}
 
-static SOURCE_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(SOURCE_PATTERN).expect("source pattern"));
+impl LabelOrigin {
+    /// The origin called `name`, or nothing when none is.
+    fn named(name: &str) -> Option<LabelOrigin> {
+        serde_json::from_value(Value::String(name.to_string())).ok()
+    }
+
+    /// The spelling a label record stores.
+    fn name(self) -> String {
+        match serde_json::to_value(self) {
+            Ok(Value::String(name)) => name,
+            other => unreachable!("a unit variant serializes as a string, not {other:?}"),
+        }
+    }
+}
+
+/// A source detail names a model or a route: letters, digits, `.`, `_`,
+/// `/` and `-`.
+fn valid_detail(detail: &str) -> bool {
+    !detail.is_empty()
+        && detail.chars().all(|character| {
+            character.is_ascii_alphanumeric() || matches!(character, '.' | '_' | '/' | '-')
+        })
+}
 
 /// One label assignment, serialized in the field order every existing
 /// labels.ndjson line uses. A withdrawal is the same record with no
@@ -43,15 +69,21 @@ pub struct LabelRecord {
     pub source: String,
 }
 
+/// The `--source` of a label: an origin, optionally `:detail`. Without one
+/// the label was set by hand.
 pub fn normalize_source(value: Option<&str>) -> Result<String> {
     let Some(value) = value else {
-        return Ok(MANUAL.to_string());
+        return Ok(LabelOrigin::Manual.name());
     };
     let source = value.trim();
-    if !SOURCE_RE.is_match(source) {
+    let (origin, detail) = match source.split_once(':') {
+        Some((origin, detail)) => (origin, Some(detail)),
+        None => (source, None),
+    };
+    if LabelOrigin::named(origin).is_none() || detail.is_some_and(|detail| !valid_detail(detail)) {
         return Err(Error(format!(
-            "--source must match {SOURCE_PATTERN} \
-             (manual, human, model, or brama, with an optional :detail suffix)"
+            "--source must be manual, human, model or brama, with an optional :detail of \
+             letters, digits, '.', '_', '/' or '-'; got {source:?}"
         )));
     }
     Ok(source.to_string())
@@ -98,7 +130,7 @@ pub fn label_record(
         value: Some(value.to_string()),
         note,
         source: if source.is_empty() {
-            MANUAL.to_string()
+            LabelOrigin::Manual.name()
         } else {
             source.to_string()
         },
