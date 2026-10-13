@@ -20,6 +20,10 @@ name = "harness-ingestion"
 path = "tests/harnesses/ingestion.rs"
 
 [[test]]
+name = "harness-omp-usage"
+path = "tests/harnesses/omp_usage.rs"
+
+[[test]]
 name = "devin-chains"
 path = "tests/devin/chains.rs"
 
