@@ -155,16 +155,24 @@ pub(super) fn acquire_lock(data_dir: &Path, lock_path: &Path) -> Result<String> 
             }
         };
         if owner_is_alive(incumbent.as_ref()) {
-            let incumbent = incumbent.unwrap_or(Value::Null);
-            let host = incumbent
-                .get("host")
+            // The holder fields its owner file left out are named as such;
+            // "unknown-host pid unknown" read as a holder that could be found.
+            let host = match incumbent
+                .as_ref()
+                .and_then(|owner| owner.get("host"))
                 .and_then(Value::as_str)
-                .unwrap_or("unknown-host");
-            let pid = incumbent
-                .get("pid")
+            {
+                Some(host) => host.to_string(),
+                None => "a host its owner file does not record".to_string(),
+            };
+            let pid = match incumbent
+                .as_ref()
+                .and_then(|owner| owner.get("pid"))
                 .and_then(Value::as_u64)
-                .map(|pid| pid.to_string())
-                .unwrap_or_else(|| "unknown".to_string());
+            {
+                Some(pid) => pid.to_string(),
+                None => "not recorded".to_string(),
+            };
             return Err(Error(format!(
                 "state writer lock is held by {host} pid {pid}"
             )));
