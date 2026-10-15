@@ -6,8 +6,7 @@ use serde_json::{Map, Value};
 
 use crate::types::{Parser, ParserCtx, RawEvent};
 
-use super::{js_string, prune, text_of};
-use crate::adapters::common::iso_epoch_millis;
+use crate::adapters::common::{iso_epoch_millis, js_string, prune, text_joined};
 
 mod message;
 
@@ -167,7 +166,7 @@ impl OmpParser {
             let mut extra = Map::new();
             extra.insert("kind".into(), Value::from(record_type));
             prune(&mut extra, "custom_type", rec.get("customType"));
-            let mut event = self.make(ts.as_ref(), "meta", &text_of(rec.get("content")));
+            let mut event = self.make(ts.as_ref(), "meta", &text_joined(rec.get("content")));
             event.extra = extra;
             return Some(vec![event]);
         }

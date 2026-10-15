@@ -5,9 +5,8 @@ use serde_json::Value;
 
 use crate::types::RawEvent;
 
-use super::super::{js_string, prune, text_of};
 use super::OmpParser;
-use crate::adapters::common::{int_field, Usage};
+use crate::adapters::common::{int_field, js_string, prune, text_joined, Usage};
 
 impl OmpParser {
     pub(super) fn message_events(&self, rec: &Value, ts: Option<&String>) -> Vec<RawEvent> {
@@ -21,7 +20,7 @@ impl OmpParser {
             _ => "unknown".to_string(),
         };
         if role == "toolResult" {
-            let mut event = self.make(ts, "tool_result", &text_of(msg.get("content")));
+            let mut event = self.make(ts, "tool_result", &text_joined(msg.get("content")));
             event.tool_name = match msg.get("toolName") {
                 Some(Value::String(name)) => Some(name.clone()),
                 _ => None,
@@ -43,7 +42,7 @@ impl OmpParser {
         let blocks: &[Value] = match msg.get("content") {
             Some(Value::Array(blocks)) => blocks,
             other => {
-                owned = vec![serde_json::json!({ "type": "text", "text": text_of(other) })];
+                owned = vec![serde_json::json!({ "type": "text", "text": text_joined(other) })];
                 &owned
             }
         };

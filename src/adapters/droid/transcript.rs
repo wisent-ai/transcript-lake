@@ -6,8 +6,7 @@ use serde_json::{Map, Value};
 
 use crate::types::{Parser, ParserCtx, RawEvent};
 
-use super::{js_string, prune, text_of};
-use crate::adapters::common::iso_epoch_millis;
+use crate::adapters::common::{iso_epoch_millis, js_string, prune, text_joined};
 
 pub(super) struct TranscriptParser {
     project: Option<String>,
@@ -179,7 +178,7 @@ impl TranscriptParser {
         let blocks: &[Value] = match msg.get("content") {
             Some(Value::Array(blocks)) => blocks,
             other => {
-                owned = vec![serde_json::json!({ "type": "text", "text": text_of(other) })];
+                owned = vec![serde_json::json!({ "type": "text", "text": text_joined(other) })];
                 &owned
             }
         };
@@ -220,7 +219,8 @@ impl TranscriptParser {
                 }
                 Some("tool_result") => {
                     self.flush_text(&mut events, &mut buffer, ts, text_type, &role);
-                    let mut event = self.make(ts, "tool_result", &text_of(block.get("content")));
+                    let mut event =
+                        self.make(ts, "tool_result", &text_joined(block.get("content")));
                     prune(&mut event.extra, "call_id", block.get("tool_use_id"));
                     events.push(event);
                 }

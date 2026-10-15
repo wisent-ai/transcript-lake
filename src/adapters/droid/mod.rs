@@ -17,8 +17,6 @@
 //! rather than being dropped. Sidecars contribute at most one meta event.
 use std::path::{Path, PathBuf};
 
-use serde_json::{Map, Value};
-
 use crate::adapters::common::{dirent_type, read_dirents};
 use crate::types::{Adapter, ParserCtx, Reading, SessionEntry};
 
@@ -125,58 +123,6 @@ fn decode_project(name: &str) -> Option<String> {
     Some(name.replace('-', "/"))
 }
 
-pub(super) fn text_of(content: Option<&Value>) -> String {
-    match content {
-        Some(Value::String(text)) => text.clone(),
-        Some(Value::Array(items)) => {
-            let mut parts = Vec::new();
-            for item in items {
-                match item {
-                    Value::String(text) => parts.push(text.clone()),
-                    Value::Object(map) => {
-                        if let Some(Value::String(text)) = map.get("text") {
-                            parts.push(text.clone());
-                        }
-                    }
-                    _ => {}
-                }
-            }
-            parts.join("\n")
-        }
-        _ => String::new(),
-    }
-}
-
-/// `prune`: a key present with a non-null value survives, everything else is dropped.
-pub(super) fn prune(extra: &mut Map<String, Value>, key: &str, value: Option<&Value>) {
-    if let Some(value) = value {
-        if !value.is_null() {
-            extra.insert(key.to_string(), value.clone());
-        }
-    }
-}
-
-/// JS `String(value)` for the shapes a record or block type can take.
-pub(super) fn js_string(value: Option<&Value>) -> String {
-    match value {
-        None => "undefined".to_string(),
-        Some(Value::Null) => "null".to_string(),
-        Some(Value::Bool(flag)) => flag.to_string(),
-        Some(Value::String(text)) => text.clone(),
-        Some(Value::Number(number)) => number.to_string(),
-        Some(Value::Array(items)) => items
-            .iter()
-            .map(|item| match item {
-                Value::Null => String::new(),
-                other => js_string(Some(other)),
-            })
-            .collect::<Vec<_>>()
-            .join(","),
-        Some(Value::Object(_)) => "[object Object]".to_string(),
-    }
-}
-
-/// Sidecar settings files are whole-file JSON, accumulated line by line and
 mod settings;
 mod transcript;
 

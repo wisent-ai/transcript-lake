@@ -2,7 +2,7 @@
 //! moments, non-empty text, integers, and the text a content or tool value
 //! stands for.
 
-use serde_json::Value;
+use serde_json::{Map, Value};
 
 /// ISO-8601 text of a moment given in milliseconds since the epoch.
 pub(crate) fn iso_millis(millis: i64) -> Option<String> {
@@ -56,11 +56,11 @@ pub(crate) fn int_field(value: &Value, key: &str) -> Option<i64> {
     })
 }
 
-/// The words a content value carries: a string as is, an array of strings or
-/// of blocks with a `text` field joined by newlines.
-pub(crate) fn text_of(content: Option<&Value>) -> String {
+/// The texts a content value carries, in order: a string as one text, an
+/// array's strings and its blocks' `text` fields, empty ones included.
+pub(crate) fn text_parts(content: Option<&Value>) -> Vec<String> {
     match content {
-        Some(Value::String(text)) => text.clone(),
+        Some(Value::String(text)) => vec![text.clone()],
         Some(Value::Array(items)) => items
             .iter()
             .filter_map(|item| match item {
@@ -68,11 +68,24 @@ pub(crate) fn text_of(content: Option<&Value>) -> String {
                 Value::Object(map) => map.get("text").and_then(Value::as_str).map(str::to_string),
                 _ => None,
             })
-            .filter(|text| !text.is_empty())
-            .collect::<Vec<_>>()
-            .join("\n"),
-        _ => String::new(),
+            .collect(),
+        _ => Vec::new(),
     }
+}
+
+/// The words a content value carries: its non-empty texts joined by newlines.
+pub(crate) fn text_of(content: Option<&Value>) -> String {
+    text_parts(content)
+        .into_iter()
+        .filter(|text| !text.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Every text a content value carries joined by newlines, empty ones kept, as
+/// the Node driver of the Pi-format adapters joined them.
+pub(crate) fn text_joined(content: Option<&Value>) -> String {
+    text_parts(content).join("\n")
 }
 
 /// A tool input or output as the text an event carries: a string as is,
@@ -82,5 +95,35 @@ pub(crate) fn as_text(value: Option<&Value>) -> String {
         None | Some(Value::Null) => String::new(),
         Some(Value::String(text)) => text.clone(),
         Some(other) => other.to_string(),
+    }
+}
+
+/// Keep `value` under `key` when it is present and not null, as the Node
+/// driver's `prune` did; anything else is left out.
+pub(crate) fn prune(extra: &mut Map<String, Value>, key: &str, value: Option<&Value>) {
+    if let Some(value) = value.filter(|value| !value.is_null()) {
+        extra.insert(key.to_string(), value.clone());
+    }
+}
+
+/// JavaScript `String(value)` for the shapes a record or block type can take:
+/// `undefined` for a missing key, an array as its items joined by commas with
+/// null items empty, and an object as `[object Object]`.
+pub(crate) fn js_string(value: Option<&Value>) -> String {
+    match value {
+        None => "undefined".to_string(),
+        Some(Value::Null) => "null".to_string(),
+        Some(Value::Bool(flag)) => flag.to_string(),
+        Some(Value::String(text)) => text.clone(),
+        Some(Value::Number(number)) => number.to_string(),
+        Some(Value::Array(items)) => items
+            .iter()
+            .map(|item| match item {
+                Value::Null => String::new(),
+                other => js_string(Some(other)),
+            })
+            .collect::<Vec<_>>()
+            .join(","),
+        Some(Value::Object(_)) => "[object Object]".to_string(),
     }
 }
