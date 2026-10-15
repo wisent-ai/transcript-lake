@@ -216,8 +216,8 @@ fn session_entry(root: &Path, name: &str) -> Option<SessionEntry> {
     let stem = name.strip_suffix(JSONL_EXT)?;
     // Encoded directory names are home-relative and dash-mangled for omp, so
     // the parser recovers the real project from the session line cwd instead.
-    let session_id = match stem.find('_') {
-        Some(at) => &stem[at + 1..],
+    let session_id = match stem.split_once('_') {
+        Some((_stamp, id)) => id,
         None => stem,
     };
     Some(SessionEntry {
@@ -286,14 +286,6 @@ pub(super) fn epoch_iso(millis: f64) -> Option<String> {
     }
     let stamp = chrono::DateTime::from_timestamp_millis(millis as i64)?;
     Some(stamp.format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string())
-}
-
-/// A JSON value that is a number, as `typeof x === 'number'` accepted it.
-pub(super) fn number(value: &Value) -> Option<i64> {
-    value
-        .as_f64()
-        .filter(|raw| raw.is_finite())
-        .map(|raw| raw as i64)
 }
 
 mod records;

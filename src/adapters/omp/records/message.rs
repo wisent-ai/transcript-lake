@@ -5,9 +5,9 @@ use serde_json::Value;
 
 use crate::types::RawEvent;
 
-use super::super::{js_string, number, prune, text_of};
+use super::super::{js_string, prune, text_of};
 use super::OmpParser;
-use crate::adapters::common::Usage;
+use crate::adapters::common::{int_field, Usage};
 
 impl OmpParser {
     pub(super) fn message_events(&self, rec: &Value, ts: Option<&String>) -> Vec<RawEvent> {
@@ -117,10 +117,10 @@ impl OmpParser {
             if let Some(head) = events.first_mut() {
                 if let Some(usage) = msg.get("usage").filter(|value| value.is_object()) {
                     Usage {
-                        fresh: usage.get("input").and_then(number),
-                        cache_write: usage.get("cacheWrite").and_then(number),
-                        cache_read: usage.get("cacheRead").and_then(number),
-                        output: usage.get("output").and_then(number),
+                        fresh: int_field(usage, "input"),
+                        cache_write: int_field(usage, "cacheWrite"),
+                        cache_read: int_field(usage, "cacheRead"),
+                        output: int_field(usage, "output"),
                     }
                     .record(head);
                 }

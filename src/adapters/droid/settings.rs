@@ -6,6 +6,7 @@ use serde_json::{Map, Value};
 use crate::types::{Parser, ParserCtx, RawEvent};
 
 use super::prune;
+use crate::adapters::common::int_field;
 
 /// A sidecar is small and is not line-oriented: the lines are kept until the
 /// end of the file, where they are parsed once as one JSON document.
@@ -39,11 +40,8 @@ impl Parser for SettingsParser {
         let Some(Value::String(ts)) = rec.get("providerLockTimestamp") else {
             return Vec::new();
         };
-        let empty = Value::Object(Map::new());
-        let usage = rec
-            .get("tokenUsage")
-            .filter(|value| value.is_object())
-            .unwrap_or(&empty);
+        // A sidecar without a token usage object reports no totals.
+        let usage = rec.get("tokenUsage").filter(|value| value.is_object());
         let mut extra = Map::new();
         extra.insert("kind".into(), Value::from("settings"));
         let provider = match rec.get("apiProviderLock") {
@@ -59,17 +57,9 @@ impl Parser for SettingsParser {
             text: String::new(),
             tool_name: None,
             model: None,
-            tokens_in: usage.get("inputTokens").and_then(number),
-            tokens_out: usage.get("outputTokens").and_then(number),
+            tokens_in: usage.and_then(|usage| int_field(usage, "inputTokens")),
+            tokens_out: usage.and_then(|usage| int_field(usage, "outputTokens")),
             extra,
         }]
     }
-}
-
-/// A JSON value that is a number, as `typeof x === 'number'` accepted it.
-fn number(value: &Value) -> Option<i64> {
-    value
-        .as_f64()
-        .filter(|raw| raw.is_finite())
-        .map(|raw| raw as i64)
 }
