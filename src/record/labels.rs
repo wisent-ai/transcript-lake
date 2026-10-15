@@ -30,9 +30,9 @@ pub enum LabelOrigin {
 }
 
 impl LabelOrigin {
-    /// The origin called `name`, or nothing when none is.
-    fn named(name: &str) -> Option<LabelOrigin> {
-        serde_json::from_value(Value::String(name.to_string())).ok()
+    /// The origin called `name`, or why no origin is.
+    fn named(name: &str) -> std::result::Result<LabelOrigin, serde_json::Error> {
+        serde_json::from_value(Value::String(name.to_string()))
     }
 
     /// The spelling a label record stores.
@@ -80,7 +80,7 @@ pub fn normalize_source(value: Option<&str>) -> Result<String> {
         Some((origin, detail)) => (origin, Some(detail)),
         None => (source, None),
     };
-    if LabelOrigin::named(origin).is_none() || detail.is_some_and(|detail| !valid_detail(detail)) {
+    if LabelOrigin::named(origin).is_err() || detail.is_some_and(|detail| !valid_detail(detail)) {
         return Err(Error(format!(
             "--source must be manual, human, model or brama, with an optional :detail of \
              letters, digits, '.', '_', '/' or '-'; got {source:?}"
@@ -93,20 +93,20 @@ pub fn labels_path(data_dir: &Path) -> PathBuf {
     data_dir.join(STORE_DIR).join(STORE_FILE)
 }
 
+/// The `--aspect` of a label, lowercased; absent or blank is refused.
 pub fn normalize_aspect(value: Option<&str>) -> Result<String> {
-    let aspect = value.unwrap_or_default().trim().to_lowercase();
-    if aspect.is_empty() {
-        return Err(Error("--aspect must be a non-empty string".into()));
+    match value.map(|value| value.trim().to_lowercase()) {
+        Some(aspect) if !aspect.is_empty() => Ok(aspect),
+        _ => Err(Error("--aspect must be a non-empty string".into())),
     }
-    Ok(aspect)
 }
 
+/// The `--value` of a label, trimmed; absent or blank is refused.
 pub fn normalize_label_value(value: Option<&str>) -> Result<String> {
-    let text = value.unwrap_or_default().trim();
-    if text.is_empty() {
-        return Err(Error("--value must be a non-empty string".into()));
+    match value.map(str::trim) {
+        Some(text) if !text.is_empty() => Ok(text.to_string()),
+        _ => Err(Error("--value must be a non-empty string".into())),
     }
-    Ok(text.to_string())
 }
 
 pub fn normalize_note(value: Option<&str>) -> Option<String> {
