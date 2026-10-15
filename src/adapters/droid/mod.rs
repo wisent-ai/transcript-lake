@@ -15,12 +15,11 @@
 //!   compaction_state — `{ timestamp, summaryText }`.
 //! Unknown record or block types map to meta events with a type tag in extra
 //! rather than being dropped. Sidecars contribute at most one meta event.
-use std::fs;
 use std::path::{Path, PathBuf};
 
 use serde_json::{Map, Value};
 
-use crate::adapters::common::dirent_type;
+use crate::adapters::common::{dirent_type, read_dirents};
 use crate::types::{Adapter, ParserCtx, Reading, SessionEntry};
 
 const JSONL_EXT: &str = ".jsonl";
@@ -35,11 +34,20 @@ impl Adapter for Droid {
 
     fn roots(&self, home: &Path) -> Vec<PathBuf> {
         let base = home.join(".factory").join("sessions");
-        let Some(entries) = read_dirents(&base) else {
-            return Vec::new();
-        };
+        // No sessions directory is no root at all; one reached through a
+        // symlink is listed, as reading it always was, and one that cannot be
+        // examined is said with its cause.
+        match std::fs::metadata(&base) {
+            Ok(metadata) if metadata.is_dir() => {}
+            Ok(_) => return Vec::new(),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Vec::new(),
+            Err(error) => {
+                eprintln!("droid sessions: cannot examine {}: {error}", base.display());
+                return Vec::new();
+            }
+        }
         let mut dirs = vec![base.clone()];
-        for (name, file_type) in entries {
+        for (name, file_type) in read_dirents(&base) {
             if file_type.is_dir() {
                 dirs.push(base.join(name));
             }
@@ -48,11 +56,8 @@ impl Adapter for Droid {
     }
 
     fn list_sessions(&self, root: &Path) -> Vec<SessionEntry> {
-        let Some(entries) = read_dirents(root) else {
-            return Vec::new();
-        };
         let mut sessions = Vec::new();
-        for (name, file_type) in entries {
+        for (name, file_type) in read_dirents(root) {
             if !file_type.is_file() {
                 continue;
             }
@@ -88,50 +93,6 @@ impl Adapter for Droid {
         }
         Reading::Lines(Box::new(TranscriptParser::new(ctx)))
     }
-}
-
-/// The entries of `dir`, names in byte order, because Node's `readdirSync`
-/// sorts with strcmp and the walk order is observable in `sources` output and
-/// in which partition file a record lands in. A directory that is not there
-/// has none; one that cannot be listed is said on stderr with its cause, so
-/// its sessions are not read as never having existed.
-fn read_dirents(dir: &Path) -> Option<Vec<(String, fs::FileType)>> {
-    let iter = match fs::read_dir(dir) {
-        Ok(iter) => iter,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return None,
-        Err(error) => {
-            eprintln!("droid sessions: cannot list {}: {error}", dir.display());
-            return None;
-        }
-    };
-    let mut out = Vec::new();
-    for entry in iter {
-        // An entry that cannot be read is a session the scan cannot show,
-        // said with its cause like the directory itself.
-        let entry = match entry {
-            Ok(entry) => entry,
-            Err(error) => {
-                eprintln!(
-                    "droid sessions: cannot read an entry of {}: {error}",
-                    dir.display()
-                );
-                continue;
-            }
-        };
-        let file_type = match entry.file_type() {
-            Ok(file_type) => file_type,
-            Err(error) => {
-                eprintln!(
-                    "droid sessions: cannot read the type of {}: {error}",
-                    entry.path().display()
-                );
-                continue;
-            }
-        };
-        out.push((entry.file_name().to_string_lossy().to_string(), file_type));
-    }
-    out.sort_unstable_by(|left, right| left.0.cmp(&right.0));
-    Some(out)
 }
 
 /// The entry a scan yields for one name inside a session directory: transcripts and
