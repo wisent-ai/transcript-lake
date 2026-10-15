@@ -13,7 +13,7 @@
 //! queue-operation, progress and mode records are bookkeeping noise and are dropped.
 use std::path::{Path, PathBuf};
 
-use super::common::{dirent_type, read_dirents};
+use super::common::{decode_dashed_path, dirent_type, read_dirents};
 use crate::types::{Adapter, ParserCtx, Reading, SessionEntry};
 
 /// One harness that writes Claude Code's transcripts: its runtime id and the
@@ -110,16 +110,6 @@ impl Adapter for ClaudeStore {
     }
 }
 
-/// Directory names encode the cwd with '/' turned into '-'; the reverse mapping is best
-/// effort (dashes that belonged to the real path are indistinguishable). The parser
-/// prefers the per-record cwd field over this value whenever one is present.
-fn decode_project_dir(name: &str) -> Option<String> {
-    if !name.starts_with('-') {
-        return None;
-    }
-    Some(name.replace('-', "/"))
-}
-
 /// The entry a scan yields for one name inside a project directory: `.jsonl` files
 /// only, session id from the stem, project decoded from the directory name. Shared
 /// with `entry_for` so one known path and a full scan cannot disagree about a file.
@@ -130,7 +120,7 @@ fn project_entry(project_dir: &Path, name: &str) -> Option<SessionEntry> {
         session_id: Some(session_id.to_string()),
         project: project_dir
             .file_name()
-            .and_then(|dir| decode_project_dir(&dir.to_string_lossy())),
+            .and_then(|dir| decode_dashed_path(&dir.to_string_lossy())),
     })
 }
 

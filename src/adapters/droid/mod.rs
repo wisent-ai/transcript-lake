@@ -17,7 +17,7 @@
 //! rather than being dropped. Sidecars contribute at most one meta event.
 use std::path::{Path, PathBuf};
 
-use crate::adapters::common::{dirent_type, read_dirents};
+use crate::adapters::common::{decode_dashed_path, dirent_type, read_dirents};
 use crate::types::{Adapter, ParserCtx, Reading, SessionEntry};
 
 const JSONL_EXT: &str = ".jsonl";
@@ -105,22 +105,14 @@ fn session_entry(root: &Path, name: &str) -> Option<SessionEntry> {
     } else {
         return None;
     };
+    let session_id = name.strip_suffix(extension)?;
     Some(SessionEntry {
         file: root.join(name),
-        session_id: Some(name[..name.len() - extension.len()].to_string()),
+        session_id: Some(session_id.to_string()),
         project: root
             .file_name()
-            .and_then(|dir| decode_project(&dir.to_string_lossy())),
+            .and_then(|dir| decode_dashed_path(&dir.to_string_lossy())),
     })
-}
-
-/// Best-effort decode of '-Users-name-...' directory names; lossy for real
-/// dashes in path segments, so session_start cwd overrides it when present.
-fn decode_project(name: &str) -> Option<String> {
-    if !name.starts_with('-') {
-        return None;
-    }
-    Some(name.replace('-', "/"))
 }
 
 mod settings;

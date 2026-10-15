@@ -136,6 +136,18 @@ pub(crate) fn parent_name(path: &Path) -> Option<String> {
     file_name(path.parent()?)
 }
 
+/// The working directory a harness encoded into a directory name by turning
+/// each '/' into '-'. The reverse is best effort, since a dash that belonged
+/// to the real path cannot be told apart, so a parser prefers the cwd a record
+/// carries whenever it has one. A name that does not start with '-' encodes
+/// no absolute path.
+pub(crate) fn decode_dashed_path(name: &str) -> Option<String> {
+    if !name.starts_with('-') {
+        return None;
+    }
+    Some(name.replace('-', "/"))
+}
+
 /// One session entry.
 pub(crate) fn entry(
     file: PathBuf,
