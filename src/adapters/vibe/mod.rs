@@ -14,7 +14,7 @@
 use std::path::{Path, PathBuf};
 
 use super::common::{
-    chat_messages, entry, existing_root, is_file, read_json, read_json_lines, subdirectories,
+    chat_messages, entry, existing_root, is_file, read_json_lines, sidecar_json, subdirectories,
     text_field,
 };
 use crate::types::{Adapter, ParserCtx, RawEvent, Reading, SessionEntry};
@@ -63,7 +63,7 @@ fn session_entry(session: &Path) -> Option<SessionEntry> {
     if !is_file(&messages) {
         return None;
     }
-    let metadata = read_json(&session.join(METADATA)).ok();
+    let metadata = sidecar_json(&session.join(METADATA));
     let id = metadata
         .as_ref()
         .and_then(|metadata| text_field(metadata, "session_id"));
@@ -79,7 +79,7 @@ fn load(ctx: &ParserCtx) -> Result<Vec<RawEvent>> {
     let started = ctx
         .file
         .parent()
-        .and_then(|session| read_json(&session.join(METADATA)).ok())
+        .and_then(|session| sidecar_json(&session.join(METADATA)))
         .and_then(|metadata| text_field(&metadata, "start_time"));
     Ok(chat_messages(ctx, &messages, started))
 }

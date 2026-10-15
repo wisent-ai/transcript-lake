@@ -79,10 +79,21 @@ impl Adapter for Aider {
     }
 }
 
-/// The launch time a header names, as ISO-8601 UTC.
+/// The launch time a header names, as ISO-8601 UTC. A header whose time is
+/// not aider's `%Y-%m-%d %H:%M:%S`, or names no single local moment, gives the
+/// session no launch time and is said on stderr with why.
 fn launch_time(header: &str) -> Option<String> {
-    let naive = chrono::NaiveDateTime::parse_from_str(header.trim(), "%Y-%m-%d %H:%M:%S").ok()?;
-    let local = chrono::Local.from_local_datetime(&naive).single()?;
+    let naive = match chrono::NaiveDateTime::parse_from_str(header.trim(), "%Y-%m-%d %H:%M:%S") {
+        Ok(naive) => naive,
+        Err(error) => {
+            eprintln!("sessions: aider header time {header:?} cannot be read: {error}");
+            return None;
+        }
+    };
+    let Some(local) = chrono::Local.from_local_datetime(&naive).single() else {
+        eprintln!("sessions: aider header time {header:?} names no single local moment");
+        return None;
+    };
     Some(
         local
             .with_timezone(&chrono::Utc)
