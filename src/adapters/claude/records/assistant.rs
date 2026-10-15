@@ -56,9 +56,9 @@ pub(super) fn map_assistant(rec: &Value, make: &dyn Fn(&str, &str) -> RawEvent) 
                 }
             }
             Some("tool_use") => {
-                // block.input came out of JSON parsing, so serialization cannot fail.
+                // block.input is already JSON; its text form is the call's arguments.
                 let args = match block.get("input") {
-                    Some(input) => serde_json::to_string(input).unwrap_or_default(),
+                    Some(input) => input.to_string(),
                     None => String::new(),
                 };
                 let mut extra = flag.clone();
@@ -101,39 +101,43 @@ pub(super) fn attach_usage(
     {
         return;
     }
-    let input_tokens = raw_input_tokens.unwrap_or(0);
-    let cache_creation_tokens = raw_cache_creation_tokens.unwrap_or(0);
-    let cache_read_tokens = raw_cache_read_tokens.unwrap_or(0);
-    let tokens_in = input_tokens + cache_creation_tokens + cache_read_tokens;
+    // A part the record does not report is left out rather than written as
+    // zero, as the OMP adapter does; tokens_in is the whole of the parts that
+    // were reported, and none when no input part was.
+    let record = |event: &mut RawEvent| {
+        if raw_input_tokens.is_some()
+            || raw_cache_creation_tokens.is_some()
+            || raw_cache_read_tokens.is_some()
+        {
+            event.tokens_in = Some(
+                [
+                    raw_input_tokens,
+                    raw_cache_creation_tokens,
+                    raw_cache_read_tokens,
+                ]
+                .into_iter()
+                .flatten()
+                .sum(),
+            );
+        }
+        event.tokens_out = tokens_out;
+        for (name, tokens) in [
+            ("input_non_cached_tokens", raw_input_tokens),
+            ("cache_creation_tokens", raw_cache_creation_tokens),
+            ("cache_read_tokens", raw_cache_read_tokens),
+        ] {
+            if let Some(tokens) = tokens {
+                event.extra.insert(name.into(), Value::from(tokens));
+            }
+        }
+    };
     if let Some(first) = events.first_mut() {
-        first.tokens_in = Some(tokens_in);
-        first.tokens_out = tokens_out;
-        first
-            .extra
-            .insert("input_non_cached_tokens".into(), Value::from(input_tokens));
-        first.extra.insert(
-            "cache_creation_tokens".into(),
-            Value::from(cache_creation_tokens),
-        );
-        first
-            .extra
-            .insert("cache_read_tokens".into(), Value::from(cache_read_tokens));
+        record(first);
         return;
     }
     let mut event = make("meta", "");
     event.model = model.map(str::to_string);
-    event.tokens_in = Some(tokens_in);
-    event.tokens_out = tokens_out;
     event.extra.insert("kind".into(), Value::from("usage"));
-    event
-        .extra
-        .insert("input_non_cached_tokens".into(), Value::from(input_tokens));
-    event.extra.insert(
-        "cache_creation_tokens".into(),
-        Value::from(cache_creation_tokens),
-    );
-    event
-        .extra
-        .insert("cache_read_tokens".into(), Value::from(cache_read_tokens));
+    record(&mut event);
     events.push(event);
 }
