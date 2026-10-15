@@ -10,7 +10,7 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
-use crate::util::{home_dir, machine_name, write_json, Error, Result};
+use crate::util::{home_dir, machine_name, Error, Result};
 
 use super::*;
 
@@ -49,7 +49,7 @@ pub(super) fn load_or_start_state(
         "journey_id": JOURNEY_ID,
         "journey_version": definition.get("journey_version"),
         "source_revision": definition.get("source_revision"),
-        "subject_hash": subject_hash(),
+        "subject_hash": subject_hash()?,
         "attempt_id": Uuid::new_v4().to_string(),
         "current_screen_id": definition.get("entry_screen_id"),
         "status": "in_progress",
@@ -71,24 +71,30 @@ pub(super) fn save_state(state: &Value) -> Result<()> {
 }
 
 /// Progress belongs to this operator on this machine, not to a Lake: a second
-/// `--data-dir` is still the same first use.
-pub(super) fn subject_hash() -> String {
-    let user = std::env::var("USER").unwrap_or_else(|_| "unknown-user".to_string());
-    format!(
+/// `--data-dir` is still the same first use. The operator is `USER`; without
+/// one there is nobody to record progress for, so the walk is refused.
+pub(super) fn subject_hash() -> Result<String> {
+    let user = std::env::var("USER").map_err(|error| {
+        Error(format!(
+            "onboarding progress is recorded per operator, and USER names none: {error}"
+        ))
+    })?;
+    Ok(format!(
         "{:x}",
         Sha256::digest(
             format!("transcript-lake-onboarding\0{user}\0{}", machine_name()).as_bytes()
         )
-    )
+    ))
 }
 
+/// `$XDG_STATE_HOME/transcript-lake/onboarding.json`, with the XDG base
+/// directory specification's own `~/.local/state` when it names nothing.
 pub(super) fn state_path() -> PathBuf {
-    std::env::var_os("XDG_STATE_HOME")
-        .map(PathBuf::from)
-        .filter(|path| !path.as_os_str().is_empty())
-        .unwrap_or_else(|| home_dir().join(".local").join("state"))
-        .join("transcript-lake")
-        .join("onboarding.json")
+    let state_home = match std::env::var_os("XDG_STATE_HOME").filter(|path| !path.is_empty()) {
+        Some(path) => PathBuf::from(path),
+        None => home_dir().join(".local").join("state"),
+    };
+    state_home.join("transcript-lake").join("onboarding.json")
 }
 
 pub(super) fn wait_for_enter(unattended: bool, prompt: &str) -> Result<()> {
