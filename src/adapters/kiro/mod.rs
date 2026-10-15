@@ -21,7 +21,7 @@ use serde_json::{Map, Value};
 
 use super::common::{
     as_text, entry, event, existing_root, file_name, files_with_suffix, is_file, iso_seconds, meta,
-    read_json, subdirectories, text_field, tool_call, tool_result,
+    sidecar_json, subdirectories, text_field, tool_call, tool_result,
 };
 use crate::types::{Adapter, Parser, ParserCtx, RawEvent, Reading, SessionEntry};
 
@@ -83,7 +83,7 @@ fn cli_entry(file: &Path) -> Option<SessionEntry> {
         return None;
     }
     let id = file_name(file)?.strip_suffix(".jsonl")?.to_string();
-    let header = read_json(&file.with_extension("json")).ok();
+    let header = sidecar_json(&file.with_extension("json"));
     let project = header.as_ref().and_then(|header| text_field(header, "cwd"));
     Some(entry(file.to_path_buf(), Some(id), project))
 }
@@ -93,7 +93,7 @@ fn ide_entry(session: &Path) -> Option<SessionEntry> {
     if !is_file(&messages) {
         return None;
     }
-    let header = read_json(&session.join("session.json")).ok();
+    let header = sidecar_json(&session.join("session.json"));
     let project = header
         .as_ref()
         .and_then(|header| header.get("workspacePaths"))

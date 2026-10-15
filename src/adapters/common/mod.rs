@@ -199,6 +199,31 @@ pub(crate) fn read_json(path: &Path) -> Result<Value> {
     })
 }
 
+/// A JSON document a session keeps beside its transcript (a header, a state
+/// or a summary) that only adds what the transcript does not say. One that is
+/// not there adds nothing; one that cannot be read or is not JSON adds nothing
+/// either but is said on stderr with its cause, as the scan says a directory
+/// it cannot list, so a session's lost project or id has a reason.
+pub(crate) fn sidecar_json(path: &Path) -> Option<Value> {
+    match fs::read(path) {
+        Ok(bytes) => match serde_json::from_slice(&bytes) {
+            Ok(document) => Some(document),
+            Err(error) => {
+                eprintln!(
+                    "sessions: {} is not a JSON document: {error}",
+                    path.display()
+                );
+                None
+            }
+        },
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) => {
+            eprintln!("sessions: cannot read {}: {error}", path.display());
+            None
+        }
+    }
+}
+
 /// Every complete JSON line of a file read whole; a last line still being
 /// written (no newline yet) is left for the next read. A complete line that
 /// is not JSON carries no record and is said on stderr with where it starts -

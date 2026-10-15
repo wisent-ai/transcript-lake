@@ -26,7 +26,7 @@ use std::path::{Path, PathBuf};
 use serde_json::{Map, Value};
 
 use super::common::{
-    as_text, entry, event, existing_root, is_file, iso_seconds, meta, read_json, subdirectories,
+    as_text, entry, event, existing_root, is_file, iso_seconds, meta, sidecar_json, subdirectories,
     text_field, tool_call, tool_result,
 };
 use crate::types::{Adapter, Parser, ParserCtx, RawEvent, Reading, SessionEntry};
@@ -79,9 +79,7 @@ fn session_entry(session: &Path) -> Option<SessionEntry> {
     if !is_file(&transcript) {
         return None;
     }
-    let project = read_json(&session.join(STATE))
-        .ok()
-        .and_then(|state| text_field(&state, "cwd"));
+    let project = sidecar_json(&session.join(STATE)).and_then(|state| text_field(&state, "cwd"));
     let id = session.file_name()?.to_string_lossy().to_string();
     Some(entry(transcript, Some(id), project))
 }
@@ -106,16 +104,22 @@ impl Parser for JedenParser {
         ) else {
             return Vec::new();
         };
-        let ts = record
-            .get("timestamp")
-            .or_else(|| record.get("ts"))
-            .and_then(|stamp| {
-                stamp
-                    .as_str()
-                    .and_then(|text| text.parse::<f64>().ok())
-                    .or_else(|| stamp.as_f64())
-            })
-            .and_then(iso_seconds);
+        // Jeden stamps a line in seconds since the epoch, as a number or as
+        // its text; text that is not a number leaves the line without a time
+        // and is said, rather than read as no stamp at all.
+        let ts = match record.get("timestamp").or_else(|| record.get("ts")) {
+            Some(Value::String(text)) => {
+                match text.parse::<f64>() {
+                    Ok(seconds) => iso_seconds(seconds),
+                    Err(error) => {
+                        eprintln!("jeden sessions: the stamp {text:?} is not a number of seconds: {error}");
+                        None
+                    }
+                }
+            }
+            Some(stamp) => stamp.as_f64().and_then(iso_seconds),
+            None => None,
+        };
         let mut events = self.events(kind, data, &record, ts);
         if let Some(session) = text_field(&record, "sessionId") {
             for event in &mut events {

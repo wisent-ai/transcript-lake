@@ -20,8 +20,8 @@ use std::path::{Path, PathBuf};
 use serde_json::Value;
 
 use super::common::{
-    as_text, entry, event, existing_root, int_field, is_file, iso_millis, iso_seconds, read_json,
-    subdirectories, text_field, text_of, tool_call, tool_result,
+    as_text, entry, event, existing_root, int_field, is_file, iso_millis, iso_seconds,
+    sidecar_json, subdirectories, text_field, text_of, tool_call, tool_result,
 };
 use crate::types::{Adapter, Parser, ParserCtx, RawEvent, Reading, SessionEntry};
 
@@ -76,8 +76,7 @@ fn session_entry(session: &Path) -> Option<SessionEntry> {
     if !is_file(&updates) {
         return None;
     }
-    let info = read_json(&session.join("summary.json"))
-        .ok()
+    let info = sidecar_json(&session.join("summary.json"))
         .and_then(|summary| summary.get("info").cloned());
     let id = info
         .as_ref()
@@ -97,10 +96,12 @@ fn moment(record: &Value) -> Option<String> {
         return iso_millis(millis);
     }
     let stamp = record.get("timestamp").and_then(Value::as_f64)?;
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .ok()?
-        .as_secs_f64();
+    // A clock that reads before the epoch cannot say whether the stamp is in
+    // seconds or milliseconds, so the line keeps no time.
+    let Ok(since) = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH) else {
+        return None;
+    };
+    let now = since.as_secs_f64();
     if stamp > now {
         iso_millis(stamp as i64)
     } else {
