@@ -6,8 +6,8 @@ use serde_json::Value;
 
 use crate::types::RawEvent;
 
-use super::super::text_field;
 use super::CodexParser;
+use crate::adapters::common::text_field;
 
 impl CodexParser {
     pub(super) fn map_message_item(&mut self, payload: &Value, ts: &str) -> Vec<RawEvent> {
@@ -68,16 +68,16 @@ pub(super) fn output_text(value: Option<&Value>) -> String {
             }
             text.clone()
         }
-        Some(Value::Object(map)) => {
+        Some(object @ Value::Object(map)) => {
             if let Some(Value::String(output)) = map.get("output") {
                 return output.clone();
             }
             if let Some(Value::String(content)) = map.get("content") {
                 return content.clone();
             }
-            serde_json::to_string(&Value::Object(map.clone())).unwrap_or_default()
+            object.to_string()
         }
-        Some(items @ Value::Array(_)) => serde_json::to_string(items).unwrap_or_default(),
+        Some(items @ Value::Array(_)) => items.to_string(),
         _ => String::new(),
     }
 }

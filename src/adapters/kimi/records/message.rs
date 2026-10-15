@@ -6,16 +6,20 @@ use serde_json::Value;
 
 use crate::types::RawEvent;
 
-use super::super::text_field;
+use crate::adapters::common::text_field;
 
 /// JS truthiness for the `result.isError` guard, which was a bare `if (result.isError)`.
 pub(super) fn is_truthy(value: &Value) -> bool {
     match value {
         Value::Null => false,
         Value::Bool(flag) => *flag,
-        Value::Number(number) => number
-            .as_f64()
-            .is_some_and(|raw| raw != 0.0 && !raw.is_nan()),
+        // A number is false exactly when it is zero or NaN.
+        Value::Number(number) => number.as_f64().is_some_and(|raw| {
+            !matches!(
+                raw.classify(),
+                std::num::FpCategory::Zero | std::num::FpCategory::Nan
+            )
+        }),
         Value::String(text) => !text.is_empty(),
         Value::Array(_) | Value::Object(_) => true,
     }

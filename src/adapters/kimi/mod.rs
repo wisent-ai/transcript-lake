@@ -166,14 +166,6 @@ fn read_work_dir_index(root: &Path) -> HashMap<String, String> {
     map
 }
 
-/// A JSON string field, when present and non-empty.
-pub(super) fn text_field(value: &Value, key: &str) -> Option<String> {
-    match value.get(key) {
-        Some(Value::String(text)) if !text.is_empty() => Some(text.clone()),
-        _ => None,
-    }
-}
-
 /// Wire times are epoch milliseconds; an out-of-range value must not kill the line.
 pub(super) fn iso_from(value: Option<&Value>) -> Option<String> {
     let millis = value?.as_f64().filter(|raw| raw.is_finite())?;

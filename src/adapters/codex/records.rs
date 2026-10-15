@@ -6,8 +6,7 @@ use serde_json::{Map, Value};
 
 use crate::types::{Parser, ParserCtx, RawEvent};
 
-use super::text_field;
-use crate::adapters::common::{int_field, Usage};
+use crate::adapters::common::{int_field, text_field, Usage};
 
 pub(super) struct CodexParser {
     session_id: Option<String>,

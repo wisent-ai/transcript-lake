@@ -135,14 +135,6 @@ fn session_id_from_name(name: &str) -> String {
     }
 }
 
-/// A JSON string field, when present and non-empty.
-pub(super) fn text_field(value: &Value, key: &str) -> Option<String> {
-    match value.get(key) {
-        Some(Value::String(text)) if !text.is_empty() => Some(text.clone()),
-        _ => None,
-    }
-}
-
 mod records;
 
 use records::CodexParser;

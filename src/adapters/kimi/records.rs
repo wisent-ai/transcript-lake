@@ -8,8 +8,8 @@ use serde_json::{Map, Value};
 
 use crate::types::{Parser, ParserCtx, RawEvent};
 
-use super::{iso_from, text_field};
-use crate::adapters::common::{int_field, Usage};
+use super::iso_from;
+use crate::adapters::common::{int_field, text_field, Usage};
 
 mod message;
 
