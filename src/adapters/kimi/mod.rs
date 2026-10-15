@@ -166,13 +166,6 @@ fn read_work_dir_index(root: &Path) -> HashMap<String, String> {
     map
 }
 
-/// Wire times are epoch milliseconds; an out-of-range value must not kill the line.
-pub(super) fn iso_from(value: Option<&Value>) -> Option<String> {
-    let millis = value?.as_f64().filter(|raw| raw.is_finite())?;
-    let stamp = chrono::DateTime::from_timestamp_millis(millis as i64)?;
-    Some(stamp.format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string())
-}
-
 mod records;
 
 use records::KimiParser;

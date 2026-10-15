@@ -228,16 +228,6 @@ pub(super) fn js_string(value: Option<&Value>) -> String {
     }
 }
 
-/// `new Date(ms).toISOString()`: a value outside the representable range threw there
-/// and the driver dropped the line, which is what `None` does here.
-pub(super) fn epoch_iso(millis: f64) -> Option<String> {
-    if !millis.is_finite() {
-        return None;
-    }
-    let stamp = chrono::DateTime::from_timestamp_millis(millis as i64)?;
-    Some(stamp.format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string())
-}
-
 mod records;
 
 use records::OmpParser;

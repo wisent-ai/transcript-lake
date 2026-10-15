@@ -6,7 +6,8 @@ use serde_json::{Map, Value};
 
 use crate::types::{Parser, ParserCtx, RawEvent};
 
-use super::{epoch_iso, js_string, prune, text_of};
+use super::{js_string, prune, text_of};
+use crate::adapters::common::iso_epoch_millis;
 
 mod message;
 
@@ -82,7 +83,7 @@ impl OmpParser {
     fn stamp(&mut self, rec: &Value) -> Option<Option<String>> {
         let ts = match rec.get("timestamp") {
             Some(Value::String(text)) => Some(text.clone()),
-            Some(Value::Number(number)) => Some(epoch_iso(number.as_f64()?)?),
+            Some(Value::Number(number)) => Some(iso_epoch_millis(number.as_f64()?)?),
             _ => match rec.get("updatedAt") {
                 Some(Value::String(text)) => Some(text.clone()),
                 _ => None,
@@ -96,11 +97,12 @@ impl OmpParser {
 
     fn handle(&mut self, rec: &Value) -> Option<Vec<RawEvent>> {
         let ts = self.stamp(rec)?;
-        let record_type = rec
-            .get("type")
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .to_string();
+        // A record whose type is not text is none of the kinds below; it
+        // becomes the unknown meta event at the end, carrying what it held.
+        let record_type = match rec.get("type") {
+            Some(Value::String(kind)) => kind.clone(),
+            _ => String::new(),
+        };
         if record_type == "session" {
             if let Some(Value::String(cwd)) = rec.get("cwd") {
                 if !cwd.is_empty() {

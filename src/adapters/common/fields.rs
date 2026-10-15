@@ -10,6 +10,16 @@ pub(crate) fn iso_millis(millis: i64) -> Option<String> {
     Some(stamp.format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string())
 }
 
+/// `new Date(ms).toISOString()` for a moment a harness wrote as a JSON
+/// number of milliseconds: a value that is not finite, or outside the
+/// representable range, threw there and is no moment here.
+pub(crate) fn iso_epoch_millis(millis: f64) -> Option<String> {
+    if !millis.is_finite() {
+        return None;
+    }
+    iso_millis(millis as i64)
+}
+
 /// ISO-8601 text of a moment given in (possibly fractional) seconds since the
 /// epoch; a negative or non-finite value is no moment.
 pub(crate) fn iso_seconds(seconds: f64) -> Option<String> {

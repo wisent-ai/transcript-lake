@@ -8,8 +8,7 @@ use serde_json::{Map, Value};
 
 use crate::types::{Parser, ParserCtx, RawEvent};
 
-use super::iso_from;
-use crate::adapters::common::{int_field, text_field, Usage};
+use crate::adapters::common::{int_field, iso_epoch_millis, text_field, Usage};
 
 mod message;
 
@@ -69,8 +68,14 @@ impl KimiParser {
     }
 
     fn map_record(&mut self, rec: &Value) -> Vec<RawEvent> {
-        let ts = iso_from(rec.get("time"))
-            .or_else(|| iso_from(rec.get("created_at")))
+        // Wire times are epoch milliseconds; one out of range is no moment.
+        let wire_time = |key: &str| {
+            rec.get(key)
+                .and_then(Value::as_f64)
+                .and_then(iso_epoch_millis)
+        };
+        let ts = wire_time("time")
+            .or_else(|| wire_time("created_at"))
             .or_else(|| self.last_ts.clone());
         let Some(ts) = ts.filter(|value| !value.is_empty()) else {
             return Vec::new();

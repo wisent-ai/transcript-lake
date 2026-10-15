@@ -7,6 +7,7 @@ use serde_json::{Map, Value};
 use crate::types::{Parser, ParserCtx, RawEvent};
 
 use super::{js_string, prune, text_of};
+use crate::adapters::common::iso_epoch_millis;
 
 pub(super) struct TranscriptParser {
     project: Option<String>,
@@ -80,7 +81,7 @@ impl TranscriptParser {
     fn stamp(&mut self, rec: &Value) -> Option<Option<String>> {
         let ts = match rec.get("timestamp") {
             Some(Value::String(text)) => Some(text.clone()),
-            Some(Value::Number(number)) => Some(epoch_iso(number.as_f64()?)?),
+            Some(Value::Number(number)) => Some(iso_epoch_millis(number.as_f64()?)?),
             _ => None,
         };
         if let Some(ts) = &ts {
@@ -91,11 +92,12 @@ impl TranscriptParser {
 
     fn handle(&mut self, rec: &Value) -> Option<Vec<RawEvent>> {
         let ts = self.stamp(rec)?;
-        let record_type = rec
-            .get("type")
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .to_string();
+        // A record whose type is not text is none of the kinds below; it
+        // becomes the unknown meta event at the end.
+        let record_type = match rec.get("type") {
+            Some(Value::String(kind)) => kind.clone(),
+            _ => String::new(),
+        };
         if record_type == "session_start" {
             if let Some(Value::String(cwd)) = rec.get("cwd") {
                 if !cwd.is_empty() {
@@ -125,14 +127,18 @@ impl TranscriptParser {
             return Some(self.message_events(rec, ts.as_ref()));
         }
         if record_type == "todo_state" {
-            let count = rec
+            let mut event = self.make(ts.as_ref(), "meta", "");
+            event.extra.insert("kind".into(), Value::from(record_type));
+            // A todo state that records no list says nothing about its count.
+            if let Some(todos) = rec
                 .get("todos")
                 .and_then(|box_value| box_value.get("todos"))
                 .and_then(Value::as_array)
-                .map_or(0, Vec::len);
-            let mut event = self.make(ts.as_ref(), "meta", "");
-            event.extra.insert("kind".into(), Value::from(record_type));
-            event.extra.insert("todo_count".into(), Value::from(count));
+            {
+                event
+                    .extra
+                    .insert("todo_count".into(), Value::from(todos.len()));
+            }
             return Some(vec![event]);
         }
         if record_type == "compaction_state" {
@@ -201,7 +207,7 @@ impl TranscriptParser {
                     // The same shape as the omp adapter's toolCall: the input
                     // is the row's text, so a reader sees what was run.
                     let args = match block.get("input") {
-                        Some(input) => serde_json::to_string(input).unwrap_or_default(),
+                        Some(input) => input.to_string(),
                         None => String::new(),
                     };
                     let mut event = self.make(ts, "tool_call", &args);
@@ -270,14 +276,4 @@ impl TranscriptParser {
             })
             .collect()
     }
-}
-
-/// `new Date(ms).toISOString()`: a value outside the representable range threw there
-/// and the driver dropped the line, which is what `None` does here.
-fn epoch_iso(millis: f64) -> Option<String> {
-    if !millis.is_finite() {
-        return None;
-    }
-    let stamp = chrono::DateTime::from_timestamp_millis(millis as i64)?;
-    Some(stamp.format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string())
 }
