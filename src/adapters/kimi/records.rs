@@ -8,7 +8,8 @@ use serde_json::{Map, Value};
 
 use crate::types::{Parser, ParserCtx, RawEvent};
 
-use super::{iso_from, num_or_zero, text_field};
+use super::{iso_from, text_field};
+use crate::adapters::common::{int_field, Usage};
 
 mod message;
 
@@ -75,7 +76,11 @@ impl KimiParser {
             return Vec::new();
         };
         self.last_ts = Some(ts.clone());
-        let record_type = rec.get("type").and_then(Value::as_str).unwrap_or_default();
+        // A record without a type is none of the kinds below, so it carries
+        // nothing.
+        let Some(record_type) = rec.get("type").and_then(Value::as_str) else {
+            return Vec::new();
+        };
         if record_type == "context.append_loop_event" {
             return self.map_loop_event(rec.get("event"), &ts);
         }
@@ -168,7 +173,7 @@ impl KimiParser {
                 }
                 // Mirror the claude adapter: the argument JSON is the searchable text.
                 let mut text = match ev.get("args") {
-                    Some(args) => serde_json::to_string(args).unwrap_or_default(),
+                    Some(args) => args.to_string(),
                     None => String::new(),
                 };
                 if text.is_empty() {
@@ -229,33 +234,22 @@ impl KimiParser {
         if rec.get("usageScope").and_then(Value::as_str) != Some("turn") {
             return Vec::new();
         }
-        let empty = Value::Object(Map::new());
-        let usage = rec
-            .get("usage")
-            .filter(|value| value.is_object())
-            .unwrap_or(&empty);
-        let input_other = num_or_zero(usage, "inputOther");
-        let cache_read = num_or_zero(usage, "inputCacheRead");
-        let cache_creation = num_or_zero(usage, "inputCacheCreation");
-        let tokens_in = input_other + cache_read + cache_creation;
-        let tokens_out = num_or_zero(usage, "output");
-        if tokens_in + tokens_out == 0 {
+        let Some(usage) = rec.get("usage").filter(|value| value.is_object()) else {
+            return Vec::new();
+        };
+        let usage = Usage {
+            fresh: int_field(usage, "inputOther"),
+            cache_write: int_field(usage, "inputCacheCreation"),
+            cache_read: int_field(usage, "inputCacheRead"),
+            output: int_field(usage, "output"),
+        };
+        if !usage.is_reported() {
             return Vec::new();
         }
         let mut event = self.maker(ts)("meta", "");
         event.model = self.last_model.clone();
-        event.tokens_in = Some(tokens_in);
-        event.tokens_out = Some(tokens_out);
         event.extra.insert("kind".into(), Value::from("usage"));
-        event
-            .extra
-            .insert("input_non_cached_tokens".into(), Value::from(input_other));
-        event
-            .extra
-            .insert("cache_creation_tokens".into(), Value::from(cache_creation));
-        event
-            .extra
-            .insert("cache_read_tokens".into(), Value::from(cache_read));
+        usage.record(&mut event);
         vec![event]
     }
 }

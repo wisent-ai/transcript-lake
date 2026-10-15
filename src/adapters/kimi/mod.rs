@@ -174,15 +174,6 @@ pub(super) fn text_field(value: &Value, key: &str) -> Option<String> {
     }
 }
 
-/// A finite JSON number field, defaulting to zero exactly as `num(x) || 0` did.
-pub(super) fn num_or_zero(value: &Value, key: &str) -> i64 {
-    value
-        .get(key)
-        .and_then(Value::as_f64)
-        .filter(|raw| raw.is_finite())
-        .map_or(0, |raw| raw as i64)
-}
-
 /// Wire times are epoch milliseconds; an out-of-range value must not kill the line.
 pub(super) fn iso_from(value: Option<&Value>) -> Option<String> {
     let millis = value?.as_f64().filter(|raw| raw.is_finite())?;

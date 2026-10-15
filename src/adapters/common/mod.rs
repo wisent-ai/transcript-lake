@@ -1,7 +1,7 @@
 //! What every harness adapter needs and none writes twice: directory listings
 //! in byte order, the type of a path a notification named, JSON documents and
-//! JSON-line files read whole, read-only SQLite, and times from the epoch
-//! numbers harnesses record. Event construction is in `events`.
+//! JSON-line files read whole, and read-only SQLite. Event construction is in
+//! `events`, record fields and epoch times in `fields`, token usage in `usage`.
 //!
 //! A directory that vanished mid-scan yields nothing, as every adapter's scan
 //! contract says; a session that is read and cannot be is an error naming it.
@@ -14,8 +14,12 @@ use crate::types::SessionEntry;
 use crate::util::{Error, Result};
 
 mod events;
+mod fields;
+mod usage;
 
 pub(crate) use events::*;
+pub(crate) use fields::*;
+pub(crate) use usage::Usage;
 
 /// The editor products that ship the VS Code extension host, by the directory
 /// name each gives its user data (VS Code's documented layout).
@@ -241,72 +245,4 @@ pub(crate) fn database_of(path: &Path) -> PathBuf {
         }
     }
     path.to_path_buf()
-}
-
-/// ISO-8601 text of a moment given in milliseconds since the epoch.
-pub(crate) fn iso_millis(millis: i64) -> Option<String> {
-    let stamp = chrono::DateTime::from_timestamp_millis(millis)?;
-    Some(stamp.format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string())
-}
-
-/// ISO-8601 text of a moment given in (possibly fractional) seconds since the
-/// epoch; a negative or non-finite value is no moment.
-pub(crate) fn iso_seconds(seconds: f64) -> Option<String> {
-    let since = std::time::Duration::try_from_secs_f64(seconds).ok()?;
-    let stamp: chrono::DateTime<chrono::Utc> = std::time::UNIX_EPOCH.checked_add(since)?.into();
-    Some(stamp.format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string())
-}
-
-/// A JSON number field holding epoch milliseconds, as ISO-8601 text.
-pub(crate) fn iso_millis_field(value: &Value, key: &str) -> Option<String> {
-    iso_millis(value.get(key)?.as_f64()? as i64)
-}
-
-/// A JSON string field, when present and non-empty.
-pub(crate) fn text_field(value: &Value, key: &str) -> Option<String> {
-    value
-        .get(key)
-        .and_then(Value::as_str)
-        .filter(|text| !text.is_empty())
-        .map(str::to_string)
-}
-
-/// A JSON integer field.
-pub(crate) fn int_field(value: &Value, key: &str) -> Option<i64> {
-    let number = value.get(key)?;
-    number.as_i64().or_else(|| {
-        number
-            .as_f64()
-            .filter(|raw| raw.is_finite())
-            .map(|raw| raw as i64)
-    })
-}
-
-/// The words a content value carries: a string as is, an array of strings or
-/// of blocks with a `text` field joined by newlines.
-pub(crate) fn text_of(content: Option<&Value>) -> String {
-    match content {
-        Some(Value::String(text)) => text.clone(),
-        Some(Value::Array(items)) => items
-            .iter()
-            .filter_map(|item| match item {
-                Value::String(text) => Some(text.clone()),
-                Value::Object(map) => map.get("text").and_then(Value::as_str).map(str::to_string),
-                _ => None,
-            })
-            .filter(|text| !text.is_empty())
-            .collect::<Vec<_>>()
-            .join("\n"),
-        _ => String::new(),
-    }
-}
-
-/// A tool input or output as the text an event carries: a string as is,
-/// anything else as compact JSON.
-pub(crate) fn as_text(value: Option<&Value>) -> String {
-    match value {
-        None | Some(Value::Null) => String::new(),
-        Some(Value::String(text)) => text.clone(),
-        Some(other) => other.to_string(),
-    }
 }

@@ -6,7 +6,7 @@ use serde_json::{Map, Value};
 
 use crate::types::{Parser, ParserCtx, RawEvent};
 
-use super::text_field;
+use crate::adapters::common::text_field;
 
 pub(super) struct ClaudeParser {
     session_id: Option<String>,
@@ -69,9 +69,13 @@ impl ClaudeParser {
             Some("user") => map_user(rec, &make),
             Some("assistant") => map_assistant(rec, &make),
             Some("system") => {
-                let text = text_field(rec, "content")
-                    .or_else(|| text_field(rec, "stopReason"))
-                    .unwrap_or_default();
+                // A system record may carry neither content nor a stop
+                // reason; its event then says that it happened, with no text.
+                let text =
+                    match text_field(rec, "content").or_else(|| text_field(rec, "stopReason")) {
+                        Some(text) => text,
+                        None => String::new(),
+                    };
                 let mut extra = Map::new();
                 extra.insert("kind".into(), Value::from("system"));
                 if let Some(subtype) = text_field(rec, "subtype") {
@@ -207,9 +211,12 @@ fn persisted_output_path(text: &str) -> Option<String> {
     let marker = "saved to: ";
     let at = text.find(marker)?;
     let start = at + marker.len();
-    let stop = text[start..]
-        .find('\n')
-        .map_or(text.len(), |offset| start + offset);
+    // The reference runs to the end of its line, or of the text when it is
+    // the last line.
+    let stop = match text[start..].find('\n') {
+        Some(offset) => start + offset,
+        None => text.len(),
+    };
     let reference = text[start..stop].trim();
     (!reference.is_empty()).then(|| reference.to_string())
 }

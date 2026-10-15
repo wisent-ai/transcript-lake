@@ -13,8 +13,6 @@
 //! queue-operation, progress and mode records are bookkeeping noise and are dropped.
 use std::path::{Path, PathBuf};
 
-use serde_json::Value;
-
 use super::common::{dirent_type, read_dirents};
 use crate::types::{Adapter, ParserCtx, Reading, SessionEntry};
 
@@ -134,20 +132,6 @@ fn project_entry(project_dir: &Path, name: &str) -> Option<SessionEntry> {
             .file_name()
             .and_then(|dir| decode_project_dir(&dir.to_string_lossy())),
     })
-}
-
-/// A JSON string field, when present and non-empty.
-pub(super) fn text_field(value: &Value, key: &str) -> Option<String> {
-    match value.get(key) {
-        Some(Value::String(text)) if !text.is_empty() => Some(text.clone()),
-        _ => None,
-    }
-}
-
-/// A finite JSON number field.
-pub(super) fn num_field(value: &Value, key: &str) -> Option<i64> {
-    let raw = value.get(key).and_then(Value::as_f64)?;
-    raw.is_finite().then_some(raw as i64)
 }
 
 mod records;

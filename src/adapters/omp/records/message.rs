@@ -7,6 +7,7 @@ use crate::types::RawEvent;
 
 use super::super::{js_string, number, prune, text_of};
 use super::OmpParser;
+use crate::adapters::common::Usage;
 
 impl OmpParser {
     pub(super) fn message_events(&self, rec: &Value, ts: Option<&String>) -> Vec<RawEvent> {
@@ -70,10 +71,10 @@ impl OmpParser {
                     // The call's arguments are the row's text, as the claude
                     // adapter writes a tool_use block's input: a reader of the
                     // projection sees what the agent ran, not only that it ran
-                    // something. `arguments` came out of JSON parsing, so
-                    // serialization cannot fail.
+                    // something. `arguments` is already JSON; its text form
+                    // is the call's arguments.
                     let args = match block.get("arguments") {
-                        Some(arguments) => serde_json::to_string(arguments).unwrap_or_default(),
+                        Some(arguments) => arguments.to_string(),
                         None => String::new(),
                     };
                     let mut event = self.make(ts, "tool_call", &args);
@@ -111,32 +112,21 @@ impl OmpParser {
                 event.model = model.clone();
             }
             // OMP's usage keeps the fresh input apart from the cache it
-            // wrote and read; tokens_in is the whole, as the Claude adapter
-            // writes it, and the three parts travel in extra beside the
-            // credential the call was billed to.
+            // wrote and read; they travel as every adapter's usage does,
+            // beside the credential the call was billed to.
             if let Some(head) = events.first_mut() {
                 if let Some(usage) = msg.get("usage").filter(|value| value.is_object()) {
-                    let fresh = usage.get("input").and_then(number);
-                    let cache_write = usage.get("cacheWrite").and_then(number);
-                    let cache_read = usage.get("cacheRead").and_then(number);
-                    if fresh.is_some() || cache_write.is_some() || cache_read.is_some() {
-                        head.tokens_in = Some([fresh, cache_write, cache_read].into_iter().flatten().sum());
+                    Usage {
+                        fresh: usage.get("input").and_then(number),
+                        cache_write: usage.get("cacheWrite").and_then(number),
+                        cache_read: usage.get("cacheRead").and_then(number),
+                        output: usage.get("output").and_then(number),
                     }
-                    if let Some(tokens) = fresh {
-                        head.extra.insert("input_non_cached_tokens".into(), Value::from(tokens));
-                    }
-                    if let Some(tokens) = cache_write {
-                        head.extra.insert("cache_creation_tokens".into(), Value::from(tokens));
-                    }
-                    if let Some(tokens) = cache_read {
-                        head.extra.insert("cache_read_tokens".into(), Value::from(tokens));
-                    }
-                    if let Some(tokens) = usage.get("output").and_then(number) {
-                        head.tokens_out = Some(tokens);
-                    }
+                    .record(head);
                 }
                 if let Some(credential) = msg.get("credentialId").and_then(Value::as_i64) {
-                    head.extra.insert("credential_id".into(), Value::from(credential));
+                    head.extra
+                        .insert("credential_id".into(), Value::from(credential));
                 }
             }
         }

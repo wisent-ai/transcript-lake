@@ -6,7 +6,8 @@ use serde_json::{Map, Value};
 
 use crate::types::{Parser, ParserCtx, RawEvent};
 
-use super::{num_or_zero, text_field};
+use super::text_field;
+use crate::adapters::common::{int_field, Usage};
 
 pub(super) struct CodexParser {
     session_id: Option<String>,
@@ -58,11 +59,11 @@ impl CodexParser {
         else {
             return Vec::new();
         };
-        let record_type = rec
-            .get("type")
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .to_string();
+        // A record without a type is none of the kinds below, so it carries
+        // nothing.
+        let Some(record_type) = rec.get("type").and_then(Value::as_str).map(str::to_string) else {
+            return Vec::new();
+        };
         if record_type == "session_meta" {
             if let Some(id) = text_field(&payload, "id") {
                 self.session_id = Some(id);
@@ -104,7 +105,11 @@ impl CodexParser {
         }
         if record_type == "compacted" {
             let make = self.maker(&ts);
-            let text = text_field(&payload, "message").unwrap_or_default();
+            // A compaction may record no message; its event then has no text.
+            let text = match text_field(&payload, "message") {
+                Some(text) => text,
+                None => String::new(),
+            };
             let mut event = make("meta", &text);
             event.extra.insert("kind".into(), Value::from("compacted"));
             return vec![event];
@@ -130,7 +135,11 @@ impl CodexParser {
         let make = self.maker(ts);
         match payload.get("type").and_then(Value::as_str) {
             Some("user_message") => {
-                let text = text_field(payload, "message").unwrap_or_default();
+                // A user turn may record no message; its event then has no text.
+                let text = match text_field(payload, "message") {
+                    Some(text) => text,
+                    None => String::new(),
+                };
                 vec![make("user", &text)]
             }
             Some("token_count") => {
@@ -143,30 +152,41 @@ impl CodexParser {
                 else {
                     return Vec::new();
                 };
-                let total_input = num_or_zero(usage, "input_tokens");
-                let cached_input = num_or_zero(usage, "cached_input_tokens");
-                let output = num_or_zero(usage, "output_tokens");
-                let reasoning_output = num_or_zero(usage, "reasoning_output_tokens");
-                if total_input + output + reasoning_output == 0 {
+                // Codex counts its cached input inside input_tokens and writes
+                // no cache; the fresh part is the rest, unknown when the two
+                // disagree, and output includes the reasoning it reports.
+                let total_input = int_field(usage, "input_tokens");
+                let cached_input = int_field(usage, "cached_input_tokens");
+                let fresh = match (total_input, cached_input) {
+                    (Some(total), Some(cached)) => total
+                        .checked_sub(cached)
+                        .filter(|fresh| !fresh.is_negative()),
+                    (total, None) => total,
+                    (None, Some(_)) => None,
+                };
+                let output_parts = [
+                    int_field(usage, "output_tokens"),
+                    int_field(usage, "reasoning_output_tokens"),
+                ];
+                let output = output_parts
+                    .iter()
+                    .any(Option::is_some)
+                    .then(|| output_parts.into_iter().flatten().sum());
+                let usage = Usage {
+                    fresh,
+                    cache_write: None,
+                    cache_read: cached_input,
+                    output,
+                };
+                if !usage.is_reported() {
                     return Vec::new();
                 }
                 let mut event = make("meta", "");
                 event.model = self.model.clone();
-                event.tokens_in = Some(total_input);
-                event.tokens_out = Some(output + reasoning_output);
                 event
                     .extra
                     .insert("kind".into(), Value::from("token_count"));
-                event.extra.insert(
-                    "input_non_cached_tokens".into(),
-                    Value::from((total_input - cached_input).max(0)),
-                );
-                event
-                    .extra
-                    .insert("cache_creation_tokens".into(), Value::from(0));
-                event
-                    .extra
-                    .insert("cache_read_tokens".into(), Value::from(cached_input));
+                usage.record(&mut event);
                 vec![event]
             }
             // agent_message / agent_reasoning duplicate response_item content;
@@ -214,20 +234,26 @@ impl CodexParser {
             return vec![event];
         }
         if sub.ends_with("_call") {
-            let mut args = text_field(payload, "arguments")
-                .or_else(|| text_field(payload, "input"))
-                .unwrap_or_default();
-            if args.is_empty() {
-                if let Some(action) = payload.get("action") {
-                    args = serde_json::to_string(action).unwrap_or_default();
-                }
-            }
+            // The call's text is its arguments or input as recorded, else the
+            // JSON of its action, else nothing.
+            let args =
+                match text_field(payload, "arguments").or_else(|| text_field(payload, "input")) {
+                    Some(args) => args,
+                    None => match payload.get("action") {
+                        Some(action) => action.to_string(),
+                        None => String::new(),
+                    },
+                };
             let mut extra = Map::new();
             extra.insert("kind".into(), Value::from(sub.clone()));
             if let Some(call_id) = text_field(payload, "call_id") {
                 extra.insert("call_id".into(), Value::from(call_id));
             }
-            let tool_name = text_field(payload, "name").unwrap_or(sub);
+            // A call that records no name is named by its kind.
+            let tool_name = match text_field(payload, "name") {
+                Some(name) => name,
+                None => sub,
+            };
             let mut event = make("tool_call", &args);
             event.tool_name = Some(tool_name);
             event.model = self.model.clone();

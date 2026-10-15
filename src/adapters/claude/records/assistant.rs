@@ -6,7 +6,7 @@ use serde_json::{Map, Value};
 
 use crate::types::RawEvent;
 
-use super::super::{num_field, text_field};
+use crate::adapters::common::{int_field, text_field, Usage};
 
 pub(super) fn map_assistant(rec: &Value, make: &dyn Fn(&str, &str) -> RawEvent) -> Vec<RawEvent> {
     let Some(msg) = rec.get("message").filter(|value| value.is_object()) else {
@@ -90,54 +90,22 @@ pub(super) fn attach_usage(
     let Some(usage) = usage else {
         return;
     };
-    let raw_input_tokens = num_field(usage, "input_tokens");
-    let raw_cache_creation_tokens = num_field(usage, "cache_creation_input_tokens");
-    let raw_cache_read_tokens = num_field(usage, "cache_read_input_tokens");
-    let tokens_out = num_field(usage, "output_tokens");
-    if raw_input_tokens.is_none()
-        && raw_cache_creation_tokens.is_none()
-        && raw_cache_read_tokens.is_none()
-        && tokens_out.is_none()
-    {
+    let usage = Usage {
+        fresh: int_field(usage, "input_tokens"),
+        cache_write: int_field(usage, "cache_creation_input_tokens"),
+        cache_read: int_field(usage, "cache_read_input_tokens"),
+        output: int_field(usage, "output_tokens"),
+    };
+    if !usage.is_reported() {
         return;
     }
-    // A part the record does not report is left out rather than written as
-    // zero, as the OMP adapter does; tokens_in is the whole of the parts that
-    // were reported, and none when no input part was.
-    let record = |event: &mut RawEvent| {
-        if raw_input_tokens.is_some()
-            || raw_cache_creation_tokens.is_some()
-            || raw_cache_read_tokens.is_some()
-        {
-            event.tokens_in = Some(
-                [
-                    raw_input_tokens,
-                    raw_cache_creation_tokens,
-                    raw_cache_read_tokens,
-                ]
-                .into_iter()
-                .flatten()
-                .sum(),
-            );
-        }
-        event.tokens_out = tokens_out;
-        for (name, tokens) in [
-            ("input_non_cached_tokens", raw_input_tokens),
-            ("cache_creation_tokens", raw_cache_creation_tokens),
-            ("cache_read_tokens", raw_cache_read_tokens),
-        ] {
-            if let Some(tokens) = tokens {
-                event.extra.insert(name.into(), Value::from(tokens));
-            }
-        }
-    };
     if let Some(first) = events.first_mut() {
-        record(first);
+        usage.record(first);
         return;
     }
     let mut event = make("meta", "");
     event.model = model.map(str::to_string);
     event.extra.insert("kind".into(), Value::from("usage"));
-    record(&mut event);
+    usage.record(&mut event);
     events.push(event);
 }

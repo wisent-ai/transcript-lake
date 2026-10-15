@@ -121,8 +121,14 @@ fn day_entry(day: &Path, name: &str) -> Option<SessionEntry> {
     })
 }
 
+/// The session id a rollout's file name carries: the UUID in its stem, or the
+/// whole stem when it holds none. The stem is the name without `.jsonl`, or
+/// the whole name when it has another ending.
 fn session_id_from_name(name: &str) -> String {
-    let stem = name.strip_suffix(".jsonl").unwrap_or(name);
+    let stem = match name.strip_suffix(".jsonl") {
+        Some(stem) => stem,
+        None => name,
+    };
     match UUID_RE.find(stem) {
         Some(found) => found.as_str().to_string(),
         None => stem.to_string(),
@@ -135,15 +141,6 @@ pub(super) fn text_field(value: &Value, key: &str) -> Option<String> {
         Some(Value::String(text)) if !text.is_empty() => Some(text.clone()),
         _ => None,
     }
-}
-
-/// A finite JSON number field, defaulting to zero exactly as `num(x) || 0` did.
-pub(super) fn num_or_zero(value: &Value, key: &str) -> i64 {
-    value
-        .get(key)
-        .and_then(Value::as_f64)
-        .filter(|raw| raw.is_finite())
-        .map_or(0, |raw| raw as i64)
 }
 
 mod records;
