@@ -4,6 +4,7 @@
 mod gemini;
 mod parts;
 mod qwen;
+mod replay;
 
 pub use gemini::Gemini;
 pub use qwen::Qwen;

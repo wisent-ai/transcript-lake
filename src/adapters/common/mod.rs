@@ -1,22 +1,23 @@
 //! What every harness adapter needs and none writes twice: directory listings
-//! in byte order, the type of a path a notification named, JSON documents and
-//! JSON-line files read whole, and read-only SQLite. Event construction is in
-//! `events`, record fields and epoch times in `fields`, token usage in `usage`.
+//! in byte order, the type of a path a notification named, and read-only
+//! SQLite. JSON documents, JSON-line files and sidecars are read in
+//! `documents`, events built in `events`, record fields and epoch times read
+//! in `fields`, token usage carried in `usage`.
 //!
 //! A directory that vanished mid-scan yields nothing, as every adapter's scan
 //! contract says; a session that is read and cannot be is an error naming it.
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use serde_json::Value;
-
 use crate::types::SessionEntry;
 use crate::util::{Error, Result};
 
+mod documents;
 mod events;
 mod fields;
 mod usage;
 
+pub(crate) use documents::*;
 pub(crate) use events::*;
 pub(crate) use fields::*;
 pub(crate) use usage::Usage;
@@ -184,75 +185,6 @@ pub(crate) fn editor_user_dirs(home: &Path) -> Vec<PathBuf> {
         }
     }
     dirs
-}
-
-/// A whole JSON document; a file that cannot be read or parsed is an error
-/// naming it.
-pub(crate) fn read_json(path: &Path) -> Result<Value> {
-    let bytes = fs::read(path)
-        .map_err(|error| Error(format!("cannot read {}: {error}", path.display())))?;
-    serde_json::from_slice(&bytes).map_err(|error| {
-        Error(format!(
-            "{} is not a JSON document: {error}",
-            path.display()
-        ))
-    })
-}
-
-/// A file a session keeps beside its transcript (a header, a state or a
-/// summary) that only adds what the transcript does not say. One that is not
-/// there adds nothing; one that cannot be read, or is not the JSON it should
-/// be, adds nothing either but is said on stderr with its cause, as the scan
-/// says a directory it cannot list, so a session's lost project or id has a
-/// reason.
-pub(crate) fn sidecar(path: &Path) -> Option<Vec<u8>> {
-    match fs::read(path) {
-        Ok(bytes) => Some(bytes),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
-        Err(error) => {
-            eprintln!("sessions: cannot read {}: {error}", path.display());
-            None
-        }
-    }
-}
-
-/// A [`sidecar`] that holds one JSON document.
-pub(crate) fn sidecar_json(path: &Path) -> Option<Value> {
-    match serde_json::from_slice(&sidecar(path)?) {
-        Ok(document) => Some(document),
-        Err(error) => {
-            eprintln!(
-                "sessions: {} is not a JSON document: {error}",
-                path.display()
-            );
-            None
-        }
-    }
-}
-
-/// Every complete JSON line of a file read whole; a last line still being
-/// written (no newline yet) is left for the next read. A complete line that
-/// is not JSON carries no record and is said on stderr with where it starts -
-/// it used to vanish, so a damaged transcript read as a shorter one.
-pub(crate) fn read_json_lines(path: &Path) -> Result<Vec<Value>> {
-    let text = fs::read_to_string(path)
-        .map_err(|error| Error(format!("cannot read {}: {error}", path.display())))?;
-    let complete = match text.rfind('\n') {
-        Some(end) => &text[..end],
-        None => "",
-    };
-    let mut records = Vec::new();
-    for line in complete.lines().filter(|line| !line.trim().is_empty()) {
-        match serde_json::from_str(line) {
-            Ok(record) => records.push(record),
-            Err(error) => eprintln!(
-                "sessions: the line at byte {} of {} is not JSON and carries no record: {error}",
-                line.as_ptr() as usize - complete.as_ptr() as usize,
-                path.display()
-            ),
-        }
-    }
-    Ok(records)
 }
 
 /// A SQLite database opened read-only, so reading a harness's store never

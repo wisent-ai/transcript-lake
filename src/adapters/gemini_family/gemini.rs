@@ -16,17 +16,15 @@
 //!   `{$patch: {id?, content?, toolCalls? [{id, result}], updates?, removeIds?,
 //!     orderIds?}}` that rewrite earlier messages, and `{$rewindTo: id}`.
 //! Because later lines rewrite earlier messages, a session is read whole and
-//! every message is replayed with its patches applied. A rewind or removal
-//! hides messages from the harness's own history, but what was said stays in
-//! the archive, so neither deletes an event here.
-use std::collections::HashMap;
+//! every message is replayed with its patches applied (`replay`).
 use std::path::{Path, PathBuf};
 
 use serde_json::{Map, Value};
 
 use super::parts::{part_events, parts};
+use super::replay::messages;
 use crate::adapters::common::{
-    as_text, entry, event, file_name, files_with_suffix, is_file, meta, read_json, read_json_lines,
+    as_text, entry, event, file_name, files_with_suffix, is_file, meta, sidecar_text,
     subdirectories, text_field, tool_call, tool_result, usage,
 };
 use crate::types::{Adapter, ParserCtx, RawEvent, Reading, SessionEntry};
@@ -102,106 +100,10 @@ fn session_entry(file: &Path) -> Option<SessionEntry> {
         .strip_suffix(".jsonl")
         .or_else(|| name.strip_suffix(".json"))?;
     let id = stem.strip_prefix(PREFIX)?;
-    let project = std::fs::read_to_string(file.parent()?.parent()?.join(PROJECT_ROOT))
-        .ok()
+    let project = sidecar_text(&file.parent()?.parent()?.join(PROJECT_ROOT))
         .map(|root| root.trim().to_string())
         .filter(|root| !root.is_empty());
     Some(entry(file.to_path_buf(), Some(id.to_string()), project))
-}
-
-/// Every message of a session file, in order, with its patches applied.
-pub(super) fn messages(file: &Path) -> Result<(Option<String>, Vec<Value>)> {
-    if file
-        .extension()
-        .is_some_and(|extension| extension == "json")
-    {
-        let document = read_json(file)?;
-        let messages = document
-            .get("messages")
-            .and_then(Value::as_array)
-            .cloned()
-            .into_iter()
-            .flatten()
-            .collect();
-        return Ok((text_field(&document, "sessionId"), messages));
-    }
-    let mut session = None;
-    let mut order: Vec<String> = Vec::new();
-    let mut by_id: HashMap<String, Value> = HashMap::new();
-    for record in read_json_lines(file)? {
-        if let Some(set) = record.get("$set") {
-            for message in set
-                .get("messages")
-                .and_then(Value::as_array)
-                .into_iter()
-                .flatten()
-            {
-                put(message, &mut order, &mut by_id);
-            }
-        } else if let Some(patch) = record.get("$patch") {
-            apply_patch(patch, &mut by_id);
-            for update in patch
-                .get("updates")
-                .and_then(Value::as_array)
-                .into_iter()
-                .flatten()
-            {
-                apply_patch(update, &mut by_id);
-            }
-        } else if record.get("$rewindTo").is_some() {
-            continue;
-        } else if record.get("projectHash").is_some() {
-            session = text_field(&record, "sessionId");
-        } else {
-            put(&record, &mut order, &mut by_id);
-        }
-    }
-    Ok((
-        session,
-        order
-            .into_iter()
-            .filter_map(|id| by_id.remove(&id))
-            .collect(),
-    ))
-}
-
-/// Record `message` under its id, keeping the place it first had.
-fn put(message: &Value, order: &mut Vec<String>, by_id: &mut HashMap<String, Value>) {
-    if let Some(id) = text_field(message, "id") {
-        if !by_id.contains_key(&id) {
-            order.push(id.clone());
-        }
-        by_id.insert(id, message.clone());
-    }
-}
-
-/// Apply one message patch: new content, and results for its tool calls.
-fn apply_patch(patch: &Value, by_id: &mut HashMap<String, Value>) {
-    let Some(id) = text_field(patch, "id") else {
-        return;
-    };
-    let Some(message) = by_id.get_mut(&id) else {
-        return;
-    };
-    if let Some(content) = patch.get("content") {
-        message["content"] = content.clone();
-    }
-    for update in patch
-        .get("toolCalls")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-    {
-        let Some(id) = update.get("id") else { continue };
-        let Some(calls) = message.get_mut("toolCalls").and_then(Value::as_array_mut) else {
-            continue;
-        };
-        for call in calls.iter_mut().filter(|call| call.get("id") == Some(id)) {
-            if let Some(result) = update.get("result") {
-                call["result"] = result.clone();
-            }
-        }
-    }
 }
 
 fn load(ctx: &ParserCtx) -> Result<Vec<RawEvent>> {
