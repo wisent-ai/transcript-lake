@@ -87,18 +87,18 @@ pub fn status(rest: &[String]) -> Result<i32> {
             row.runtime, row.parts, row.bytes
         )?;
         for unreadable in &row.unreadable {
-            writeln!(out, "    not counted, cannot be listed: {unreadable}")?;
+            writeln!(out, "    not counted, cannot be read: {unreadable}")?;
         }
     }
     let newest = match &report.cursors.newest_source_mtime {
         Some(stamp) => format!(", newest {stamp}"),
         None => String::new(),
     };
-    writeln!(
-        out,
-        "cursors: {}, {} tracked files{newest}",
-        report.cursors.state, report.cursors.files
-    )?;
+    let tracked = match report.cursors.files {
+        Some(files) => format!(", {files} tracked files"),
+        None => String::new(),
+    };
+    writeln!(out, "cursors: {}{tracked}{newest}", report.cursors.state)?;
     if let Some(error) = &report.cursors.error {
         writeln!(out, "  cursor error: {error}")?;
     }
@@ -113,15 +113,18 @@ pub fn status(rest: &[String]) -> Result<i32> {
             let updated = current
                 .get("updatedAt")
                 .or_else(|| current.get("startedAt"));
-            let files = current
-                .get("filesStreamed")
-                .and_then(Value::as_u64)
-                .unwrap_or(0);
-            let failures = current.get("failures").and_then(Value::as_u64).unwrap_or(0);
+            // A count the stream state does not carry is said to be missing,
+            // not printed as none.
+            let count = |field: &str| match current.get(field).and_then(Value::as_u64) {
+                Some(count) => count.to_string(),
+                None => "not reported".to_string(),
+            };
             writeln!(
                 out,
-                "stream: {state}, updated {}, files {files}, failures {failures}",
-                js_string(updated)
+                "stream: {state}, updated {}, files {}, failures {}",
+                js_string(updated),
+                count("filesStreamed"),
+                count("failures")
             )?
         }
         None => writeln!(out, "stream: {}", report.stream.state)?,

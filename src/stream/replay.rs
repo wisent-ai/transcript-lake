@@ -6,20 +6,7 @@ use crate::types::{supported_sources, Adapter, HOOKS};
 use crate::util::{home_dir, machine_name, Error, Result};
 use serde_json::{json, Map, Value};
 use std::fs;
-use std::path::PathBuf;
 use std::time::Instant;
-/// Where closed hook segments are published for pickup.
-fn segments_ready_dir() -> PathBuf {
-    std::env::var_os("HOOKS_ADAPTIVE_SEGMENTS_READY")
-        .map(PathBuf::from)
-        .filter(|path| !path.as_os_str().is_empty())
-        .unwrap_or_else(|| {
-            home_dir()
-                .join(".hooks-adaptive")
-                .join("telemetry-segments")
-                .join("ready")
-        })
-}
 
 fn replay_locked(opts: &ReplayOptions) -> Result<Value> {
     let started = Instant::now();
@@ -48,7 +35,7 @@ fn replay_locked(opts: &ReplayOptions) -> Result<Value> {
         let before = total_hits(&writer.masker.counts());
         let mut adapter: Option<Box<dyn Adapter>> = None;
         if name == HOOKS {
-            let ready = segments_ready_dir();
+            let ready = crate::lake::paths::hook_segments_ready();
             if ready.exists() {
                 // An integrity failure inside a segment commit (an output or
                 // acknowledgement that disagrees with what is already on
@@ -69,7 +56,7 @@ fn replay_locked(opts: &ReplayOptions) -> Result<Value> {
             adapter = crate::adapters::by_name(name);
             if adapter.is_none() {
                 warn(&format!("adapter \"{name}\" unavailable, runtime skipped"));
-                tally.failures += 1;
+                tally.failures += std::num::NonZeroU64::MIN.get();
             }
         }
         let Some(adapter) = adapter else {
@@ -96,10 +83,10 @@ fn replay_locked(opts: &ReplayOptions) -> Result<Value> {
                         true,
                         &mut tally,
                     ) {
-                        Ok(()) => tally.files += 1,
+                        Ok(()) => tally.files += std::num::NonZeroU64::MIN.get(),
                         Err(error) => {
                             warn(&format!("{}: {error}", entry.file.display()));
-                            tally.failures += 1;
+                            tally.failures += std::num::NonZeroU64::MIN.get();
                         }
                     }
                 }
@@ -117,16 +104,25 @@ fn replay_locked(opts: &ReplayOptions) -> Result<Value> {
         "perRuntime": Value::Object(per_runtime),
         "maskCounts": writer.masker.counts(),
         "durationMs": started.elapsed().as_millis() as u64,
-        "partial": failures > 0,
+        "partial": std::num::NonZeroU64::new(failures).is_some(),
         "failures": failures,
     }))
 }
 
 /// Replay every selected source into a separate empty Lake for recovery.
 pub fn replay(opts: ReplayOptions) -> Result<Value> {
-    let occupied = fs::read_dir(&opts.data_dir)
-        .map(|mut entries| entries.next().is_some())
-        .unwrap_or(false);
+    // An absent root is empty; one that cannot be listed is refused, since a
+    // rebuild into a root nobody could inspect might duplicate what it holds.
+    let occupied = match fs::read_dir(&opts.data_dir) {
+        Ok(mut entries) => entries.next().is_some(),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
+        Err(error) => {
+            return Err(Error(format!(
+                "rebuild cannot tell whether {} is empty: {error}",
+                opts.data_dir.display()
+            )))
+        }
+    };
     if occupied {
         return Err(Error(
             "rebuild requires an empty LAKE_DATA root so replay cannot duplicate or erase existing evidence"
