@@ -90,14 +90,33 @@ fn tables(connection: &rusqlite::Connection, path: &Path) -> Result<HashSet<Stri
 }
 
 /// A message's content: its text, or the parts list Hermes stored behind
-/// its multimodal prefix.
+/// its multimodal prefix. Parts behind the prefix that are not JSON keep the
+/// stored text as the content and are said, so the reader knows why the
+/// parts are missing.
 fn content_of(text: String) -> Value {
-    let parts = text
-        .strip_prefix(PARTS_PREFIX)
-        .and_then(|parts| serde_json::from_str::<Value>(parts).ok());
-    match parts {
-        Some(parts) => parts,
-        None => Value::String(text),
+    let Some(parts) = text.strip_prefix(PARTS_PREFIX) else {
+        return Value::String(text);
+    };
+    match serde_json::from_str::<Value>(parts) {
+        Ok(parts) => parts,
+        Err(error) => {
+            eprintln!(
+                "sessions: a Hermes message carries the parts prefix but its parts are not JSON ({error}); its stored text is kept"
+            );
+            Value::String(text)
+        }
+    }
+}
+
+/// A message's stored tool calls, which Hermes keeps as JSON text; text that
+/// is not JSON carries no calls and is said.
+fn tool_calls_of(calls: String) -> Value {
+    match serde_json::from_str::<Value>(&calls) {
+        Ok(calls) => calls,
+        Err(error) => {
+            eprintln!("sessions: a Hermes message's tool calls are not JSON: {error}");
+            Value::Null
+        }
     }
 }
 
@@ -139,7 +158,7 @@ fn load(ctx: &ParserCtx) -> Result<Vec<RawEvent>> {
             "content": content.map(content_of),
             "tool_call_id": call_id,
             "name": tool,
-            "tool_calls": calls.and_then(|calls| serde_json::from_str::<Value>(&calls).ok()),
+            "tool_calls": calls.map(tool_calls_of),
         });
         let mut found = chat_messages(ctx, &[message], iso_seconds(stamp));
         for event in &mut found {

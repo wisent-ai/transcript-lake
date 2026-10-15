@@ -166,10 +166,21 @@ fn load(ctx: &ParserCtx) -> Result<Vec<RawEvent>> {
             if text_field(message, "say").as_deref() != Some("api_req_started") {
                 continue;
             }
-            let Some(request) = text_field(message, "text")
-                .and_then(|text| serde_json::from_str::<Value>(&text).ok())
-            else {
+            // The request's spend is the JSON its text holds; a record without
+            // text carries none, and text that is not JSON is said, so a lost
+            // request's tokens have a reason.
+            let Some(text) = text_field(message, "text") else {
                 continue;
+            };
+            let request = match serde_json::from_str::<Value>(&text) {
+                Ok(request) => request,
+                Err(error) => {
+                    eprintln!(
+                        "sessions: an api_req_started record of {} holds text that is not JSON: {error}",
+                        ui.display()
+                    );
+                    continue;
+                }
             };
             let at = message
                 .get("ts")
