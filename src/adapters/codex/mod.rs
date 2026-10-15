@@ -13,7 +13,6 @@
 use std::path::{Path, PathBuf};
 
 use regex::Regex;
-use serde_json::Value;
 
 use super::common::{dirent_type, read_dirents, subdirectories};
 use crate::types::{Adapter, ParserCtx, Reading, SessionEntry};

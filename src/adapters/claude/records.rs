@@ -223,4 +223,4 @@ fn persisted_output_path(text: &str) -> Option<String> {
 
 mod assistant;
 
-use assistant::{attach_usage, map_assistant};
+use assistant::map_assistant;
