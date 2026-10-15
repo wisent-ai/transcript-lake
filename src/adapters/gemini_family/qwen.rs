@@ -21,7 +21,8 @@ use serde_json::{Map, Value};
 use super::gemini::chat_roots;
 use super::parts::{part_events, parts, usage_metadata};
 use crate::adapters::common::{
-    as_text, entry, file_name, files_with_suffix, is_file, meta, text_field, tool_result,
+    as_text, entry, existing_root, file_name, files_with_suffix, is_file, meta, text_field,
+    tool_result,
 };
 use crate::types::{Adapter, Parser, ParserCtx, RawEvent, Reading, SessionEntry};
 

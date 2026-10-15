@@ -9,11 +9,11 @@ use crate::util::{Error, Result};
 use super::*;
 
 /// The embedded definition, checked for the identity and the graph this
-/// command relies on before a single screen is shown.
+/// command relies on before a single screen is shown. It is embedded at build
+/// time, so it is always the file this code was written with.
 pub(super) fn canonical_definition() -> Result<Value> {
     let definition: Value = serde_json::from_str(DEFINITION)?;
-    if definition.get("schema_version").and_then(Value::as_u64) != Some(1)
-        || definition.get("product_id").and_then(Value::as_str) != Some(PRODUCT_ID)
+    if definition.get("product_id").and_then(Value::as_str) != Some(PRODUCT_ID)
         || definition.get("journey_id").and_then(Value::as_str) != Some(JOURNEY_ID)
         || definition.get("first_success_fact").and_then(Value::as_str) != Some(FIRST_SUCCESS_FACT)
     {
@@ -56,11 +56,12 @@ pub(super) fn canonical_definition() -> Result<Value> {
         ));
     }
     for screen in screens {
-        for transition in transitions(screen) {
-            let next = transition
-                .get("next_screen_id")
-                .and_then(Value::as_str)
-                .ok_or_else(|| Error("canonical onboarding transition has no target".into()))?;
+        let id = screen
+            .get("screen_id")
+            .and_then(Value::as_str)
+            .ok_or_else(|| Error("canonical onboarding screen has no id".into()))?;
+        for transition in transitions(screen)? {
+            let (next, _) = edge(id, transition)?;
             if !ids.contains(&next) {
                 return Err(Error(format!(
                     "canonical onboarding transition target does not exist: {next}"
@@ -71,12 +72,40 @@ pub(super) fn canonical_definition() -> Result<Value> {
     Ok(definition)
 }
 
-pub(super) fn transitions(screen: &Value) -> &[Value] {
-    screen
-        .get("transitions")
-        .and_then(Value::as_array)
-        .map(Vec::as_slice)
-        .unwrap_or_default()
+/// A screen's transitions. A screen that lists none ends the walk; one whose
+/// transitions are not a list is refused rather than read as an end.
+pub(super) fn transitions(screen: &Value) -> Result<&[Value]> {
+    match screen.get("transitions") {
+        None | Some(Value::Null) => Ok(&[]),
+        Some(Value::Array(list)) => Ok(list),
+        Some(other) => Err(Error(format!(
+            "canonical onboarding screen's transitions are not a list: {other}"
+        ))),
+    }
+}
+
+/// One transition's target and priority, refused naming the screen and the
+/// target when either is missing or the priority is not a whole number. Read
+/// as the lowest, a transition that lost its priority decided the next screen
+/// whenever it was the only one or tied with another.
+fn edge<'a>(screen_id: &str, transition: &'a Value) -> Result<(&'a str, i64)> {
+    let target = transition
+        .get("next_screen_id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| {
+            Error(format!(
+                "canonical onboarding transition of {screen_id} has no target"
+            ))
+        })?;
+    let priority = transition
+        .get("priority")
+        .and_then(Value::as_i64)
+        .ok_or_else(|| {
+            Error(format!(
+                "canonical onboarding transition from {screen_id} to {target} declares no whole-number priority"
+            ))
+        })?;
+    Ok((target, priority))
 }
 
 pub(super) fn screen_by_id<'a>(definition: &'a Value, screen_id: &str) -> Result<&'a Value> {
@@ -96,17 +125,21 @@ pub(super) fn screen_by_id<'a>(definition: &'a Value, screen_id: &str) -> Result
 }
 
 /// The published edge out of this screen: highest priority wins, exactly as
-/// the control plane's own selection does.
-pub(super) fn next_screen_id(screen: &Value) -> Option<&str> {
-    transitions(screen)
-        .iter()
-        .max_by_key(|transition| {
-            transition
-                .get("priority")
-                .and_then(Value::as_i64)
-                .unwrap_or_default()
-        })
-        .and_then(|transition| transition.get("next_screen_id").and_then(Value::as_str))
+/// the control plane's own selection does; of equal priorities, the last one
+/// listed.
+pub(super) fn next_screen_id(screen: &Value) -> Result<Option<&str>> {
+    let screen_id = screen
+        .get("screen_id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| Error("canonical onboarding screen has no id".into()))?;
+    let mut chosen: Option<(i64, &str)> = None;
+    for transition in transitions(screen)? {
+        let (target, rank) = edge(screen_id, transition)?;
+        if chosen.is_none_or(|(best, _)| rank >= best) {
+            chosen = Some((rank, target));
+        }
+    }
+    Ok(chosen.map(|(_, target)| target))
 }
 
 /// Whether the evidence this command gathered satisfies what the definition
@@ -145,7 +178,7 @@ pub(super) fn advance(
     if !evidence_satisfied(screen, evidence)? {
         return Ok(None);
     }
-    let Some(next) = next_screen_id(screen).map(str::to_string) else {
+    let Some(next) = next_screen_id(screen)?.map(str::to_string) else {
         return Ok(None);
     };
     screen_by_id(definition, &next)?;
