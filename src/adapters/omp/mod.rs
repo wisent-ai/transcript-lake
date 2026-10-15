@@ -22,12 +22,11 @@
 //!   custom_message (customType, content string), custom (customType, data),
 //!   compaction (summary, tokensBefore, firstKeptEntryId).
 //! Unknown record or block types become meta events tagged in extra.
-use std::fs;
 use std::path::{Path, PathBuf};
 
 use serde_json::{Map, Value};
 
-use crate::adapters::common::dirent_type;
+use crate::adapters::common::{dirent_type, read_dirents};
 use crate::types::{Adapter, ParserCtx, Reading, SessionEntry};
 
 const JSONL_EXT: &str = ".jsonl";
@@ -109,10 +108,7 @@ impl Adapter for OmpStore {
         let base = parts
             .iter()
             .fold(home.to_path_buf(), |path, part| path.join(part));
-        let Some(entries) = read_dirents(&base) else {
-            return Vec::new();
-        };
-        entries
+        read_dirents(&base)
             .into_iter()
             .filter(|(_, file_type)| file_type.is_dir())
             .map(|(name, _)| {
@@ -127,11 +123,8 @@ impl Adapter for OmpStore {
     }
 
     fn list_sessions(&self, root: &Path) -> Vec<SessionEntry> {
-        let Some(entries) = read_dirents(root) else {
-            return Vec::new();
-        };
         let mut sessions = Vec::new();
-        for (name, file_type) in entries {
+        for (name, file_type) in read_dirents(root) {
             if !file_type.is_file() {
                 continue;
             }
@@ -164,49 +157,6 @@ impl Adapter for OmpStore {
     fn read(&self, ctx: ParserCtx) -> Reading {
         Reading::Lines(Box::new(OmpParser::new(ctx)))
     }
-}
-
-/// The entries of `dir`, names in byte order, because Node's `readdirSync`
-/// sorts with strcmp and the walk order is observable. A directory that is not
-/// there has none; one that cannot be listed is said on stderr with its cause,
-/// so its sessions are not read as never having existed.
-fn read_dirents(dir: &Path) -> Option<Vec<(String, fs::FileType)>> {
-    let iter = match fs::read_dir(dir) {
-        Ok(iter) => iter,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return None,
-        Err(error) => {
-            eprintln!("omp sessions: cannot list {}: {error}", dir.display());
-            return None;
-        }
-    };
-    let mut out = Vec::new();
-    for entry in iter {
-        // An entry that cannot be read is a session the scan cannot show,
-        // said with its cause like the directory itself.
-        let entry = match entry {
-            Ok(entry) => entry,
-            Err(error) => {
-                eprintln!(
-                    "omp sessions: cannot read an entry of {}: {error}",
-                    dir.display()
-                );
-                continue;
-            }
-        };
-        let file_type = match entry.file_type() {
-            Ok(file_type) => file_type,
-            Err(error) => {
-                eprintln!(
-                    "omp sessions: cannot read the type of {}: {error}",
-                    entry.path().display()
-                );
-                continue;
-            }
-        };
-        out.push((entry.file_name().to_string_lossy().to_string(), file_type));
-    }
-    out.sort_unstable_by(|left, right| left.0.cmp(&right.0));
-    Some(out)
 }
 
 /// The entry a scan yields for one name inside a session directory: `.jsonl` files
