@@ -13,6 +13,9 @@ pub(super) struct CodexParser {
     project: Option<String>,
     model: Option<String>,
     last_ts: Option<String>,
+    /// The time and words of the latest response_item user message: the
+    /// first record of a turn whose completed UserMessage item follows it.
+    first_user_record: Option<(String, String)>,
 }
 
 impl CodexParser {
@@ -24,6 +27,7 @@ impl CodexParser {
             project: ctx.project.filter(|value| !value.is_empty()),
             model: None,
             last_ts: None,
+            first_user_record: None,
         }
     }
 }
@@ -143,10 +147,18 @@ impl CodexParser {
             }
             // Current Codex writes no user_message: the operator's turn is the
             // completed item whose type is UserMessage, without the injected
-            // context its response_item user message carries.
+            // context its response_item user message carries. The turn was said
+            // when that response_item first recorded the same words, so it
+            // carries that record's time; a completed item no such record
+            // precedes carries its own.
             Some("item_completed") => match payload.get("item") {
                 Some(item) if text_field(item, "type").as_deref() == Some("UserMessage") => {
-                    vec![make("user", &message::content_text(item.get("content")))]
+                    let text = message::content_text(item.get("content"));
+                    let said = match self.first_user_record.take() {
+                        Some((first, words)) if words == text => first,
+                        _ => ts.to_string(),
+                    };
+                    vec![self.maker(&said)("user", &text)]
                 }
                 _ => Vec::new(),
             },

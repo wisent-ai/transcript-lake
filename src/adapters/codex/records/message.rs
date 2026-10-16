@@ -15,8 +15,10 @@ impl CodexParser {
             return Vec::new();
         };
         // Role user duplicates the event_msg user turn and additionally carries injected
-        // environment/permission context — dropped here to keep user turns clean.
+        // environment/permission context, so it is no event of its own. Its time is kept:
+        // it is the first record of the words a completed UserMessage item repeats.
         if role == "user" {
+            self.first_user_record = Some((ts.to_string(), content_text(payload.get("content"))));
             return Vec::new();
         }
         let text = content_text(payload.get("content"));

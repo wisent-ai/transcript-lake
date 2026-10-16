@@ -10,7 +10,10 @@
 //! To avoid double counting we take user turns from event_msg — `user_message`
 //! in older rollouts, the completed item of type `UserMessage` in current ones,
 //! which write no `user_message` (response_item role=user also carries injected
-//! environment context) — and everything else from response_item records.
+//! environment context) — and everything else from response_item records. A
+//! completed `UserMessage` item is dated by the latest response_item user
+//! message before it when that message recorded the same words, the first
+//! record of the turn; otherwise it keeps its own time.
 use std::path::{Path, PathBuf};
 
 use regex::Regex;

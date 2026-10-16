@@ -1,9 +1,11 @@
 //! Real CLI journey: a current Codex rollout writes no `user_message` event;
 //! the operator's turn is the completed item of type `UserMessage`. Adopting
 //! such a rollout used to keep no operator turn at all, so a rebuild lost
-//! every Codex prompt. The rollout is written where `transcript-lake adopt
-//! --root` reads it; the journey, its inputs and outputs are retained under
-//! the package's build directory by `evidence`.
+//! every Codex prompt. The turn is dated by the response_item user message
+//! that first recorded its words, one record before the completed item, as a
+//! reader that saw the native rollout dated it. The rollout is written where
+//! `transcript-lake adopt --root` reads it; the journey, its inputs and
+//! outputs are retained under the package's build directory by `evidence`.
 #[path = "../harnesses/evidence.rs"]
 mod evidence;
 
@@ -108,8 +110,8 @@ fn a_completed_user_item_is_the_operator_turn() {
         "the completed UserMessage item's words are the turn"
     );
     assert!(
-        at.contains("03:35:17.903"),
-        "the turn is dated by its completed item, got {at}"
+        at.contains("03:35:17.902"),
+        "the turn is dated by the first record of its words, got {at}"
     );
     assert!(
         text != CONTEXT && text != AGENT,
