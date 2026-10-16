@@ -33,7 +33,11 @@ pub fn doctor(rest: &[String]) -> Result<i32> {
     let paths = lake_paths();
     let cursors = read_cursor_status(&paths.cursors);
     let sources = source_report()?;
-    let broken: Vec<&SourceRow> = sources.iter().filter(|row| row.error.is_some()).collect();
+    // Each adapter that failed to load, with the error that says why.
+    let broken: Vec<(&SourceRow, &str)> = sources
+        .iter()
+        .filter_map(|row| row.error.as_deref().map(|error| (row, error)))
+        .collect();
     let checks = vec![
         Check {
             name: "state-root",
@@ -78,13 +82,7 @@ pub fn doctor(rest: &[String]) -> Result<i32> {
             } else {
                 broken
                     .iter()
-                    .map(|row| {
-                        format!(
-                            "{}: {}",
-                            row.runtime,
-                            row.error.as_deref().unwrap_or_default()
-                        )
-                    })
+                    .map(|(row, error)| format!("{}: {error}", row.runtime))
                     .collect::<Vec<String>>()
                     .join("; ")
             },
