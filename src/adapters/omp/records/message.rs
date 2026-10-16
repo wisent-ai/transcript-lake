@@ -31,7 +31,15 @@ impl OmpParser {
             }
             return vec![event];
         }
+        let attribution = msg.get("attribution").and_then(Value::as_str);
+        let generated = msg.get("synthetic") == Some(&Value::Bool(true))
+            || msg.get("steering") == Some(&Value::Bool(true));
         let text_type = match role.as_str() {
+            "user"
+                if attribution == Some("agent") || (generated && attribution != Some("user")) =>
+            {
+                "meta"
+            }
             "user" => "user",
             "assistant" => "assistant",
             _ => "meta",

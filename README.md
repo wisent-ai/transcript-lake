@@ -166,6 +166,7 @@ The CLI is the canonical human and automation interface.
 | Health | `doctor [--json]` | Cursor, source, DuckDB, and Oko checks with meaningful exit status |
 | Real-time stream | `stream [--json]` | Long-running event-driven source tail with direct Lake and Oko commits |
 | Safe recovery | `rebuild --to <empty-path> [--source <runtime>]` | Historical replay into a separate empty Lake |
+| Stale projection correction | `reconcile --source <runtime> [--apply] [--reindex]` | Replays each retained original through the current adapter into a staging root and reports every source partition as unchanged, changed (rows superseded and replayed), unprovable (no original on this machine; kept as recorded) or refused (another machine's rows); `--apply` replaces changed partitions whole, moves cursors past them and rebuilds the Oko projection; exits 1 while any partition is unprovable or refused |
 | Inspect | `status [--json]` | Partition, cursor, stream-state, and Oko freshness inventory; a partition directory that cannot be listed is named under its runtime (`partitions[].unreadable` in JSON) and the command exits 1, as for an invalid cursor or stream state |
 | Sessions and events | `sessions [--interrupted] [--limit <n>]`, `events [--limit <n>]` | Every matching normalized record, newest first, each event with its whole masked text; `--limit` keeps the newest n and zero is refused; `--interrupted` keeps only conversations left without an answer |
 | Text search | `search <text> [--runtime <r>] [--session <id>] [--type <t>] [--limit <n>] [--json]` | Every newest-first literal substring match over masked event text, with the whole text; `--limit` keeps the newest n |
@@ -181,6 +182,60 @@ The Lake keeps each event's text and `extra` whole: no adapter cuts text to a
 length, masking reaches every depth of `extra`, and records read before a
 transcript's first timestamp are held until that timestamp or the end of the
 file, however many there are.
+
+Factory Droid provider notices carry a `visibility` field even when displayed
+in the UI. The adapter preserves their masked words as `meta` events with
+`extra.role = user` and `extra.visibility`, not operator `user` events. A typed
+message without that field remains a user event with `extra.role = user`, so
+consumers can distinguish newly attributed turns from legacy partitions whose
+native sender metadata was not retained. Qualify this boundary against
+a real native Factory store with
+`LAKE_TEST_DROID_EXPECTATION=<absolute JSON path> cargo test --test harness-ingestion native_provider_notices_are_not_operator_turns -- --ignored --nocapture`.
+The JSON names the discovered `root`, `runtime = droid`, `session_id`, an
+independently observed masked `user_text`, and `provider_notice_text`. The
+journey retains actual adoption, replay, refusal, source revision and canonical
+events under the ignored build directory. Partitions written before this
+boundary keep their original types until `reconcile --source droid --apply`
+replays their retained originals through the current adapter and puts the
+replayed partitions in their place; a partition whose original is gone is
+reported as unprovable and keeps its rows.
+
+OMP records with native `role: user` but `attribution: agent`, or with
+`synthetic`/`steering` set without explicit `attribution: user`, retain their
+masked text as `meta` events with `extra.role = user` and the recorded sender
+fields. An ordinary user-role record remains `user`; the adapter does not
+classify by its wording. Inspect the boundary with
+`transcript-lake show <session-id> --include user,meta --json` or query
+`events` by `session_id`, `event_type` and `extra`. A missing native sender
+field stays missing, so an older unattributed record is not proof of operator
+authorship. Existing canonical partitions are append-only; `projection rebuild`
+does not reclassify them, and `reconcile --source omp --apply` does, from the
+currently discoverable native session files only (not nested advisor sidecars
+that the adapter does not discover). Historical partitions whose native source
+is no longer available are reported as unprovable and keep their event type.
+Qualify the parser against actual native operator and advisor records with
+`LAKE_TEST_OMP_AUTHORSHIP=<absolute JSON path> cargo test --test harness-omp-usage native_advisor_updates_are_not_operator_turns -- --ignored --nocapture`.
+The expectation names native `authored_file`, `authored_session`,
+`authored_text`, `generated_file`, `generated_session` and `generated_text`.
+Both session identities come from the corresponding native `session` records.
+The journey copies actual native files unchanged into an isolated discovered
+project and retains adoption, an unowned-root refusal, source revision,
+canonical events and the `show` report under the ignored build directory.
+
+Qwen's native `provenance: real_user` is the authorship boundary: those text
+parts become `user` events retaining `extra.provenance = real_user` and
+`extra.attribution = user`. Other user-role
+records (including goal/runtime or agent input) remain `meta` events named
+`unattributed_user`, retaining any recorded subtype and provenance in `extra`;
+missing provenance never implies authorship. Native `tool_result` content
+remains `tool_result` even when it has text parts. Qualify the boundary against
+a real native store with
+`LAKE_TEST_QWEN_EXPECTATION=<absolute JSON path> cargo test --test harness-ingestion native_provenance_keeps_author_and_excludes_automation -- --ignored --nocapture`.
+The JSON names the discovered `root`, `runtime = qwen`, `session_id`, an
+independently observed masked `user_text`, exact `tool_text`, `authored_text`,
+`synthetic_text` and its `synthetic_provenance` from that session. The journey
+inspects persisted canonical events and retains adoption and refusal evidence
+under the ignored build directory.
 
 An unknown command, a repeated global `--data-dir`, or a `--data-dir` without a path prints the error and the usage and exits 2; any other failure exits 1.
 

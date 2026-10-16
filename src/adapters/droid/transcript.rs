@@ -167,8 +167,11 @@ impl TranscriptParser {
             Some(Value::String(role)) => role.clone(),
             _ => "unknown".to_string(),
         };
+        // Factory marks provider-generated notices with visibility, including
+        // notices displayed in the UI. They are not typed operator turns.
+        let visibility = msg.get("visibility");
         let text_type = match role.as_str() {
-            "user" => "user",
+            "user" if visibility.is_none() => "user",
             "assistant" => "assistant",
             _ => "meta",
         };
@@ -194,7 +197,7 @@ impl TranscriptParser {
                     });
                 }
                 Some("thinking") => {
-                    self.flush_text(&mut events, &mut buffer, ts, text_type, &role);
+                    self.flush_text(&mut events, &mut buffer, ts, text_type, &role, visibility);
                     let thinking = match block.get("thinking") {
                         Some(Value::String(text)) => text.clone(),
                         _ => String::new(),
@@ -202,7 +205,7 @@ impl TranscriptParser {
                     events.push(self.make(ts, "thinking", &thinking));
                 }
                 Some("tool_use") => {
-                    self.flush_text(&mut events, &mut buffer, ts, text_type, &role);
+                    self.flush_text(&mut events, &mut buffer, ts, text_type, &role, visibility);
                     // The same shape as the omp adapter's toolCall: the input
                     // is the row's text, so a reader sees what was run.
                     let args = match block.get("input") {
@@ -218,14 +221,14 @@ impl TranscriptParser {
                     events.push(event);
                 }
                 Some("tool_result") => {
-                    self.flush_text(&mut events, &mut buffer, ts, text_type, &role);
+                    self.flush_text(&mut events, &mut buffer, ts, text_type, &role, visibility);
                     let mut event =
                         self.make(ts, "tool_result", &text_joined(block.get("content")));
                     prune(&mut event.extra, "call_id", block.get("tool_use_id"));
                     events.push(event);
                 }
                 _ => {
-                    self.flush_text(&mut events, &mut buffer, ts, text_type, &role);
+                    self.flush_text(&mut events, &mut buffer, ts, text_type, &role, visibility);
                     let mut event = self.make(ts, "meta", "");
                     event.extra.insert("kind".into(), Value::from("block"));
                     event.extra.insert(
@@ -236,7 +239,7 @@ impl TranscriptParser {
                 }
             }
         }
-        self.flush_text(&mut events, &mut buffer, ts, text_type, &role);
+        self.flush_text(&mut events, &mut buffer, ts, text_type, &role, visibility);
         events
     }
 
@@ -247,14 +250,16 @@ impl TranscriptParser {
         ts: Option<&String>,
         text_type: &str,
         role: &str,
+        visibility: Option<&Value>,
     ) {
         if buffer.is_empty() {
             return;
         }
         let mut event = self.make(ts, text_type, &buffer.join("\n"));
+        event.extra.insert("role".into(), Value::from(role));
         if text_type == "meta" {
             event.extra.insert("kind".into(), Value::from("message"));
-            event.extra.insert("role".into(), Value::from(role));
+            prune(&mut event.extra, "visibility", visibility);
         }
         events.push(event);
         buffer.clear();

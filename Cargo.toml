@@ -59,6 +59,10 @@ path = "tests/labels/source_origin.rs"
 name = "claude-usage-parts"
 path = "tests/claude/usage_parts.rs"
 
+[[test]]
+name = "reconcile-stale-projection"
+path = "tests/reconcile/stale_projection.rs"
+
 [dependencies]
 # preserve_order keeps `extra` in adapter insertion order, so a ported
 # partition line is byte-identical to the one the previous implementation wrote.
@@ -77,7 +81,7 @@ notify = "8"
 rusqlite = { version = "0.40.2", features = ["bundled"] }
 zstd = "0.14.1"
 
+# The release profile already optimizes fully (Cargo's release default).
 [profile.release]
-opt-level = 3
 lto = "thin"
 strip = true

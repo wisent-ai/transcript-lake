@@ -16,6 +16,9 @@
 //! `timestamp` is SQLite's `YYYY-MM-DD HH:MM:SS` in UTC; `created_timestamp`
 //! is in seconds or milliseconds depending on the writer, so the text column
 //! is the one read.
+//! Only exact user and assistant roles become turns; unknown roles remain
+//! metadata rather than presumed user text. The role does not itself prove
+//! personal authorship for a style corpus.
 use std::path::{Path, PathBuf};
 
 use serde_json::{Map, Value};
@@ -103,7 +106,13 @@ fn load(ctx: &ParserCtx) -> Result<Vec<RawEvent>> {
         let Ok(content) = serde_json::from_str::<Value>(&content) else {
             continue;
         };
-        let ts = stamp.map(|stamp| format!("{}Z", stamp.replacen(' ', "T", 1)));
+        let ts = stamp.map(|mut stamp| {
+            if let Some(separator) = stamp.find(' ') {
+                stamp.replace_range(separator..separator + ' '.len_utf8(), "T");
+            }
+            stamp.push('Z');
+            stamp
+        });
         let mut found = content_events(ctx, &role, &content, ts);
         for event in &mut found {
             event.session_id = Some(session.clone());
@@ -120,17 +129,26 @@ fn content_events(
     content: &Value,
     ts: Option<String>,
 ) -> Vec<RawEvent> {
-    let speaker = if role == "assistant" {
-        "assistant"
-    } else {
-        "user"
+    let speaker = match role {
+        "assistant" => Some("assistant"),
+        "user" => Some("user"),
+        _ => None,
     };
     let mut events = Vec::new();
     for block in content.as_array().into_iter().flatten() {
         match block.get("type").and_then(Value::as_str) {
             Some("text") => {
                 if let Some(text) = text_field(block, "text") {
-                    events.push(event(ctx, ts.clone(), speaker, text));
+                    match speaker {
+                        Some(role) => events.push(event(ctx, ts.clone(), role, text)),
+                        None => events.push(meta(
+                            ctx,
+                            ts.clone(),
+                            "unknown_message_role",
+                            text,
+                            Map::new(),
+                        )),
+                    }
                 }
             }
             Some("thinking") => {

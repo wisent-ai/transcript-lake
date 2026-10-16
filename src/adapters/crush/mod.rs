@@ -11,6 +11,9 @@
 //! text {text, hidden?}, reasoning {thinking}, tool_call {id, name, input},
 //! tool_result {tool_call_id, name, content, is_error}, finish {reason, time},
 //! image_url, binary). Sessions live in `sessions (id, title, ...)`.
+//! Only exact user and assistant roles become turns; an unfamiliar role is
+//! metadata, never a presumed user turn. A role alone does not establish
+//! personal authorship for a style corpus.
 use std::path::{Path, PathBuf};
 
 use serde_json::{Map, Value};
@@ -131,10 +134,10 @@ fn load(ctx: &ParserCtx) -> Result<Vec<RawEvent>> {
 }
 
 fn part_events(ctx: &ParserCtx, role: &str, parts: &Value, ts: Option<String>) -> Vec<RawEvent> {
-    let speaker = if role == "assistant" {
-        "assistant"
-    } else {
-        "user"
+    let speaker = match role {
+        "assistant" => Some("assistant"),
+        "user" => Some("user"),
+        _ => None,
     };
     let mut events = Vec::new();
     for part in parts.as_array().into_iter().flatten() {
@@ -148,7 +151,16 @@ fn part_events(ctx: &ParserCtx, role: &str, parts: &Value, ts: Option<String>) -
                     Some(text) if hidden => {
                         events.push(meta(ctx, ts.clone(), "hidden_text", text, Map::new()))
                     }
-                    Some(text) => events.push(event(ctx, ts.clone(), speaker, text)),
+                    Some(text) => match speaker {
+                        Some(role) => events.push(event(ctx, ts.clone(), role, text)),
+                        None => events.push(meta(
+                            ctx,
+                            ts.clone(),
+                            "unknown_message_role",
+                            text,
+                            Map::new(),
+                        )),
+                    },
                     None => {}
                 }
             }

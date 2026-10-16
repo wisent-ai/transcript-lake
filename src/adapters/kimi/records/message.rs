@@ -58,7 +58,7 @@ pub(super) fn map_message(
         .filter(|value| value.is_object())
         .and_then(|origin| text_field(origin, "kind"));
     if role == "user" {
-        if let Some(origin) = origin.filter(|origin| origin != "user") {
+        if let Some(origin) = origin.as_deref().filter(|origin| *origin != "user") {
             // Injections and background-task notifications are synthetic context,
             // not turns.
             let mut event = make("meta", &text);
@@ -66,7 +66,13 @@ pub(super) fn map_message(
             event.extra.insert("origin".into(), Value::from(origin));
             return vec![event];
         }
-        return vec![make("user", &text)];
+        let mut event = make("user", &text);
+        if origin.as_deref() == Some("user") {
+            event
+                .extra
+                .insert("attribution".into(), Value::from("user"));
+        }
+        return vec![event];
     }
     if role == "assistant" {
         return vec![make("assistant", &text)];

@@ -27,7 +27,7 @@ pub(super) fn parts(content: Option<&Value>) -> Vec<Value> {
     }
 }
 
-/// The events of parts spoken by `speaker` (`user` or `assistant`).
+/// The events of parts spoken by `speaker` (`user`, `assistant` or `tool_result`).
 pub(super) fn part_events(
     ctx: &ParserCtx,
     speaker: &str,

@@ -1,4 +1,4 @@
-use serde_json::json;
+use serde_json::{json, Value};
 use std::{
     fs,
     path::Path,
@@ -72,6 +72,58 @@ pub fn run(root: &Path, name: &str, args: &[&str], environment: &[(&str, &Path)]
     record["stderr"] = json!(String::from_utf8_lossy(&output.stderr));
     retain(&record);
     output
+}
+
+pub fn show_retains_canonical_extra(
+    root: &Path,
+    lake: &str,
+    session: &str,
+    user_text: &str,
+    canonical: &[Value],
+    environment: &[(&str, &Path)],
+) {
+    let source = canonical
+        .iter()
+        .find(|event| {
+            event["session_id"] == session
+                && event["event_type"] == "user"
+                && event["text"] == user_text
+        })
+        .expect("canonical user event");
+    assert!(
+        source["extra"].is_object(),
+        "canonical user metadata is not an object: {source}"
+    );
+    let output = run(
+        root,
+        "show-user",
+        &[
+            "--data-dir",
+            lake,
+            "show",
+            session,
+            "--include",
+            "user",
+            "--json",
+        ],
+        environment,
+    );
+    assert!(
+        output.status.success(),
+        "show user events: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let shown: Value = serde_json::from_slice(&output.stdout).expect("show JSON");
+    let turn = shown["events"]
+        .as_array()
+        .expect("shown events")
+        .iter()
+        .find(|event| event["text"] == user_text)
+        .expect("shown user turn");
+    assert_eq!(
+        turn["extra"], source["extra"],
+        "show lost canonical attribution: {turn}"
+    );
 }
 
 pub fn directory() -> std::path::PathBuf {

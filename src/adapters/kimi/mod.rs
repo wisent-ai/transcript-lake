@@ -7,8 +7,9 @@
 //!   metadata {protocol_version, app_version, created_at(epoch ms)}
 //!   config.update {profileName, systemPrompt}          -> meta only, prompt dropped
 //!   context.append_message {message:{role, content:[{type:'text', text}],
-//!     origin:{kind}}, time} — origin.kind 'user' is the human turn; 'injection'
-//!     and 'background_task' are synthetic context and become meta events.
+//!     origin:{kind}}, time} — origin.kind 'user' is the human turn and
+//!     sets extra.attribution=user; an absent origin does not prove authorship.
+//!     'injection' and 'background_task' are synthetic context and become meta.
 //!   turn.prompt / turn.steer duplicate append_message one-to-one -> skipped.
 //!   context.append_loop_event {event:{type}, time} carries the assistant loop:
 //!     content.part {part:{type:'text'|'think'}}         (each part arrives complete)

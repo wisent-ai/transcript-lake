@@ -22,6 +22,9 @@
 //!     compaction / snapshot / step-start parts).
 //! The database is one entry: every session's events are read whole, each
 //! carrying its session id and directory.
+//! Only exact user and assistant roles become turns. An unknown role stays
+//! metadata, and a synthetic text part stays metadata even under a user role.
+//! The role alone is not recorded personal authorship for a style corpus.
 use std::path::{Path, PathBuf};
 
 use serde_json::{Map, Value};
@@ -156,15 +159,19 @@ pub(crate) fn part_events(
     ts: Option<String>,
 ) -> Vec<RawEvent> {
     let speaker = match message.get("role").and_then(Value::as_str) {
-        Some("assistant") => "assistant",
-        _ => "user",
+        Some("assistant") => Some("assistant"),
+        Some("user") => Some("user"),
+        _ => None,
     };
     match part.get("type").and_then(Value::as_str) {
         Some("text") => {
             let synthetic = part.get("synthetic").and_then(Value::as_bool) == Some(true);
             match text_field(part, "text") {
                 Some(text) if synthetic => vec![meta(ctx, ts, "synthetic_text", text, Map::new())],
-                Some(text) => vec![event(ctx, ts, speaker, text)],
+                Some(text) => match speaker {
+                    Some(role) => vec![event(ctx, ts, role, text)],
+                    None => vec![meta(ctx, ts, "unknown_message_role", text, Map::new())],
+                },
                 None => Vec::new(),
             }
         }

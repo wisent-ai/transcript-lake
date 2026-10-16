@@ -9,11 +9,10 @@
 //!   {role, parts}, usageMetadata?, model?, toolCallResult?: {callId,
 //!   responseParts, resultDisplay, error, status}, systemPayload?}` with type
 //!   user | assistant | tool_result | system.
-//! A user record without a subtype is the person's prompt, as are
-//! `mid_turn_user_message` and `realtime_message`; every other user subtype
-//! (notification, cron, goal_runtime, agent_mention, agent_message) is input
-//! the harness wrote itself and becomes metadata named by the subtype. System
-//! records become metadata carrying their subtype.
+//! A user-role record is authored only when the source explicitly marks
+//! `provenance: real_user`. Qwen also writes goal, agent and system material
+//! as user-role records; a missing provenance is unknown, not an author.
+//! Non-author user-role records remain metadata with their source labels.
 use std::path::{Path, PathBuf};
 
 use serde_json::{Map, Value};
@@ -25,9 +24,6 @@ use crate::adapters::common::{
     tool_result,
 };
 use crate::types::{Adapter, Parser, ParserCtx, RawEvent, Reading, SessionEntry};
-
-/// User subtypes that carry the person's own words.
-const PERSON_SUBTYPES: &[&str] = &["mid_turn_user_message", "realtime_message"];
 
 pub struct Qwen;
 
@@ -92,18 +88,46 @@ impl Parser for QwenParser {
         };
         let ts = text_field(&record, "timestamp");
         let subtype = record.get("subtype").and_then(Value::as_str);
+        let provenance = text_field(&record, "provenance");
         let content = parts(record.get("message"));
         let ctx = &self.ctx;
+        let message_role = record
+            .get("message")
+            .and_then(|message| message.get("role"))
+            .and_then(Value::as_str);
         let mut events = match (record.get("type").and_then(Value::as_str), subtype) {
-            (Some("user"), Some(written)) if !PERSON_SUBTYPES.contains(&written) => {
+            (Some("user"), _) if message_role == Some("tool") => {
+                part_events(ctx, "tool_result", &content, ts.clone())
+            }
+            (Some("user"), _) if provenance.as_deref() == Some("real_user") => {
+                let mut events = part_events(ctx, "user", &content, ts.clone());
+                for event in &mut events {
+                    if event.event_type == "user" {
+                        event
+                            .extra
+                            .insert("attribution".into(), Value::String("user".into()));
+                        event
+                            .extra
+                            .insert("provenance".into(), Value::String("real_user".into()));
+                    }
+                }
+                events
+            }
+            (Some("user"), _) => {
                 let words = content
                     .iter()
                     .map(|part| as_text(part.get("text")))
                     .collect::<Vec<_>>()
                     .join("\n");
-                vec![meta(ctx, ts.clone(), written, words, Map::new())]
+                let mut fields = Map::new();
+                if let Some(written) = subtype {
+                    fields.insert("subtype".into(), Value::String(written.to_owned()));
+                }
+                if let Some(source) = provenance.as_deref() {
+                    fields.insert("provenance".into(), Value::String(source.to_owned()));
+                }
+                vec![meta(ctx, ts.clone(), "unattributed_user", words, fields)]
             }
-            (Some("user"), _) => part_events(ctx, "user", &content, ts.clone()),
             (Some("assistant"), _) => {
                 let mut events = part_events(ctx, "assistant", &content, ts.clone());
                 if let Some(metadata) = record
@@ -120,7 +144,7 @@ impl Parser for QwenParser {
                 events
             }
             (Some("tool_result"), _) if !content.is_empty() => {
-                part_events(ctx, "user", &content, ts.clone())
+                part_events(ctx, "tool_result", &content, ts.clone())
             }
             (Some("tool_result"), _) => {
                 let result = record.get("toolCallResult");

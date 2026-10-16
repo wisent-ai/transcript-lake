@@ -22,6 +22,10 @@
 //!   custom_message (customType, content string), custom (customType, data),
 //!   compaction (summary, tokensBefore, firstKeptEntryId).
 //! Unknown record or block types become meta events tagged in extra.
+//! User-role messages attributed to the agent, or recorded as synthetic or
+//! steering without explicit user attribution, remain visible as meta events.
+//! The native sender flags and role stay in `extra`; text is never used to
+//! guess who authored it.
 use std::path::{Path, PathBuf};
 
 use crate::adapters::common::{dirent_type, read_dirents};

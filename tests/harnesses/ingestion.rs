@@ -1,7 +1,10 @@
 //! Real native-store expectations: runtime, root, session_id, masked user_text.
 //! Vendor stores remain read-only; writes stay in the retained build directory.
 mod devin;
+mod droid;
 mod evidence;
+mod kimi;
+mod qwen;
 use serde::Deserialize;
 use serde_json::Value;
 use std::{
@@ -108,6 +111,14 @@ fn exercise(work: &Path, case: &Expected, environment: &[(&str, &Path)]) -> Vec<
         }),
         "{} did not preserve the independently expected user message",
         case.runtime
+    );
+    evidence::show_retains_canonical_extra(
+        work,
+        lake_path,
+        &case.session_id,
+        &case.user_text,
+        &persisted,
+        environment,
     );
     let repeat = evidence::run(work, "adopt-repeat", &args, environment);
     assert!(
