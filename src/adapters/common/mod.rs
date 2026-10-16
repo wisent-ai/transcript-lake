@@ -72,7 +72,7 @@ pub(crate) fn read_dirents(dir: &Path) -> Vec<(String, fs::FileType)> {
         };
         out.push((entry.file_name().to_string_lossy().to_string(), file_type));
     }
-    out.sort_unstable_by(|left, right| left.0.cmp(&right.0));
+    out.sort_unstable_by(|(left, _), (right, _)| left.cmp(right));
     out
 }
 
@@ -118,12 +118,17 @@ pub(crate) fn files_with_suffix(dir: &Path, suffix: &str) -> Vec<PathBuf> {
 }
 
 /// `dir` when it is a directory: the one root a harness keeps all its
-/// sessions under.
+/// sessions under. A root that is not there has none; one that cannot be
+/// examined is said on stderr with its cause, as an entry the scan cannot
+/// read is, so its sessions are not read as never having existed.
 pub(crate) fn existing_root(dir: PathBuf) -> Vec<PathBuf> {
-    if dir.is_dir() {
-        vec![dir]
-    } else {
-        Vec::new()
+    match fs::metadata(&dir) {
+        Ok(meta) if meta.is_dir() => vec![dir],
+        Err(error) if error.kind() != std::io::ErrorKind::NotFound => {
+            eprintln!("sessions: cannot examine {}: {error}", dir.display());
+            Vec::new()
+        }
+        Ok(_) | Err(_) => Vec::new(),
     }
 }
 
