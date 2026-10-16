@@ -55,6 +55,10 @@ path = "tests/codex/completed_user_item.rs"
 name = "labels-source-origin"
 path = "tests/labels/source_origin.rs"
 
+[[test]]
+name = "claude-usage-parts"
+path = "tests/claude/usage_parts.rs"
+
 [dependencies]
 # preserve_order keeps `extra` in adapter insertion order, so a ported
 # partition line is byte-identical to the one the previous implementation wrote.
