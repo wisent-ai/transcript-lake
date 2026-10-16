@@ -30,9 +30,26 @@ pub enum LabelOrigin {
 }
 
 impl LabelOrigin {
+    /// Every origin `named` accepts, in the order a refusal names them.
+    const ALL: &'static [LabelOrigin] = &[
+        LabelOrigin::Manual,
+        LabelOrigin::Human,
+        LabelOrigin::Model,
+        LabelOrigin::Brama,
+    ];
+
     /// The origin called `name`, or why no origin is.
     fn named(name: &str) -> std::result::Result<LabelOrigin, serde_json::Error> {
         serde_json::from_value(Value::String(name.to_string()))
+    }
+
+    /// The origins' stored spellings, comma separated.
+    fn listed() -> String {
+        Self::ALL
+            .iter()
+            .map(|origin| origin.name())
+            .collect::<Vec<_>>()
+            .join(", ")
     }
 
     /// The spelling a label record stores.
@@ -82,8 +99,9 @@ pub fn normalize_source(value: Option<&str>) -> Result<String> {
     };
     if LabelOrigin::named(origin).is_err() || detail.is_some_and(|detail| !valid_detail(detail)) {
         return Err(Error(format!(
-            "--source must be manual, human, model or brama, with an optional :detail of \
-             letters, digits, '.', '_', '/' or '-'; got {source:?}"
+            "--source must be one of {}, with an optional :detail of \
+             letters, digits, '.', '_', '/' or '-'; got {source:?}",
+            LabelOrigin::listed()
         )));
     }
     Ok(source.to_string())
@@ -129,11 +147,7 @@ pub fn label_record(
         aspect: aspect.to_string(),
         value: Some(value.to_string()),
         note,
-        source: if source.is_empty() {
-            LabelOrigin::Manual.name()
-        } else {
-            source.to_string()
-        },
+        source: source.to_string(),
     }
 }
 

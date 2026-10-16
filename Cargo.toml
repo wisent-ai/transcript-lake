@@ -51,6 +51,10 @@ path = "tests/masking/declaration.rs"
 name = "codex-completed-user-item"
 path = "tests/codex/completed_user_item.rs"
 
+[[test]]
+name = "labels-source-origin"
+path = "tests/labels/source_origin.rs"
+
 [dependencies]
 # preserve_order keeps `extra` in adapter insertion order, so a ported
 # partition line is byte-identical to the one the previous implementation wrote.
