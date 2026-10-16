@@ -27,10 +27,25 @@ pub(super) enum Outcome {
 pub(super) fn publish_ack(ready_dir: &Path, segment: &Segment, commit: &Value) -> Result<()> {
     let acked_dir = ready_dir
         .parent()
-        .unwrap_or_else(|| Path::new("."))
+        .ok_or_else(|| {
+            Error(format!(
+                "hook segment directory {} has no parent to hold acknowledgements",
+                ready_dir.display()
+            ))
+        })?
         .join("acked");
     let path = acked_dir.join(ack_name(&segment.segment_id));
-    let outputs = commit.get("outputs").cloned().unwrap_or(Value::Null);
+    // The acknowledgement names the commit and its outputs; a commit record
+    // without them is a broken cursor, said with the record, never
+    // acknowledged as a commit of nothing.
+    let field = |key: &str| {
+        commit.get(key).cloned().ok_or_else(|| {
+            Error(format!(
+                "hook segment {} commit record has no {key}: {commit}",
+                segment.segment_id
+            ))
+        })
+    };
     let ack = json!({
         "protocol": ACK_PROTOCOL,
         "segmentId": segment.segment_id,
@@ -38,8 +53,8 @@ pub(super) fn publish_ack(ready_dir: &Path, segment: &Segment, commit: &Value) -
         "sourceSize": segment.source_size,
         "eventCount": segment.event_count,
         "payloadSha256": segment.payload_sha256,
-        "lakeCommitId": commit.get("commitId").cloned().unwrap_or(Value::Null),
-        "outputs": outputs,
+        "lakeCommitId": field("commitId")?,
+        "outputs": field("outputs")?,
     });
     let content = format!("{}\n", serde_json::to_string_pretty(&ack)?);
     if !path.exists() {
@@ -53,25 +68,23 @@ pub(super) fn publish_ack(ready_dir: &Path, segment: &Segment, commit: &Value) -
             path.display()
         ))
     })?;
-    let prior = parse(&raw);
     // A conflict is a disagreement about the DATA: a different source, a different
     // payload, a different event count, or different outputs. The commit id
     // identifies the process that wrote them, and one segment can be committed by
     // more than one process — a cursor restored from backup, a rebuild, or a
     // resumed stream. A differing process id alone is not a data conflict.
-    let agrees = prior.as_ref().is_some_and(|prior| {
+    let prior = parse(&raw).filter(|prior| {
         prior.get("sourceSha256") == ack.get("sourceSha256")
             && prior.get("payloadSha256") == ack.get("payloadSha256")
             && prior.get("eventCount") == ack.get("eventCount")
             && same_outputs(prior.get("outputs"), ack.get("outputs"))
     });
-    if !agrees {
+    let Some(prior) = prior else {
         return Err(Error(format!(
             "hook segment acknowledgement conflict: {}",
             path.display()
         )));
-    }
-    let prior = prior.unwrap_or(Value::Null);
+    };
     if prior.get("lakeCommitId") == ack.get("lakeCommitId") {
         return Ok(());
     }
@@ -90,7 +103,12 @@ pub(super) fn process_segment(
         warn(&format!("invalid closed hook segment: {}", path.display()));
         return Ok(Outcome::Invalid);
     };
-    let ready_dir = path.parent().unwrap_or_else(|| Path::new("."));
+    let ready_dir = path.parent().ok_or_else(|| {
+        Error(format!(
+            "closed hook segment {} has no directory",
+            path.display()
+        ))
+    })?;
     let key = format!("hooks:{}", segment.segment_id);
     if let Some(CursorRecord::Segment(existing)) = cursors.get(&key)? {
         let committed = existing.get("kind").and_then(Value::as_str) == Some(COMMIT_KIND)
