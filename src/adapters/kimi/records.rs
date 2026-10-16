@@ -3,18 +3,20 @@
 //! block contributes, down to the tool result that reports its own failure.
 
 use std::collections::HashMap;
+use std::path::PathBuf;
 
 use serde_json::{Map, Value};
 
 use crate::types::{Parser, ParserCtx, RawEvent};
 
-use crate::adapters::common::{int_field, iso_epoch_millis, text_field, Usage};
+use crate::adapters::common::{appended_record, int_field, iso_epoch_millis, text_field, Usage};
 
 mod message;
 
 use message::{is_truthy, map_message};
 
 pub(super) struct KimiParser {
+    file: PathBuf,
     session_id: Option<String>,
     project: Option<String>,
     last_ts: Option<String>,
@@ -28,6 +30,7 @@ impl KimiParser {
     /// Tool names arrive with the call and are needed again at its result.
     pub(super) fn new(ctx: ParserCtx) -> Self {
         Self {
+            file: ctx.file,
             session_id: ctx.session_id.filter(|value| !value.is_empty()),
             project: ctx.project.filter(|value| !value.is_empty()),
             last_ts: None,
@@ -39,10 +42,7 @@ impl KimiParser {
 
 impl Parser for KimiParser {
     fn on_line(&mut self, line: &str) -> Vec<RawEvent> {
-        if line.trim().is_empty() {
-            return Vec::new();
-        }
-        let Ok(rec) = serde_json::from_str::<Value>(line) else {
+        let Some(rec) = appended_record(&self.file, line) else {
             return Vec::new();
         };
         if !rec.is_object() {
