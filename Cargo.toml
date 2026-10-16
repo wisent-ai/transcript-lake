@@ -47,6 +47,10 @@ path = "tests/devin/damaged_node.rs"
 name = "masking-declaration"
 path = "tests/masking/declaration.rs"
 
+[[test]]
+name = "codex-completed-user-item"
+path = "tests/codex/completed_user_item.rs"
+
 [dependencies]
 # preserve_order keeps `extra` in adapter insertion order, so a ported
 # partition line is byte-identical to the one the previous implementation wrote.

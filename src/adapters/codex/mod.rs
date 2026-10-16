@@ -6,10 +6,11 @@
 //! Adapters emit UNMASKED text (the stream masks) and never do IO in `on_line`;
 //! malformed lines are tolerated silently. Envelope per line:
 //! `{ timestamp, type, payload }`. Verified on live files, old and current CLI
-//! versions: content is duplicated between the response_item stream and event_msg
-//! (user_message / agent_message / agent_reasoning). To avoid double counting we take
-//! user turns from event_msg/user_message (response_item role=user also carries
-//! injected environment context) and everything else from response_item records.
+//! versions: content is duplicated between the response_item stream and event_msg.
+//! To avoid double counting we take user turns from event_msg — `user_message`
+//! in older rollouts, the completed item of type `UserMessage` in current ones,
+//! which write no `user_message` (response_item role=user also carries injected
+//! environment context) — and everything else from response_item records.
 use std::path::{Path, PathBuf};
 
 use regex::Regex;

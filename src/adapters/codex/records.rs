@@ -141,6 +141,15 @@ impl CodexParser {
                 };
                 vec![make("user", &text)]
             }
+            // Current Codex writes no user_message: the operator's turn is the
+            // completed item whose type is UserMessage, without the injected
+            // context its response_item user message carries.
+            Some("item_completed") => match payload.get("item") {
+                Some(item) if text_field(item, "type").as_deref() == Some("UserMessage") => {
+                    vec![make("user", &message::content_text(item.get("content")))]
+                }
+                _ => Vec::new(),
+            },
             Some("token_count") => {
                 let Some(info) = payload.get("info").filter(|value| value.is_object()) else {
                     return Vec::new();

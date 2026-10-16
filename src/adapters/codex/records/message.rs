@@ -14,25 +14,12 @@ impl CodexParser {
         let Some(role) = text_field(payload, "role") else {
             return Vec::new();
         };
-        // Role user duplicates event_msg/user_message and additionally carries injected
+        // Role user duplicates the event_msg user turn and additionally carries injected
         // environment/permission context — dropped here to keep user turns clean.
         if role == "user" {
             return Vec::new();
         }
-        let mut parts = Vec::new();
-        if let Some(Value::Array(blocks)) = payload.get("content") {
-            for block in blocks {
-                if !block.is_object() {
-                    continue;
-                }
-                if let Some(Value::String(text)) = block.get("text") {
-                    if !text.trim().is_empty() {
-                        parts.push(text.clone());
-                    }
-                }
-            }
-        }
-        let text = parts.join("\n");
+        let text = content_text(payload.get("content"));
         let make = self.maker(ts);
         if role == "assistant" {
             if text.is_empty() {
@@ -50,6 +37,23 @@ impl CodexParser {
         event.extra.insert("role".into(), Value::from(role));
         vec![event]
     }
+}
+
+/// The non-blank `text` of every object block in a Codex `content` array,
+/// one per line; a response item's message and a completed `UserMessage`
+/// item carry their words in the same shape.
+pub(super) fn content_text(content: Option<&Value>) -> String {
+    let Some(Value::Array(blocks)) = content else {
+        return String::new();
+    };
+    blocks
+        .iter()
+        .filter_map(|block| match block.get("text") {
+            Some(Value::String(text)) if !text.trim().is_empty() => Some(text.as_str()),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// `function_call_output.output` is usually a plain string; some CLI versions wrap it
