@@ -2,13 +2,16 @@
 //! project and model it has seen so far, and what each record type contributes,
 //! including the tool output a reply only references.
 
+use std::path::PathBuf;
+
 use serde_json::{Map, Value};
 
 use crate::types::{Parser, ParserCtx, RawEvent};
 
-use crate::adapters::common::{int_field, text_field, Usage};
+use crate::adapters::common::{appended_record, int_field, text_field, Usage};
 
 pub(super) struct CodexParser {
+    file: PathBuf,
     session_id: Option<String>,
     project: Option<String>,
     model: Option<String>,
@@ -23,6 +26,7 @@ impl CodexParser {
     /// no answer at all and is treated as unknown, exactly as the driver did.
     pub(super) fn new(ctx: ParserCtx) -> Self {
         Self {
+            file: ctx.file,
             session_id: ctx.session_id.filter(|value| !value.is_empty()),
             project: ctx.project.filter(|value| !value.is_empty()),
             model: None,
@@ -34,10 +38,7 @@ impl CodexParser {
 
 impl Parser for CodexParser {
     fn on_line(&mut self, line: &str) -> Vec<RawEvent> {
-        if line.trim().is_empty() {
-            return Vec::new();
-        }
-        let Ok(rec) = serde_json::from_str::<Value>(line) else {
+        let Some(rec) = appended_record(&self.file, line) else {
             return Vec::new();
         };
         if !rec.is_object() {

@@ -16,7 +16,8 @@ use std::path::{Path, PathBuf};
 use serde_json::{Map, Value};
 
 use crate::adapters::common::{
-    entry, event, int_field, is_file, meta, subdirectories, text_field, tool_result, usage,
+    appended_record, entry, event, int_field, is_file, meta, subdirectories, text_field,
+    tool_result, usage,
 };
 use crate::types::{Adapter, Parser, ParserCtx, RawEvent, Reading, SessionEntry};
 
@@ -87,7 +88,7 @@ struct GptmeParser {
 
 impl Parser for GptmeParser {
     fn on_line(&mut self, line: &str) -> Vec<RawEvent> {
-        let Ok(message) = serde_json::from_str::<Value>(line) else {
+        let Some(message) = appended_record(&self.ctx.file, line) else {
             return Vec::new();
         };
         let ctx = &self.ctx;

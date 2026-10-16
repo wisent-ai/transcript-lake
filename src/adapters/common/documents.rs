@@ -90,3 +90,24 @@ pub(crate) fn read_json_lines(path: &Path) -> Result<Vec<Value>> {
     }
     Ok(records)
 }
+
+/// One complete line a streaming parser was handed, as JSON. A blank line
+/// carries no record; a line that is not JSON carries none either and is said
+/// on stderr with the transcript it is in and the parse error, as
+/// [`read_json_lines`] says one, so a damaged transcript does not read as a
+/// shorter one.
+pub(crate) fn appended_record(file: &Path, line: &str) -> Option<Value> {
+    if line.trim().is_empty() {
+        return None;
+    }
+    match serde_json::from_str(line) {
+        Ok(record) => Some(record),
+        Err(error) => {
+            eprintln!(
+                "sessions: a line of {} is not JSON and carries no record: {error}",
+                file.display()
+            );
+            None
+        }
+    }
+}

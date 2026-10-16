@@ -2,13 +2,16 @@
 //! and project it has seen so far, and what a user record contributes -
 //! including a tool result and the persisted output it may only reference.
 
+use std::path::PathBuf;
+
 use serde_json::{Map, Value};
 
 use crate::types::{Parser, ParserCtx, RawEvent};
 
-use crate::adapters::common::text_field;
+use crate::adapters::common::{appended_record, text_field};
 
 pub(super) struct ClaudeParser {
+    file: PathBuf,
     session_id: Option<String>,
     project: Option<String>,
     last_ts: Option<String>,
@@ -19,6 +22,7 @@ impl ClaudeParser {
     /// no answer at all and is treated as unknown, exactly as the driver did.
     pub(super) fn new(ctx: ParserCtx) -> Self {
         Self {
+            file: ctx.file,
             session_id: ctx.session_id.filter(|value| !value.is_empty()),
             project: ctx.project.filter(|value| !value.is_empty()),
             last_ts: None,
@@ -28,10 +32,7 @@ impl ClaudeParser {
 
 impl Parser for ClaudeParser {
     fn on_line(&mut self, line: &str) -> Vec<RawEvent> {
-        if line.trim().is_empty() {
-            return Vec::new();
-        }
-        let Ok(rec) = serde_json::from_str::<Value>(line) else {
+        let Some(rec) = appended_record(&self.file, line) else {
             return Vec::new();
         };
         if !rec.is_object() {

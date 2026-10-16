@@ -2,15 +2,18 @@
 //! project and timestamp it has seen so far, holding back the records that
 //! arrive before the first stamped one, and what each record type contributes.
 
+use std::path::PathBuf;
+
 use serde_json::{Map, Value};
 
 use crate::types::{Parser, ParserCtx, RawEvent};
 
-use crate::adapters::common::{iso_epoch_millis, js_string, prune, text_joined};
+use crate::adapters::common::{appended_record, iso_epoch_millis, js_string, prune, text_joined};
 
 mod message;
 
 pub(super) struct OmpParser {
+    file: PathBuf,
     project: Option<String>,
     session_id: Option<String>,
     last_ts: Option<String>,
@@ -24,6 +27,7 @@ impl OmpParser {
     /// timestamp and working directory only arrive later in the file.
     pub(super) fn new(ctx: ParserCtx) -> Self {
         Self {
+            file: ctx.file,
             project: ctx.project,
             session_id: ctx.session_id,
             last_ts: None,
@@ -36,10 +40,7 @@ impl OmpParser {
 
 impl Parser for OmpParser {
     fn on_line(&mut self, line: &str) -> Vec<RawEvent> {
-        if line.trim().is_empty() {
-            return Vec::new();
-        }
-        let Ok(rec) = serde_json::from_str::<Value>(line) else {
+        let Some(rec) = appended_record(&self.file, line) else {
             return Vec::new();
         };
         if !rec.is_object() {
