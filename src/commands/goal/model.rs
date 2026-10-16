@@ -12,7 +12,7 @@ use std::time::UNIX_EPOCH;
 
 use sha2::{Digest, Sha256};
 
-use crate::util::{find_on_path, home_dir, Error, Result};
+use crate::util::{find_on_path, Error, Result};
 
 use super::{
     ModelValidationStamp, MODEL_NAME, MODEL_REVISION, MODEL_SHA256, PROMPT_NAME, PROMPT_SHA256,
@@ -45,6 +45,10 @@ pub(super) fn resolve_runtime() -> Result<PathBuf> {
     })
 }
 
+/// The goal model: the file `TRANSCRIPT_LAKE_GOAL_MODEL` names, checked, or
+/// Transcript Lake's own copy under its data directory, fetched from the
+/// published revision when it holds none or holds one that fails its check.
+/// No other product's cache or storage is read.
 pub(super) fn resolve_model(data_dir: &Path) -> Result<PathBuf> {
     if let Some(path) = env::var_os("TRANSCRIPT_LAKE_GOAL_MODEL")
         .map(PathBuf::from)
@@ -53,42 +57,35 @@ pub(super) fn resolve_model(data_dir: &Path) -> Result<PathBuf> {
         validate_model(data_dir, &path)?;
         return Ok(path);
     }
-    let shared = home_dir()
-        .join("Library/Caches/ai.wisent.jeden.desktop/goal-model")
-        .join(MODEL_NAME);
-    if validate_model(data_dir, &shared).is_ok() {
-        return Ok(shared);
-    }
     let cached = artifact_dir(data_dir).join(MODEL_NAME);
-    if validate_model(data_dir, &cached).is_ok() {
-        return Ok(cached);
-    }
-    download(
-        &format!("https://huggingface.co/{REPOSITORY}/resolve/{MODEL_REVISION}/{MODEL_NAME}"),
-        &cached,
-    )?;
-    validate_model(data_dir, &cached)?;
-    Ok(cached)
+    owned_copy(&cached, MODEL_NAME, |path| validate_model(data_dir, path))
 }
 
+/// The system prompt published beside the model, kept beside Transcript
+/// Lake's own copy of it.
 pub(super) fn resolve_prompt(data_dir: &Path) -> Result<PathBuf> {
-    let stado = home_dir()
-        .join(".stado/local-storage/ecosystem/releases/jeden-desktop/models/goal-qwen3-4b")
-        .join(MODEL_SHA256)
-        .join(PROMPT_NAME);
-    if validate_digest(&stado, PROMPT_SHA256, "system prompt").is_ok() {
-        return Ok(stado);
-    }
     let cached = artifact_dir(data_dir).join(PROMPT_NAME);
-    if validate_digest(&cached, PROMPT_SHA256, "system prompt").is_ok() {
-        return Ok(cached);
+    owned_copy(&cached, PROMPT_NAME, |path| {
+        validate_digest(path, PROMPT_SHA256, "system prompt")
+    })
+}
+
+/// `cached` when `check` accepts it; otherwise the published `name` fetched
+/// into it and checked. A copy that fails its check is said on stderr before
+/// it is fetched again, so a replaced artifact is never silent.
+fn owned_copy(cached: &Path, name: &str, check: impl Fn(&Path) -> Result<()>) -> Result<PathBuf> {
+    if cached.exists() {
+        match check(cached) {
+            Ok(()) => return Ok(cached.to_path_buf()),
+            Err(Error(why)) => eprintln!("{why}; fetching {name} again"),
+        }
     }
     download(
-        &format!("https://huggingface.co/{REPOSITORY}/resolve/{MODEL_REVISION}/{PROMPT_NAME}"),
-        &cached,
+        &format!("https://huggingface.co/{REPOSITORY}/resolve/{MODEL_REVISION}/{name}"),
+        cached,
     )?;
-    validate_digest(&cached, PROMPT_SHA256, "system prompt")?;
-    Ok(cached)
+    check(cached)?;
+    Ok(cached.to_path_buf())
 }
 
 pub(super) fn artifact_dir(data_dir: &Path) -> PathBuf {
