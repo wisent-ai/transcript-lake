@@ -75,6 +75,7 @@ fn partitions(root: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
 
 fn adopt(work: &Path, data: &Path, root: &Path) -> Vec<Value> {
     let lake = work.join("lake");
+    let formats = evidence::no_secret_classes(work);
     let output = evidence::run(
         work,
         "adopt",
@@ -88,7 +89,10 @@ fn adopt(work: &Path, data: &Path, root: &Path) -> Vec<Value> {
             root.to_str().expect("UTF-8 native root"),
             "--json",
         ],
-        &[("XDG_DATA_HOME", data)],
+        &[
+            ("XDG_DATA_HOME", data),
+            ("TRANSCRIPT_LAKE_SECRET_FORMATS", formats.as_path()),
+        ],
     );
     assert!(
         output.status.success(),

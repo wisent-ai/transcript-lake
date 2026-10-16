@@ -8,7 +8,9 @@
 //! node order flattened all of that into one session and emitted every copy.
 //!
 //! The live conversation is the chain `sessions.main_chain_id` heads, read
-//! head first so the newest copy of a repeated message is the one kept. Each
+//! root first so a repeated message is kept at its first copy: a compacted
+//! replay re-sends an earlier turn under its `message_id`, and the turn was
+//! said when its first copy was written, not when the replay was. Each
 //! declared subagent head names a side chain; what is left afterwards is a
 //! rewound branch, named by its root-most node nobody else covered. A node a
 //! chain already covered, or a message a chain already kept, is never emitted
@@ -75,10 +77,9 @@ fn walk(nodes: &BTreeMap<i64, Node>, head: i64) -> Result<Vec<i64>, String> {
 
 /// Keeps, from a head-first walk (`walk`'s order: head at index zero, root
 /// last), every node whose message no chain kept before and that no chain
-/// covered before; marks all of them covered. Walking head first is what
-/// makes the newest copy of a repeated message the one kept; the kept list
-/// is then reversed, so the chain it returns runs root first, in
-/// conversation order.
+/// covered before; marks all of them covered. The walk is read root first,
+/// so the first copy of a repeated message is the one kept and the chain it
+/// returns runs root first, in conversation order.
 fn keep(
     nodes: &BTreeMap<i64, Node>,
     head_first: &[i64],
@@ -86,7 +87,7 @@ fn keep(
     kept_messages: &mut HashSet<String>,
 ) -> Vec<i64> {
     let mut kept = Vec::new();
-    for &id in head_first {
+    for &id in head_first.iter().rev() {
         if !covered.insert(id) {
             continue;
         }
@@ -101,7 +102,6 @@ fn keep(
         }
         kept.push(id);
     }
-    kept.reverse();
     kept
 }
 

@@ -71,12 +71,7 @@ fn usage_parts_are_carried_as_reported() {
     let work = evidence::directory();
     let (home, root) = store(&work);
     let lake = work.join("lake");
-    let formats = work.join("formats.json");
-    fs::write(
-        &formats,
-        r#"{"assignment":null,"token":null,"entropy":null}"#,
-    )
-    .expect("the secret formats declaration is written");
+    let formats = evidence::no_secret_classes(&work);
     let output = evidence::run(
         &work,
         "adopt-claude-usage-parts",

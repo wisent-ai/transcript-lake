@@ -62,6 +62,11 @@ fn a_damaged_chat_record_refuses_and_recovers_after_repair() {
     let work = evidence::directory();
     let root = store(&work);
     let lake = work.join("lake");
+    let formats = evidence::no_secret_classes(&work);
+    let environment = [
+        ("HOME", work.as_path()),
+        ("TRANSCRIPT_LAKE_SECRET_FORMATS", formats.as_path()),
+    ];
     let output = evidence::run(
         &work,
         "adopt-damaged-record",
@@ -75,7 +80,7 @@ fn a_damaged_chat_record_refuses_and_recovers_after_repair() {
             root.to_str().expect("UTF-8 native root"),
             "--json",
         ],
-        &[("HOME", work.as_path())],
+        &environment,
     );
     let said = String::from_utf8_lossy(&output.stderr);
     assert!(
@@ -112,7 +117,7 @@ fn a_damaged_chat_record_refuses_and_recovers_after_repair() {
             root.to_str().expect("UTF-8 native root"),
             "--json",
         ],
-        &[("HOME", work.as_path())],
+        &environment,
     );
     assert!(
         recovered.status.success(),
@@ -162,7 +167,7 @@ fn a_damaged_chat_record_refuses_and_recovers_after_repair() {
             root.to_str().expect("UTF-8 native root"),
             "--json",
         ],
-        &[("HOME", work.as_path())],
+        &environment,
     );
     assert!(
         replay.status.success(),

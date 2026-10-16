@@ -104,3 +104,16 @@ pub fn directory() -> std::path::PathBuf {
     eprintln!("retained journey: {}", root.display());
     root
 }
+
+/// Writes a secret formats declaration that recognises no class, so a
+/// journey's adopted words reach the Lake as written, and returns the path
+/// `TRANSCRIPT_LAKE_SECRET_FORMATS` names.
+pub fn no_secret_classes(root: &Path) -> std::path::PathBuf {
+    let declaration = root.join("formats.json");
+    fs::write(
+        &declaration,
+        json!({"assignment": null, "token": null, "entropy": null}).to_string(),
+    )
+    .expect("write the secret formats declaration");
+    declaration
+}

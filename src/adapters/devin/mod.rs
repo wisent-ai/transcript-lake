@@ -12,10 +12,11 @@
 //! node table in order is not the conversation: `chains` rebuilds the chain
 //! `sessions.main_chain_id` heads, each chain a `subagent_heads` row
 //! declares, and each branch a rewind left behind, reading a repeated
-//! `message_id` once at its newest copy. Nodes marked `is_system_prefix` are
-//! the rebuilt scaffolding; sessions marked `hidden` were removed from view
-//! by their owner and are not read. A side chain's events carry the parent
-//! session in `extra.parent_session` and the chain's name in `extra.chain`.
+//! `message_id` once at its first copy, when it was said. Nodes marked
+//! `is_system_prefix` are the rebuilt scaffolding; sessions marked `hidden`
+//! were removed from view by their owner and are not read. A side chain's
+//! events carry the parent session in `extra.parent_session` and the chain's
+//! name in `extra.chain`.
 mod chains;
 
 use std::collections::BTreeMap;

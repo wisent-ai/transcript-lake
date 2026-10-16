@@ -1,8 +1,9 @@
 //! Real CLI journey: a Junie transcript with a complete line that is not JSON
 //! is adopted with every readable event, and the damaged line is named on
 //! stderr with its file - it used to vanish, so the transcript read as a
-//! shorter one. The store is a Junie sessions directory written where
-//! `transcript-lake adopt --root` reads it; the journey, its inputs and
+//! shorter one. The store is a Junie sessions directory under the journey's
+//! home, at `.junie/sessions` where Junie discovery finds the root
+//! `transcript-lake adopt --root` names; the journey, its inputs and
 //! outputs are retained under the package's build directory by `evidence`.
 #[path = "../harnesses/evidence.rs"]
 mod evidence;
@@ -15,7 +16,7 @@ use serde_json::Value;
 const SESSION: &str = "junie-damaged-line";
 
 fn store(work: &Path) -> std::path::PathBuf {
-    let root = work.join("junie").join("sessions");
+    let root = work.join(".junie").join("sessions");
     let session = root.join(SESSION);
     fs::create_dir_all(&session).expect("the Junie session directory is created");
     fs::write(
@@ -60,6 +61,7 @@ fn a_damaged_line_is_named_and_the_rest_is_adopted() {
     let work = evidence::directory();
     let root = store(&work);
     let lake = work.join("lake");
+    let formats = evidence::no_secret_classes(&work);
     let output = evidence::run(
         &work,
         "adopt-damaged-line",
@@ -73,7 +75,10 @@ fn a_damaged_line_is_named_and_the_rest_is_adopted() {
             root.to_str().expect("UTF-8 native root"),
             "--json",
         ],
-        &[],
+        &[
+            ("HOME", work.as_path()),
+            ("TRANSCRIPT_LAKE_SECRET_FORMATS", formats.as_path()),
+        ],
     );
     let said = String::from_utf8_lossy(&output.stderr);
     assert!(output.status.success(), "adopt failed: {said}");

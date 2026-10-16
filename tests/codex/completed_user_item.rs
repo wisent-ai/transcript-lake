@@ -63,13 +63,7 @@ fn a_completed_user_item_is_the_operator_turn() {
     let work = evidence::directory();
     let (home, root) = store(&work);
     let lake = work.join("lake");
-    // No secret class is recognised, so the turn's words reach the Lake as written.
-    let formats = work.join("formats.json");
-    fs::write(
-        &formats,
-        r#"{"assignment":null,"token":null,"entropy":null}"#,
-    )
-    .expect("the secret formats declaration is written");
+    let formats = evidence::no_secret_classes(&work);
     let output = evidence::run(
         &work,
         "adopt-completed-user-item",
