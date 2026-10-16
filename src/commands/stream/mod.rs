@@ -10,10 +10,16 @@ use crate::util::{absolute, home_dir, write_json, Error, Result};
 
 fn perform_replay(source: Option<String>, data_dir: PathBuf) -> Result<i32> {
     let summary = run_replay(ReplayOptions { source, data_dir })?;
-    let partial = summary
-        .get("partial")
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
+    // The exit status is whether the replay was partial; a summary that does
+    // not say cannot be answered with success.
+    let partial = match summary.get("partial") {
+        Some(Value::Bool(partial)) => *partial,
+        other => {
+            return Err(Error(format!(
+                "the replay summary states no partial flag: {other:?}"
+            )))
+        }
+    };
     write_json(&summary)?;
     Ok(i32::from(partial))
 }
