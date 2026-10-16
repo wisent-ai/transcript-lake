@@ -38,6 +38,7 @@ pub const USAGE: &str = concat!(
     "Stream and recover:\n",
     "  stream [--json]                               follow source appends in real time\n",
     "  rebuild --to <empty-path> [--source <runtime>] replay history to a new Lake\n",
+    "  reconcile --source <runtime> [--apply] [--reindex] supersede rows the current adapter projects differently\n",
     "\n",
     "Discover and inspect:\n",
     "  paths [--json]                                resolved state and integration paths\n",
@@ -93,6 +94,7 @@ pub fn command_help(name: &str) -> Option<&'static str> {
         "status" => "status [--json]\n  Show partitions, cursor freshness, live stream state, and Oko freshness.",
         "stream" => "stream [--json]\n  Follow supported source files continuously and project each append directly into the Lake and Oko.",
         "rebuild" => "rebuild --to <empty-path> [--source <runtime>]\n  Recovery replay into a different empty root; never mutates the current Lake.",
+        "reconcile" => "reconcile --source <runtime> [--apply] [--reindex]\n  Replay every retained original of one runtime through the current adapter into a staging root and compare each canonical source partition with it. Prints one JSON report: unchanged, changed (rows superseded and replayed per partition, with its sessions), unprovable (no original on this machine reproduces the partition; kept and never reclassified) and refused (rows recorded on another machine).\n  --apply replaces every changed partition whole under the writer lease, moves the stream cursors to the replayed ones, removes the runtime's Parquet mirror and rebuilds the Oko projection; it is refused when the replay could not read an original or a partition is refused. --reindex (with --apply) then runs `oko-cli transcripts reindex`.\n  Exits 1 when any partition is unprovable or refused or the replay was partial.",
         "sessions" => "sessions [--runtime <r>] [--project <text>] [--interrupted] [--limit <n>] [--json]\n  List sessions, newest first, through the canonical DuckDB view; every matching session unless --limit keeps the newest n (zero is refused).\n  --interrupted keeps only conversations whose last turn was an unanswered user message or a tool call cut off mid-run, and reports stopped_as plus the opening of that final request.",
         "events" => "events [--runtime <r>] [--session <id>] [--type <type>] [--limit <n>] [--json]\n  List masked canonical events with their whole text, newest first; every matching event unless --limit keeps the newest n (zero is refused).",
         "search" => "search <text> [--runtime <r>] [--session <id>] [--type <type>] [--limit <n>] [--json]\n  Case-insensitive literal substring match over masked event text, newest first, each match with its whole text; every match unless --limit keeps the newest n (zero is refused).",
@@ -101,7 +103,7 @@ pub fn command_help(name: &str) -> Option<&'static str> {
         "hooks" => "hooks [--decision <value>] [--tool <name>] [--limit <n>] [--json]\n  Inspect adaptive-hook decisions, newest first; every decision unless --limit keeps the newest n (zero is refused).",
         "signals" => "signals [--report freshness] [--limit <n>] [--json]\n  Compare the Oko index's freshness with Lake's; every row unless --limit keeps n (zero is refused). Frustration is Oko's model reading: `oko stats snapshot`.",
         "label" => "label <add|remove|list|aspects> ...\n  add <session-id> --aspect <name> --value <v> [--note <text>] [--source <name[:detail]>] [--json] records a session label with provenance (manual, human, model, or brama, optional :detail).\n  remove <session-id> --aspect <name> [--note <text>] [--source <name[:detail]>] [--runtime <r>] [--json] withdraws the assignment in force for that aspect by appending a record with no value; the history stays whole, and a session with no such label is refused.\n  list [--session <id>] [--aspect <a>] [--runtime <r>] [--limit <n>] [--json] shows the latest assignment per session and aspect, newest first; every one unless --limit keeps the newest n (zero is refused).\n  aspects [--json] summarizes distinct aspects, values, and labeled sessions.",
-        "goal" => "goal <title|label> ...\n  title (--text <text>|--stdin) [--json] runs the SHA-pinned qualified GGUF locally.\n  label <session-id> [--runtime <r>] [--json] labels the first masked user prompt with source model:jeden-goal-qwen3-4b-2512d7a4.",
+        "goal" => "goal <title|label> ...\n  title (--text <text>|--stdin) [--json] runs the SHA-pinned qualified GGUF locally.\n  label <session-id> [--runtime <r>] [--json] labels the first masked user prompt, recording the pinned goal model as the label's source.",
         "query" => "query [--json] \"<sql>\"\n  Execute operator-supplied SQL after loading canonical Lake views.",
         "compact" => "compact [--source <runtime>] [--json]\n  Rebuild per-runtime Parquet mirrors; NDJSON remains authoritative.",
         "projection" => "projection <rebuild|refresh> --target <oko> ...\n  rebuild --target <consumer> [--reindex] reconstructs every per-session projection that consumer imports from authoritative Lake partitions; --reindex asks the consumer to reindex afterwards.\n  refresh --target <consumer> hands the current projection to the consumer through its own CLI (oko: `oko-cli transcripts reindex`).\n  The consumer is an adapter behind the operation; a --target without one is refused with the targets that exist.",
@@ -112,19 +114,20 @@ pub fn command_help(name: &str) -> Option<&'static str> {
     })
 }
 
-fn cmd_help(rest: &[String]) -> Result<i32> {
-    if rest.len() > 1 {
-        return Err(Error("help accepts at most one command name".into()));
-    }
-    let Some(topic) = rest.first() else {
-        println!("{USAGE}");
-        return Ok(0);
+fn cmd_help(rest: &[String]) -> Result<()> {
+    let topic = match rest {
+        [] => {
+            println!("{USAGE}");
+            return Ok(());
+        }
+        [topic] => topic,
+        _ => return Err(Error("help accepts at most one command name".into())),
     };
     let Some(text) = command_help(topic) else {
         return Err(Error(format!("unknown help topic: {topic}")));
     };
     println!("Usage: transcript-lake [--data-dir <path>] {text}");
-    Ok(0)
+    Ok(())
 }
 
 fn dispatch(command: &str, rest: &[String]) -> Result<i32> {
@@ -136,6 +139,7 @@ fn dispatch(command: &str, rest: &[String]) -> Result<i32> {
         "status" => commands::inspect::status(rest),
         "stream" => commands::stream::stream(rest),
         "rebuild" => commands::stream::rebuild(rest),
+        "reconcile" => commands::reconcile::reconcile(rest),
         "sessions" => commands::read::sessions(rest),
         "events" => commands::read::events(rest),
         "search" => commands::read::search(rest),
@@ -150,41 +154,54 @@ fn dispatch(command: &str, rest: &[String]) -> Result<i32> {
         "projection" => commands::derived::projection(rest),
         "clean" => commands::derived::clean(rest),
         "onboarding" => commands::onboarding::onboarding(rest),
-        "help" => cmd_help(rest),
         _ => unreachable!("dispatch called with an unrouted command"),
     }
 }
 
-/// The exit status of an invocation that is itself wrong; failures exit 1.
-const EXIT_USAGE: i32 = 2;
+/// The exit status of an invocation that is itself wrong (an unknown command,
+/// a repeated or pathless global `--data-dir`), as the product documents it:
+/// https://github.com/wisent-ai/transcript-lake#readme
+const EXIT_USAGE: u8 = 2;
 
-fn run() -> Result<i32> {
-    let input: Vec<String> = std::env::args().skip(1).collect();
+/// A usage error: the error and the usage on stderr, then `EXIT_USAGE`.
+fn usage_error(message: &str) -> ExitCode {
+    eprintln!("error: {message}\n\n{USAGE}");
+    ExitCode::from(EXIT_USAGE)
+}
+
+/// The process status a command's status becomes. One no process can report
+/// is said and reported as a failure.
+fn process_status(code: i32) -> ExitCode {
+    match u8::try_from(code) {
+        Ok(code) => ExitCode::from(code),
+        Err(error) => {
+            eprintln!("error: command status {code} is not a process status: {error}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn run() -> Result<ExitCode> {
+    let mut input = std::env::args();
+    // The first argument is this program's own path.
+    input.next();
     let mut args: Vec<String> = Vec::new();
     let mut selected_data_dir: Option<String> = None;
-    let mut index = 0;
-    while index < input.len() {
-        let token = &input[index];
+    while let Some(token) = input.next() {
         if token != "--data-dir" {
-            args.push(token.clone());
-            index += 1;
+            args.push(token);
             continue;
         }
-        // A malformed global flag is a usage error: say so and exit 2.
+        // A malformed global flag is a usage error.
         if selected_data_dir.is_some() {
-            eprintln!("error: duplicate global --data-dir\n\n{USAGE}");
-            return Ok(EXIT_USAGE);
+            return Ok(usage_error("duplicate global --data-dir"));
         }
-        match input.get(index + 1) {
+        match input.next() {
             Some(value) if !value.is_empty() && !value.starts_with("--") => {
-                selected_data_dir = Some(util::absolute(value).to_string_lossy().to_string());
+                selected_data_dir = Some(util::absolute(&value).to_string_lossy().to_string());
             }
-            _ => {
-                eprintln!("error: --data-dir requires a path\n\n{USAGE}");
-                return Ok(EXIT_USAGE);
-            }
+            _ => return Ok(usage_error("--data-dir requires a path")),
         }
-        index += 2;
     }
     if let Some(selected) = selected_data_dir {
         // Downstream resolution reads LAKE_DATA, so one selection covers the
@@ -193,29 +210,33 @@ fn run() -> Result<i32> {
     }
     let Some((command, rest)) = args.split_first() else {
         println!("{USAGE}");
-        return Ok(0);
+        return Ok(ExitCode::SUCCESS);
     };
     if command == "--help" || command == "-h" {
         println!("{USAGE}");
-        return Ok(0);
+        return Ok(ExitCode::SUCCESS);
     }
     if command == "--version" || command == "-V" {
         println!("{VERSION}");
-        return Ok(0);
+        return Ok(ExitCode::SUCCESS);
     }
     if rest.iter().any(|arg| arg == "--help" || arg == "-h") {
-        return cmd_help(&[command.clone()]);
+        cmd_help(std::slice::from_ref(command))?;
+        return Ok(ExitCode::SUCCESS);
     }
-    if command_help(command).is_none() && command != "help" {
-        eprintln!("error: unknown command: {command}\n\n{USAGE}");
-        return Ok(EXIT_USAGE);
+    if command_help(command).is_none() {
+        return Ok(usage_error(&format!("unknown command: {command}")));
     }
-    dispatch(command, rest)
+    if command == "help" {
+        cmd_help(rest)?;
+        return Ok(ExitCode::SUCCESS);
+    }
+    Ok(process_status(dispatch(command, rest)?))
 }
 
 fn main() -> ExitCode {
     match run() {
-        Ok(code) => ExitCode::from(u8::try_from(code).unwrap_or(1)),
+        Ok(code) => code,
         Err(error) => {
             eprintln!("error: {error}");
             ExitCode::FAILURE
