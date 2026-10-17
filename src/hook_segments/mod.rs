@@ -23,13 +23,42 @@ pub(super) const PROTOCOL: &str = "hooks-telemetry-segment-v1";
 pub(super) const ACK_PROTOCOL: &str = "hooks-telemetry-ack-v1";
 pub(super) const COMMIT_KIND: &str = "closed-segment";
 
-/// What one pass over the ready directory consumed.
-#[derive(Debug, Default, Clone, Copy)]
+/// What one pass over the ready directory consumed. `invalid` counts the
+/// segments `invalid_segments` names, so a report can say which they were.
+#[derive(Debug, Default, Clone)]
 pub struct SegmentReport {
     pub files: u64,
     pub events: u64,
     pub skipped: u64,
     pub invalid: u64,
+    pub invalid_segments: Vec<PathBuf>,
+}
+
+impl SegmentReport {
+    /// The report of a pass is a count of what each segment it took came to.
+    fn of(outcomes: &[Outcome]) -> Self {
+        let count = |kind: fn(&Outcome) -> bool| outcomes.iter().filter(|o| kind(o)).count() as u64;
+        let invalid_segments: Vec<PathBuf> = outcomes
+            .iter()
+            .filter_map(|outcome| match outcome {
+                Outcome::Invalid(path) => Some(path.clone()),
+                Outcome::Committed(_) | Outcome::Skipped => None,
+            })
+            .collect();
+        Self {
+            files: count(|outcome| matches!(outcome, Outcome::Committed(_))),
+            events: outcomes
+                .iter()
+                .filter_map(|outcome| match outcome {
+                    Outcome::Committed(events) => Some(*events),
+                    Outcome::Invalid(_) | Outcome::Skipped => None,
+                })
+                .sum(),
+            skipped: count(|outcome| matches!(outcome, Outcome::Skipped)),
+            invalid: invalid_segments.len() as u64,
+            invalid_segments,
+        }
+    }
 }
 
 mod adapter;
@@ -58,16 +87,8 @@ pub fn stream_hook_segment(
     {
         return Ok(SegmentReport::default());
     }
-    let mut report = SegmentReport::default();
-    match process_segment(path, data_dir, cursors, sink)? {
-        Outcome::Invalid => report.invalid = 1,
-        Outcome::Skipped => report.skipped = 1,
-        Outcome::Committed(events) => {
-            report.files = 1;
-            report.events = events;
-        }
-    }
-    Ok(report)
+    let outcome = process_segment(path, data_dir, cursors, sink)?;
+    Ok(SegmentReport::of(std::slice::from_ref(&outcome)))
 }
 
 /// The closed segments' directory; none when it does not exist yet. One that
@@ -84,6 +105,62 @@ fn ready_entries(ready_dir: &Path) -> Result<Option<fs::ReadDir>> {
     }
 }
 
+/// The closed segments in the ready directory as (file name, segment id), in
+/// stable filename order; none when the directory does not exist yet. An entry
+/// that cannot be read is the error: skipped, the pass would report nothing
+/// left to do while that segment stayed unread. A name that is not
+/// `segment-<id>.jsonl` in UTF-8 names no segment.
+fn closed_segments(ready_dir: &Path) -> Result<Option<Vec<(String, String)>>> {
+    let Some(entries) = ready_entries(ready_dir)? else {
+        return Ok(None);
+    };
+    let mut segments = Vec::new();
+    for entry in entries {
+        let entry = entry.map_err(|error| {
+            Error(format!(
+                "cannot read an entry of the closed hook segments in {}: {error}",
+                ready_dir.display()
+            ))
+        })?;
+        let Ok(name) = entry.file_name().into_string() else {
+            continue;
+        };
+        let Some(id) = name
+            .strip_prefix("segment-")
+            .and_then(|rest| rest.strip_suffix(".jsonl"))
+        else {
+            continue;
+        };
+        let id = id.to_string();
+        segments.push((name, id));
+    }
+    segments.sort_unstable();
+    Ok(Some(segments))
+}
+
+/// Where acknowledgements of the segments in `ready_dir` are published: the
+/// `acked` directory beside it.
+fn acked_dir(ready_dir: &Path) -> Result<PathBuf> {
+    let parent = ready_dir.parent().ok_or_else(|| {
+        Error(format!(
+            "hook segment directory {} has no parent to hold acknowledgements",
+            ready_dir.display()
+        ))
+    })?;
+    Ok(parent.join("acked"))
+}
+
+/// Whether an acknowledgement is published. One whose existence cannot be
+/// checked is the error, not an absence that sends the segment round again.
+fn acked(path: &Path) -> Result<bool> {
+    path.try_exists().map_err(|error| {
+        Error(format!(
+            "cannot check hook segment acknowledgement {}: {error}",
+            path.display()
+        ))
+    })
+}
+
 /// Replay every closed segment in stable filename order.
 pub fn replay_closed_hook_segments(
     ready_dir: &Path,
@@ -91,27 +168,19 @@ pub fn replay_closed_hook_segments(
     cursors: &mut Cursors,
     sink: &mut dyn EventSink,
 ) -> Result<SegmentReport> {
-    let Some(entries) = ready_entries(ready_dir)? else {
+    let Some(segments) = closed_segments(ready_dir)? else {
         return Ok(SegmentReport::default());
     };
-    let mut names: Vec<String> = entries
-        .flatten()
-        .map(|entry| entry.file_name().to_string_lossy().to_string())
-        .filter(|name| name.starts_with("segment-") && name.ends_with(".jsonl"))
-        .collect();
-    names.sort_unstable();
-    let mut report = SegmentReport::default();
-    for name in names {
-        match process_segment(&ready_dir.join(name), data_dir, cursors, sink)? {
-            Outcome::Invalid => report.invalid += 1,
-            Outcome::Skipped => report.skipped += 1,
-            Outcome::Committed(events) => {
-                report.files += 1;
-                report.events += events;
-            }
-        }
+    let mut outcomes = Vec::new();
+    for (name, _) in segments {
+        outcomes.push(process_segment(
+            &ready_dir.join(name),
+            data_dir,
+            cursors,
+            sink,
+        )?);
     }
-    Ok(report)
+    Ok(SegmentReport::of(&outcomes))
 }
 
 /// Resume only closed segments that have no durable Lake commit and producer
@@ -123,46 +192,30 @@ pub fn catch_up_closed_hook_segments(
     cursors: &mut Cursors,
     sink: &mut dyn EventSink,
 ) -> Result<SegmentReport> {
-    let Some(entries) = ready_entries(ready_dir)? else {
+    let Some(segments) = closed_segments(ready_dir)? else {
         return Ok(SegmentReport::default());
     };
-    let acked_dir = ready_dir
-        .parent()
-        .unwrap_or_else(|| Path::new("."))
-        .join("acked");
-    let mut names: Vec<String> = entries
-        .flatten()
-        .map(|entry| entry.file_name().to_string_lossy().to_string())
-        .filter(|name| name.starts_with("segment-") && name.ends_with(".jsonl"))
-        .collect();
-    names.sort_unstable();
-
-    let mut report = SegmentReport::default();
-    for name in names {
-        let id = name
-            .strip_prefix("segment-")
-            .and_then(|value| value.strip_suffix(".jsonl"))
-            .unwrap_or_default();
+    let acked_dir = acked_dir(ready_dir)?;
+    let mut outcomes = Vec::new();
+    for (name, id) in segments {
         let committed = match cursors.get(&format!("hooks:{id}"))? {
             Some(CursorRecord::Segment(record)) => {
                 record.get("kind").and_then(Value::as_str) == Some(COMMIT_KIND)
-                    && outputs_valid(record.get("outputs"))
-                    && acked_dir.join(ack_name(id)).exists()
+                    && outputs_valid(record.get("outputs"))?
+                    && acked(&acked_dir.join(ack_name(&id)))?
             }
             _ => false,
         };
         if committed {
-            report.skipped += 1;
+            outcomes.push(Outcome::Skipped);
             continue;
         }
-        match process_segment(&ready_dir.join(name), data_dir, cursors, sink)? {
-            Outcome::Invalid => report.invalid += 1,
-            Outcome::Skipped => report.skipped += 1,
-            Outcome::Committed(events) => {
-                report.files += 1;
-                report.events += events;
-            }
-        }
+        outcomes.push(process_segment(
+            &ready_dir.join(name),
+            data_dir,
+            cursors,
+            sink,
+        )?);
     }
-    Ok(report)
+    Ok(SegmentReport::of(&outcomes))
 }

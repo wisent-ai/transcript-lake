@@ -30,6 +30,9 @@ fn replay_locked(opts: &ReplayOptions) -> Result<Value> {
     let mut writer = Writer::new(data_dir.clone(), machine)?;
     let home = home_dir();
     let mut per_runtime = Map::new();
+    // Every input that could not be replayed, named: a file, an invalid hook
+    // segment, or a runtime with no adapter. The run is partial when any is.
+    let mut failed: Vec<String> = Vec::new();
     for name in selected {
         let mut tally = Tally::default();
         let before = total_hits(&writer.masker.counts());
@@ -47,6 +50,12 @@ fn replay_locked(opts: &ReplayOptions) -> Result<Value> {
                 tally.events += report.events;
                 tally.skipped += report.skipped;
                 tally.failures += report.invalid;
+                failed.extend(
+                    report
+                        .invalid_segments
+                        .iter()
+                        .map(|path| path.display().to_string()),
+                );
             } else {
                 // Still one mutable telemetry log rather than closed
                 // segments: the same producer, read as a line adapter.
@@ -56,7 +65,9 @@ fn replay_locked(opts: &ReplayOptions) -> Result<Value> {
             adapter = crate::adapters::by_name(name);
             if adapter.is_none() {
                 warn(&format!("adapter \"{name}\" unavailable, runtime skipped"));
-                tally.failures += std::num::NonZeroU64::MIN.get();
+                let unavailable = [format!("runtime {name}: no adapter")];
+                tally.failures += unavailable.len() as u64;
+                failed.extend(unavailable);
             }
         }
         let Some(adapter) = adapter else {
@@ -72,40 +83,40 @@ fn replay_locked(opts: &ReplayOptions) -> Result<Value> {
             per_runtime.insert(name.to_string(), serde_json::to_value(&tally)?);
             continue;
         };
-        {
-            for root in adapter.roots(&home) {
-                for entry in adapter.list_sessions(&root) {
-                    match stream_file(
-                        &mut writer,
-                        &mut cursors,
-                        adapter.as_ref(),
-                        &entry,
-                        true,
-                        &mut tally,
-                    ) {
-                        Ok(()) => tally.files += std::num::NonZeroU64::MIN.get(),
-                        Err(error) => {
-                            warn(&format!("{}: {error}", entry.file.display()));
-                            tally.failures += std::num::NonZeroU64::MIN.get();
-                        }
+        let mut streamed = Vec::new();
+        let mut unreplayed = Vec::new();
+        for root in adapter.roots(&home) {
+            for entry in adapter.list_sessions(&root) {
+                match stream_file(
+                    &mut writer,
+                    &mut cursors,
+                    adapter.as_ref(),
+                    &entry,
+                    true,
+                    &mut tally,
+                ) {
+                    Ok(()) => streamed.push(entry.file),
+                    Err(error) => {
+                        warn(&format!("{}: {error}", entry.file.display()));
+                        unreplayed.push(entry.file.display().to_string());
                     }
                 }
             }
         }
+        tally.files += streamed.len() as u64;
+        tally.failures += unreplayed.len() as u64;
+        failed.extend(unreplayed);
         tally.masked_hits = total_hits(&writer.masker.counts()) - before;
         cursors.flush()?;
         per_runtime.insert(name.to_string(), serde_json::to_value(&tally)?);
     }
-    let failures: u64 = per_runtime
-        .values()
-        .filter_map(|tally| tally.get("failures").and_then(Value::as_u64))
-        .sum();
     Ok(json!({
         "perRuntime": Value::Object(per_runtime),
         "maskCounts": writer.masker.counts(),
         "durationMs": started.elapsed().as_millis() as u64,
-        "partial": std::num::NonZeroU64::new(failures).is_some(),
-        "failures": failures,
+        "partial": !failed.is_empty(),
+        "failures": failed.len() as u64,
+        "failed": failed,
     }))
 }
 

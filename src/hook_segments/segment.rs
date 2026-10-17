@@ -22,87 +22,98 @@ pub(super) struct Segment {
 
 /// A segment is trusted only when it is a plain regular file that has not changed
 /// under us, is complete (header, in-sequence event frames, footer), and hashes to
-/// the digest its own footer claims. A segment whose metadata or bytes cannot be
-/// read is said on stderr with the cause, so it is not taken for a malformed one.
-pub(super) fn validate_hook_segment(path: &Path) -> Option<Segment> {
-    let unreadable = |error: std::io::Error| {
-        eprintln!("hook segment {} cannot be read: {error}", path.display());
-    };
-    let before = fs::symlink_metadata(path).map_err(unreadable).ok()?;
+/// the digest its own footer claims. Anything else is refused with the reason,
+/// and a segment whose metadata or bytes cannot be read says the I/O cause, so
+/// it is not taken for a malformed one.
+pub(super) fn validate_hook_segment(path: &Path) -> std::result::Result<Segment, String> {
+    let unreadable = |error: std::io::Error| format!("cannot be read: {error}");
+    let before = fs::symlink_metadata(path).map_err(unreadable)?;
     if !before.is_file() || before.file_type().is_symlink() {
-        return None;
+        return Err("is not a plain regular file".into());
     }
-    let bytes = fs::read(path).map_err(unreadable).ok()?;
-    if bytes.is_empty() || bytes.last() != Some(&b'\n') {
-        return None;
-    }
+    let bytes = fs::read(path).map_err(unreadable)?;
     // A lossy decode would silently rewrite bytes the digest was taken over.
-    let source = String::from_utf8(bytes.clone()).ok()?;
-    let rows: Vec<&str> = source[..source.len() - 1].split('\n').collect();
-    if rows.len() < 2 {
-        return None;
-    }
-    let header = parse(rows[0])?;
-    let footer = parse(rows[rows.len() - 1])?;
+    let source =
+        String::from_utf8(bytes.clone()).map_err(|error| format!("is not UTF-8: {error}"))?;
+    let body = source
+        .strip_suffix('\n')
+        .ok_or("does not end with a newline, so its last frame may still be written")?;
+    let rows: Vec<&str> = body.split('\n').collect();
+    let [opening, frames @ .., closing] = rows.as_slice() else {
+        return Err("holds no footer after its header".into());
+    };
+    let header = parse(opening).ok_or("header is not a JSON object")?;
+    let footer = parse(closing).ok_or("footer is not a JSON object")?;
     if header.get("kind").and_then(Value::as_str) != Some("segment_open") {
-        return None;
+        return Err("header is not a segment_open frame".into());
     }
     if header.get("protocol").and_then(Value::as_str) != Some(PROTOCOL) {
-        return None;
+        return Err(format!("header does not speak protocol {PROTOCOL}"));
     }
-    let segment_id = string_field(&header, "segmentId")?;
-    let created_at = header.get("createdAt").cloned()?;
-    if !created_at.as_f64().is_some_and(f64::is_finite) {
-        return None;
-    }
-    string_field(&header, "producerId")?;
-    string_field(&header, "invocationId")?;
+    let segment_id = string_field(&header, "segmentId").ok_or("header has no segmentId")?;
+    let created_at = header
+        .get("createdAt")
+        .filter(|value| value.as_f64().is_some_and(f64::is_finite))
+        .cloned()
+        .ok_or("header has no finite createdAt")?;
+    string_field(&header, "producerId").ok_or("header has no producerId")?;
+    string_field(&header, "invocationId").ok_or("header has no invocationId")?;
     let source_ok = header.get("source").is_some_and(|value| {
         truthy(value) && value.get("producer").and_then(Value::as_str) == Some("hooks-rotator")
     });
     if !source_ok {
-        return None;
+        return Err("header source is not the hooks-rotator producer".into());
     }
-    if path.file_name()?.to_string_lossy() != segment_name(&segment_id) {
-        return None;
+    let expected = segment_name(&segment_id);
+    if path.file_name().map(|name| name.to_string_lossy()) != Some(expected.as_str().into()) {
+        return Err(format!("is not named {expected} after its segmentId"));
     }
     let mut events = Vec::new();
-    for row in &rows[1..rows.len() - 1] {
-        let frame = parse(row)?;
+    for row in frames {
+        let frame =
+            parse(row).ok_or_else(|| format!("frame {} is not a JSON object", events.len()))?;
         if frame.get("kind").and_then(Value::as_str) != Some("event") {
-            return None;
+            return Err(format!("frame {} is not an event frame", events.len()));
         }
         if frame.get("sequence").and_then(Value::as_f64) != Some(events.len() as f64) {
-            return None;
+            return Err(format!("frame {} is out of sequence", events.len()));
         }
-        let event = frame.get("event")?;
-        if !event.is_object() {
-            return None;
-        }
+        let event = frame
+            .get("event")
+            .filter(|event| event.is_object())
+            .ok_or_else(|| format!("frame {} carries no event object", events.len()))?;
         events.push(event.clone());
     }
-    let payload = format!("{}\n", rows[..rows.len() - 1].join("\n"));
+    // The digest covers every row before the footer, each ending in a newline.
+    let payload = body
+        .strip_suffix(*closing)
+        .ok_or("footer is not the segment's last row")?;
     let payload_sha256 = digest(payload.as_bytes());
     if footer.get("kind").and_then(Value::as_str) != Some("segment_close") {
-        return None;
+        return Err("footer is not a segment_close frame".into());
     }
     if footer.get("protocol").and_then(Value::as_str) != Some(PROTOCOL) {
-        return None;
+        return Err(format!("footer does not speak protocol {PROTOCOL}"));
     }
     if footer.get("segmentId").and_then(Value::as_str) != Some(segment_id.as_str()) {
-        return None;
+        return Err("footer names another segmentId than its header".into());
     }
     if footer.get("eventCount").and_then(Value::as_f64) != Some(events.len() as f64) {
-        return None;
+        return Err(format!(
+            "footer eventCount does not match its {} event frames",
+            events.len()
+        ));
     }
     if footer.get("payloadSha256").and_then(Value::as_str) != Some(payload_sha256.as_str()) {
-        return None;
+        return Err(format!(
+            "footer payloadSha256 does not match its payload digest {payload_sha256}"
+        ));
     }
-    let after = fs::symlink_metadata(path).ok()?;
+    let after = fs::symlink_metadata(path).map_err(unreadable)?;
     if !after.is_file() || after.len() != before.len() || !same_inode(&before, &after) {
-        return None;
+        return Err("changed while it was read".into());
     }
-    Some(Segment {
+    Ok(Segment {
         segment_id,
         created_at,
         source_sha256: digest(&bytes),
@@ -119,34 +130,48 @@ pub(super) fn same_inode(before: &fs::Metadata, after: &fs::Metadata) -> bool {
 }
 
 /// Every published output still exists with the content the commit recorded.
-pub(super) fn outputs_valid(outputs: Option<&Value>) -> bool {
+/// A record that names no output, an output that is gone and one whose content
+/// changed are not valid, so the segment is committed again; an output that
+/// exists but cannot be read is the error, since committing again would meet
+/// the same failure without saying it.
+pub(super) fn outputs_valid(outputs: Option<&Value>) -> Result<bool> {
     let Some(Value::Array(items)) = outputs else {
-        return false;
+        return Ok(false);
     };
     if items.is_empty() {
-        return false;
+        return Ok(false);
     }
-    items.iter().all(|item| {
+    for item in items {
         let (Some(path), Some(sha256)) = (string_field(item, "path"), string_field(item, "sha256"))
         else {
-            return false;
+            return Ok(false);
         };
-        let path = PathBuf::from(path);
-        if !path.exists() {
-            return false;
+        match fs::read(&path) {
+            Ok(bytes) if digest(&bytes) == sha256 => {}
+            Ok(_) => return Ok(false),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+            Err(error) => {
+                return Err(Error(format!(
+                    "cannot read published hook segment output {path}: {error}"
+                )))
+            }
         }
-        fs::read(&path).is_ok_and(|bytes| digest(&bytes) == sha256)
-    })
+    }
+    Ok(true)
 }
 
-pub(super) fn output_key(item: &Value) -> String {
-    format!(
+/// An output is identified by its path and digest together; one that lacks
+/// either names nothing a later pass could find, so it has no key.
+pub(super) fn output_key(item: &Value) -> Option<String> {
+    Some(format!(
         "{}\u{0}{}",
-        string_field(item, "path").unwrap_or_default(),
-        string_field(item, "sha256").unwrap_or_default()
-    )
+        string_field(item, "path")?,
+        string_field(item, "sha256")?
+    ))
 }
 
+/// Two commits published the same outputs only when every output of each has a
+/// key and the keys match one for one.
 pub(super) fn same_outputs(prior: Option<&Value>, current: Option<&Value>) -> bool {
     let (Some(Value::Array(prior)), Some(Value::Array(current))) = (prior, current) else {
         return false;
@@ -154,6 +179,14 @@ pub(super) fn same_outputs(prior: Option<&Value>, current: Option<&Value>) -> bo
     if prior.len() != current.len() {
         return false;
     }
-    let seen: Vec<String> = prior.iter().map(output_key).collect();
-    current.iter().all(|item| seen.contains(&output_key(item)))
+    let Some(seen) = prior
+        .iter()
+        .map(output_key)
+        .collect::<Option<Vec<String>>>()
+    else {
+        return false;
+    };
+    current
+        .iter()
+        .all(|item| output_key(item).is_some_and(|key| seen.contains(&key)))
 }

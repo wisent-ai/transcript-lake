@@ -16,25 +16,17 @@ mod claim;
 
 use claim::{acquire_claim, release_claim};
 
-/// What one pass over a segment did with it: it was not trustworthy, it was
-/// already committed or claimed elsewhere, or it contributed this many events.
+/// What one pass over a segment did with it: it was not trustworthy (the
+/// segment named), it was already committed or claimed elsewhere, or it
+/// contributed this many events.
 pub(super) enum Outcome {
-    Invalid,
+    Invalid(PathBuf),
     Skipped,
     Committed(u64),
 }
 
 pub(super) fn publish_ack(ready_dir: &Path, segment: &Segment, commit: &Value) -> Result<()> {
-    let acked_dir = ready_dir
-        .parent()
-        .ok_or_else(|| {
-            Error(format!(
-                "hook segment directory {} has no parent to hold acknowledgements",
-                ready_dir.display()
-            ))
-        })?
-        .join("acked");
-    let path = acked_dir.join(ack_name(&segment.segment_id));
+    let path = acked_dir(ready_dir)?.join(ack_name(&segment.segment_id));
     // The acknowledgement names the commit and its outputs; a commit record
     // without them is a broken cursor, said with the record, never
     // acknowledged as a commit of nothing.
@@ -57,7 +49,7 @@ pub(super) fn publish_ack(ready_dir: &Path, segment: &Segment, commit: &Value) -
         "outputs": field("outputs")?,
     });
     let content = format!("{}\n", serde_json::to_string_pretty(&ack)?);
-    if !path.exists() {
+    if !acked(&path)? {
         return durable_write(&path, content.as_bytes());
     }
     // An acknowledgement that cannot be read is not a data conflict; saying
@@ -73,18 +65,23 @@ pub(super) fn publish_ack(ready_dir: &Path, segment: &Segment, commit: &Value) -
     // identifies the process that wrote them, and one segment can be committed by
     // more than one process — a cursor restored from backup, a rebuild, or a
     // resumed stream. A differing process id alone is not a data conflict.
-    let prior = parse(&raw).filter(|prior| {
-        prior.get("sourceSha256") == ack.get("sourceSha256")
-            && prior.get("payloadSha256") == ack.get("payloadSha256")
-            && prior.get("eventCount") == ack.get("eventCount")
-            && same_outputs(prior.get("outputs"), ack.get("outputs"))
-    });
-    let Some(prior) = prior else {
+    // An acknowledgement that is not JSON is not a disagreement either.
+    let prior = parse(&raw).ok_or_else(|| {
+        Error(format!(
+            "hook segment acknowledgement {} is not a JSON object",
+            path.display()
+        ))
+    })?;
+    let agrees = prior.get("sourceSha256") == ack.get("sourceSha256")
+        && prior.get("payloadSha256") == ack.get("payloadSha256")
+        && prior.get("eventCount") == ack.get("eventCount")
+        && same_outputs(prior.get("outputs"), ack.get("outputs"));
+    if !agrees {
         return Err(Error(format!(
             "hook segment acknowledgement conflict: {}",
             path.display()
         )));
-    };
+    }
     if prior.get("lakeCommitId") == ack.get("lakeCommitId") {
         return Ok(());
     }
@@ -99,9 +96,15 @@ pub(super) fn process_segment(
     cursors: &mut Cursors,
     sink: &mut dyn EventSink,
 ) -> Result<Outcome> {
-    let Some(segment) = validate_hook_segment(path) else {
-        warn(&format!("invalid closed hook segment: {}", path.display()));
-        return Ok(Outcome::Invalid);
+    let segment = match validate_hook_segment(path) {
+        Ok(segment) => segment,
+        Err(reason) => {
+            warn(&format!(
+                "invalid closed hook segment {}: {reason}",
+                path.display()
+            ));
+            return Ok(Outcome::Invalid(path.to_path_buf()));
+        }
     };
     let ready_dir = path.parent().ok_or_else(|| {
         Error(format!(
@@ -114,7 +117,7 @@ pub(super) fn process_segment(
         let committed = existing.get("kind").and_then(Value::as_str) == Some(COMMIT_KIND)
             && existing.get("sourceSha256").and_then(Value::as_str)
                 == Some(segment.source_sha256.as_str())
-            && outputs_valid(existing.get("outputs"));
+            && outputs_valid(existing.get("outputs"))?;
         if committed {
             publish_ack(ready_dir, &segment, &existing)?;
             return Ok(Outcome::Skipped);
