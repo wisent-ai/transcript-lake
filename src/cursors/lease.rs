@@ -2,41 +2,15 @@
 use std::fs::{self, File, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use serde::Deserialize;
 use serde_json::json;
 
+use crate::lake::owner;
 use crate::util::{machine_name, Error, Result};
 pub(super) fn sync_directory(path: &Path) -> Result<()> {
     File::open(path)?.sync_all()?;
     Ok(())
-}
-
-/// The start time `/bin/ps` reports for `pid`, which tells a live owner from a
-/// later process that reused its id. `None` is no process with that id; a `ps`
-/// that cannot run, or that answers neither with a start time nor with the
-/// absence of the process, is the error, since an owner that cannot be
-/// checked must not be taken for a dead one.
-fn start_time(pid: u32) -> Result<Option<String>> {
-    let output = stado_wait::output(
-        Command::new("/bin/ps").args(["-o", "lstart=", "-p", &pid.to_string()]),
-    )
-    .map_err(|error| {
-        Error(format!(
-            "cannot run /bin/ps to see whether process {pid} is alive: {error}"
-        ))
-    })?;
-    let reported = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    match (output.status.success(), reported.is_empty()) {
-        (true, false) => Ok(Some(reported)),
-        (false, true) => Ok(None),
-        _ => Err(Error(format!(
-            "/bin/ps answered {} for process {pid} with {reported:?}: {}",
-            output.status,
-            String::from_utf8_lossy(&output.stderr).trim()
-        ))),
-    }
 }
 
 /// The owner record a lease is published with: the machine and process that
@@ -51,14 +25,9 @@ struct Owner {
 }
 
 impl Owner {
-    /// Whether the holder still runs. A holder on another machine cannot be
-    /// seen from here and is taken as alive, since breaking its lease would
-    /// let two writers publish the same partitions.
+    /// Whether the holder still runs.
     fn alive(&self) -> Result<bool> {
-        if self.host != machine_name() {
-            return Ok(true);
-        }
-        Ok(start_time(self.pid)?.as_deref() == Some(self.started.as_str()))
+        owner::alive(&self.host, self.pid, &self.started)
     }
 }
 
@@ -126,17 +95,10 @@ impl Drop for WriterLease {
 pub(super) fn acquire_lock(data_dir: &Path, lock_path: &Path) -> Result<String> {
     let token = uuid::Uuid::new_v4().to_string();
     let pid = std::process::id();
-    // Without its own start time this process's lease could not be told from
-    // a later process given the same id, so it is not taken.
-    let started = start_time(pid)?.ok_or_else(|| {
-        Error(format!(
-            "/bin/ps reports no start time for this process {pid}, so its lease could not be told from a later process with that id"
-        ))
-    })?;
-    let owner = json!({
+    let record = json!({
         "host": machine_name(),
         "pid": pid,
-        "started": started,
+        "started": owner::own_start_time("its lease")?,
         "token": token,
     });
     loop {
@@ -152,7 +114,7 @@ pub(super) fn acquire_lock(data_dir: &Path, lock_path: &Path) -> Result<String> 
                 .write(true)
                 .create_new(true)
                 .open(&owner_path)?;
-            file.write_all(serde_json::to_string(&owner)?.as_bytes())?;
+            file.write_all(serde_json::to_string(&record)?.as_bytes())?;
             file.sync_all()?;
             drop(file);
             sync_directory(&prepared)?;
