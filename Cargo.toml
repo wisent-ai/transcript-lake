@@ -68,6 +68,10 @@ name = "claude-unreadable-project"
 path = "tests/claude/unreadable_project.rs"
 
 [[test]]
+name = "lease-owner"
+path = "tests/lease/owner.rs"
+
+[[test]]
 name = "reconcile-stale-projection"
 path = "tests/reconcile/stale_projection.rs"
 
