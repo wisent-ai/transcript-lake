@@ -21,7 +21,11 @@ path = "tests/harnesses/ingestion.rs"
 
 [[test]]
 name = "harness-omp-usage"
-path = "tests/harnesses/omp_usage.rs"
+path = "tests/omp/usage.rs"
+
+[[test]]
+name = "omp-authorship"
+path = "tests/omp/authorship.rs"
 
 [[test]]
 name = "devin-chains"

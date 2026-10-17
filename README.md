@@ -214,7 +214,7 @@ currently discoverable native session files only (not nested advisor sidecars
 that the adapter does not discover). Historical partitions whose native source
 is no longer available are reported as unprovable and keep their event type.
 Qualify the parser against actual native operator and advisor records with
-`LAKE_TEST_OMP_AUTHORSHIP=<absolute JSON path> cargo test --test harness-omp-usage native_advisor_updates_are_not_operator_turns -- --ignored --nocapture`.
+`LAKE_TEST_OMP_AUTHORSHIP=<absolute JSON path> cargo test --test omp-authorship -- --ignored --nocapture`.
 The expectation names native `authored_file`, `authored_session`,
 `authored_text`, `generated_file`, `generated_session` and `generated_text`.
 Both session identities come from the corresponding native `session` records.
