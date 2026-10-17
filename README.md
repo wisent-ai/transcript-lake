@@ -238,6 +238,7 @@ inspects persisted canonical events and retains adoption and refusal evidence
 under the ignored build directory.
 
 An unknown command, a repeated global `--data-dir`, or a `--data-dir` without a path prints the error and the usage and exits 2; any other failure exits 1.
+The real-binary journey `cargo test --test cli-usage` reads that status from the sentence above and refuses each of those three invocations unless it exits with it, names its error, and prints the usage on stderr with nothing on stdout.
 
 Canonical event and adapter interfaces are machine contracts documented in [the architecture contract](https://transcript-lake.wisent.com/docs/lake/). Every supported operation maps to [one canonical example](https://transcript-lake.wisent.com/docs/examples/).
 
