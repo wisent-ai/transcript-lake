@@ -4,7 +4,8 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use serde_json::{json, Value};
+use serde::Deserialize;
+use serde_json::json;
 
 use crate::util::{machine_name, Error, Result};
 pub(super) fn sync_directory(path: &Path) -> Result<()> {
@@ -12,66 +13,87 @@ pub(super) fn sync_directory(path: &Path) -> Result<()> {
     Ok(())
 }
 
-fn process_identity(pid: u32) -> Option<String> {
-    let output = Command::new("/bin/ps")
-        .args(["-o", "lstart=", "-p", &pid.to_string()])
-        .output()
-        .ok()?;
-    if !output.status.success() {
-        return None;
+/// The start time `/bin/ps` reports for `pid`, which tells a live owner from a
+/// later process that reused its id. `None` is no process with that id; a `ps`
+/// that cannot run, or that answers neither with a start time nor with the
+/// absence of the process, is the error, since an owner that cannot be
+/// checked must not be taken for a dead one.
+fn start_time(pid: u32) -> Result<Option<String>> {
+    let output = stado_wait::output(
+        Command::new("/bin/ps").args(["-o", "lstart=", "-p", &pid.to_string()]),
+    )
+    .map_err(|error| {
+        Error(format!(
+            "cannot run /bin/ps to see whether process {pid} is alive: {error}"
+        ))
+    })?;
+    let reported = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    match (output.status.success(), reported.is_empty()) {
+        (true, false) => Ok(Some(reported)),
+        (false, true) => Ok(None),
+        _ => Err(Error(format!(
+            "/bin/ps answered {} for process {pid} with {reported:?}: {}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr).trim()
+        ))),
     }
-    let text = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    (!text.is_empty()).then_some(text)
 }
 
-fn owner_is_alive(owner: Option<&Value>) -> bool {
-    let Some(owner) = owner else {
-        return false;
-    };
-    let Some(pid) = owner.get("pid").and_then(Value::as_u64) else {
-        return false;
-    };
-    if pid == 0 {
-        return false;
+/// The owner record a lease is published with: the machine and process that
+/// hold it, the start time that tells that process from a later one with the
+/// same id, and the token its release is matched by.
+#[derive(Deserialize)]
+struct Owner {
+    host: String,
+    pid: u32,
+    started: String,
+    token: String,
+}
+
+impl Owner {
+    /// Whether the holder still runs. A holder on another machine cannot be
+    /// seen from here and is taken as alive, since breaking its lease would
+    /// let two writers publish the same partitions.
+    fn alive(&self) -> Result<bool> {
+        if self.host != machine_name() {
+            return Ok(true);
+        }
+        Ok(start_time(self.pid)?.as_deref() == Some(self.started.as_str()))
     }
-    let host = owner
-        .get("host")
-        .and_then(Value::as_str)
-        .unwrap_or_default();
-    if host != machine_name() {
-        return true;
-    }
-    let started = owner.get("started").and_then(Value::as_str);
-    let current = process_identity(pid as u32);
-    match (started, current.as_deref()) {
-        (Some(started), Some(current)) => started == current,
-        _ => {
-            // Identity unavailable: a live pid claim is retained rather than
-            // stolen, because stealing a lease double-writes partitions.
-            let alive = unsafe { libc_kill(pid as i32) };
-            if alive {
-                eprintln!("cursors: lock process identity unavailable; retaining live pid claim");
-            }
-            alive
+}
+
+/// The owner record at `path`. An absent record and one that is not a whole
+/// owner record are both abandoned: a lease is published by one rename of a
+/// directory whose record was written and flushed first, so neither is a
+/// writer caught half way. Which one it was is said. A record that exists and
+/// cannot be read proves nothing about its writer, so that is the error.
+fn read_owner(path: &Path) -> Result<Option<Owner>> {
+    let raw = match fs::read_to_string(path) {
+        Ok(raw) => raw,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            eprintln!(
+                "cursors: lease owner {} is absent, so the lease is abandoned",
+                path.display()
+            );
+            return Ok(None);
+        }
+        Err(error) => {
+            return Err(Error(format!(
+                "state writer lock owner {} cannot be read: {error}",
+                path.display()
+            )))
+        }
+    };
+    match serde_json::from_str::<Owner>(&raw) {
+        Ok(owner) => Ok(Some(owner)),
+        Err(error) => {
+            eprintln!(
+                "cursors: lease owner {} is not a whole owner record ({error}), so the lease is abandoned",
+                path.display()
+            );
+            Ok(None)
         }
     }
-}
-
-/// `kill(pid, 0)`: true when the process exists (or exists but is not ours).
-unsafe fn libc_kill(pid: i32) -> bool {
-    extern "C" {
-        fn kill(pid: i32, sig: i32) -> i32;
-    }
-    extern "C" {
-        fn __error() -> *mut i32;
-    }
-    let result = kill(pid, 0);
-    if result == 0 {
-        return true;
-    }
-    // ESRCH is 3 on Darwin: no such process. Anything else (EPERM) means the
-    // process exists and belongs to another user.
-    *__error() != 3
 }
 
 /// Exclusive state lease over one Lake root, released on drop.
@@ -104,10 +126,17 @@ impl Drop for WriterLease {
 pub(super) fn acquire_lock(data_dir: &Path, lock_path: &Path) -> Result<String> {
     let token = uuid::Uuid::new_v4().to_string();
     let pid = std::process::id();
+    // Without its own start time this process's lease could not be told from
+    // a later process given the same id, so it is not taken.
+    let started = start_time(pid)?.ok_or_else(|| {
+        Error(format!(
+            "/bin/ps reports no start time for this process {pid}, so its lease could not be told from a later process with that id"
+        ))
+    })?;
     let owner = json!({
         "host": machine_name(),
         "pid": pid,
-        "started": process_identity(pid),
+        "started": started,
         "token": token,
     });
     loop {
@@ -134,48 +163,27 @@ pub(super) fn acquire_lock(data_dir: &Path, lock_path: &Path) -> Result<String> 
         match published {
             Ok(()) => return Ok(token),
             Err(error) => {
-                let _ = fs::remove_dir_all(&prepared);
+                match fs::remove_dir_all(&prepared) {
+                    Ok(()) => {}
+                    Err(gone) if gone.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(left) => eprintln!(
+                        "cursors: unpublished lease claim {} was left behind: {left}",
+                        prepared.display()
+                    ),
+                }
                 if !lock_path.exists() {
                     return Err(error);
                 }
             }
         }
 
-        // A missing or malformed owner is abandoned: claims are published
-        // whole by one rename. An owner that exists and cannot be read proves
-        // nothing about its writer, so it is refused rather than broken.
-        let incumbent = match fs::read_to_string(lock_path.join("owner.json")) {
-            Ok(raw) => serde_json::from_str::<Value>(&raw).ok(),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
-            Err(error) => {
+        if let Some(incumbent) = read_owner(&lock_path.join("owner.json"))? {
+            if incumbent.alive()? {
                 return Err(Error(format!(
-                    "state writer lock owner {} cannot be read: {error}",
-                    lock_path.join("owner.json").display()
-                )))
+                    "state writer lock is held by {} pid {}",
+                    incumbent.host, incumbent.pid
+                )));
             }
-        };
-        if owner_is_alive(incumbent.as_ref()) {
-            // The holder fields its owner file left out are named as such;
-            // "unknown-host pid unknown" read as a holder that could be found.
-            let host = match incumbent
-                .as_ref()
-                .and_then(|owner| owner.get("host"))
-                .and_then(Value::as_str)
-            {
-                Some(host) => host.to_string(),
-                None => "a host its owner file does not record".to_string(),
-            };
-            let pid = match incumbent
-                .as_ref()
-                .and_then(|owner| owner.get("pid"))
-                .and_then(Value::as_u64)
-            {
-                Some(pid) => pid.to_string(),
-                None => "not recorded".to_string(),
-            };
-            return Err(Error(format!(
-                "state writer lock is held by {host} pid {pid}"
-            )));
         }
         match fs::remove_dir_all(lock_path) {
             Ok(()) => {}
@@ -202,13 +210,17 @@ pub(super) fn release_lock(data_dir: &Path, lock_path: &Path, token: &str) {
             return;
         }
     };
-    let matches = serde_json::from_str::<Value>(&raw)
-        .ok()
-        .as_ref()
-        .and_then(|owner| owner.get("token"))
-        .and_then(Value::as_str)
-        .is_some_and(|held| held == token);
-    if !matches {
+    let held = match serde_json::from_str::<Owner>(&raw) {
+        Ok(owner) => owner.token,
+        Err(error) => {
+            eprintln!(
+                "cursors: lease owner {} is not a whole owner record ({error}), so it is not this run's to release",
+                owner_path.display()
+            );
+            return;
+        }
+    };
+    if held != token {
         return;
     }
     if let Err(error) = fs::remove_dir_all(lock_path) {
@@ -218,7 +230,12 @@ pub(super) fn release_lock(data_dir: &Path, lock_path: &Path, token: &str) {
         );
         return;
     }
-    let _ = sync_directory(data_dir);
+    if let Err(error) = sync_directory(data_dir) {
+        eprintln!(
+            "cursors: the release of lease {} may not survive a crash: {error}",
+            lock_path.display()
+        );
+    }
 }
 
 /// Take the exclusive state lease for this Lake root.
