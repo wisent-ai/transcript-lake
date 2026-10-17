@@ -5,32 +5,20 @@ use crate::redact::Masker;
 use crate::types::{CanonicalEvent, EventSink, RawEvent, SegmentOutput, HOOKS};
 use crate::util::{Error, Result};
 use serde_json::{Map, Value};
-use std::fs::{self, File, OpenOptions};
+use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
-/// `YYYY-MM-DD`: ten characters, a dash after the year and another after the month.
-const DATE_LEN: usize = 10;
-const YEAR_LEN: usize = 4;
-const MONTH_END: usize = 7;
 
-/// The date partition an event belongs to: the leading `YYYY-MM-DD` of its
-/// timestamp. An unusable timestamp lands in a visible catch-all partition,
+/// The calendar date a partition is named by, as `chrono` writes `%Y-%m-%d`.
+const PARTITION_DATE: &str = "%Y-%m-%d";
+
+/// The date partition an event belongs to: the calendar date its timestamp
+/// starts with. An unusable timestamp lands in a visible catch-all partition,
 /// not dropped.
 fn date_of(ts: Option<&str>) -> String {
-    let Some(ts) = ts else {
-        return "unknown".to_string();
-    };
-    let bytes = ts.as_bytes();
-    let shaped = bytes.len() >= DATE_LEN
-        && bytes[..4].iter().all(u8::is_ascii_digit)
-        && bytes[YEAR_LEN] == b'-'
-        && bytes[5..7].iter().all(u8::is_ascii_digit)
-        && bytes[MONTH_END] == b'-'
-        && bytes[8..10].iter().all(u8::is_ascii_digit);
-    if shaped {
-        ts[..DATE_LEN].to_string()
-    } else {
-        "unknown".to_string()
+    match ts.map(|ts| chrono::NaiveDate::parse_and_remainder(ts, PARTITION_DATE)) {
+        Some(Ok((date, _))) => date.format(PARTITION_DATE).to_string(),
+        Some(Err(_)) | None => "unknown".to_string(),
     }
 }
 
@@ -132,12 +120,17 @@ impl Writer {
                     .join(format!("runtime={runtime}"))
                     .join(format!("date={date}"));
                 rows.push((dir, serde_json::to_string(&projected)?));
-                tally.events += 1;
             }
             // A replay also restores a missing derived row without writing
             // its already durable canonical occurrence again.
             projections.push(projected);
         }
+        tally.events += u64::try_from(rows.len()).map_err(|error| {
+            Error(format!(
+                "{} new canonical rows do not fit the event tally: {error}",
+                rows.len()
+            ))
+        })?;
         let mut dirs: Vec<&PathBuf> = Vec::new();
         for (dir, _) in &rows {
             if !dirs.contains(&dir) {
@@ -173,40 +166,10 @@ impl Writer {
     }
 }
 
-fn sync_directory(path: &Path) -> Result<()> {
-    File::open(path)?.sync_all()?;
-    Ok(())
-}
-
-/// Whole-file publish for immutable output: unique temp, sync, rename, then
-/// parent sync, so a reader never observes a partial segment partition.
+/// Whole-file publish for immutable output, so a reader never observes a
+/// partial segment partition.
 fn durable_write(path: &Path, content: &str) -> Result<()> {
-    let parent = path.parent().unwrap_or_else(|| Path::new("."));
-    fs::create_dir_all(parent)?;
-    let name = path
-        .file_name()
-        .unwrap_or_default()
-        .to_string_lossy()
-        .to_string();
-    let temporary = parent.join(format!(".{name}.{}.tmp", uuid::Uuid::new_v4()));
-    let write = (|| -> Result<()> {
-        let mut file = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&temporary)?;
-        file.write_all(content.as_bytes())?;
-        file.sync_all()?;
-        drop(file);
-        fs::rename(&temporary, path)?;
-        sync_directory(parent)
-    })();
-    if write.is_err() {
-        // A temporary file that stays is said; nothing else removes it.
-        if let Err(error) = fs::remove_file(&temporary) {
-            crate::stream::warn(&format!("{} was left behind: {error}", temporary.display()));
-        }
-    }
-    write
+    crate::lake::durable::publish(path, content.as_bytes())
 }
 
 /// Closed segments are immutable and content-addressed: republishing the same
@@ -214,10 +177,13 @@ fn durable_write(path: &Path, content: &str) -> Result<()> {
 /// refusal, never an overwrite.
 impl EventSink for Writer {
     fn accept(&mut self, source_file: &Path, events: &[RawEvent]) -> Result<Vec<SegmentOutput>> {
-        let stem = source_file
-            .file_name()
-            .map(|name| file_stem(&name.to_string_lossy()))
-            .unwrap_or_default();
+        let Some(name) = source_file.file_name() else {
+            return Err(Error(format!(
+                "hook segment {} names no file, so its canonical partition has no name",
+                source_file.display()
+            )));
+        };
+        let stem = file_stem(&name.to_string_lossy());
         let part_name = format!("{stem}.ndjson");
         // First-appearance order, exactly like the Map the previous
         // implementation grouped into.
