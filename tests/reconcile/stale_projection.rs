@@ -8,7 +8,8 @@
 //! reported, exit 1, and kept byte for byte. Inputs, outputs and the source
 //! revision are retained under the package's build directory by `evidence`;
 //! with `TRANSCRIPT_LAKE_JOURNEY_REPORT` set, the passed journey also writes
-//! the criterion report `oko defects repaired --evidence` reads.
+//! the criterion report `oko defects repaired --evidence` reads, for a clean
+//! checkout or for `stado product cargo test --revision <commit>`'s export.
 #[path = "../harnesses/evidence.rs"]
 mod evidence;
 
@@ -122,7 +123,11 @@ fn stale_rows_are_superseded_from_their_original_and_a_missing_original_is_unpro
     let transcript = store(&home);
     let lake = work.join("lake");
     let lake_arg = lake.to_str().expect("UTF-8 Lake path");
-    let environment: &[(&str, &Path)] = &[("HOME", home.as_path())];
+    let formats = evidence::no_secret_classes(&work);
+    let environment: &[(&str, &Path)] = &[
+        ("HOME", home.as_path()),
+        ("TRANSCRIPT_LAKE_SECRET_FORMATS", formats.as_path()),
+    ];
     let root = home.join(".factory").join("sessions");
     let root_arg = root.to_str().expect("UTF-8 native root");
     let adopt = [

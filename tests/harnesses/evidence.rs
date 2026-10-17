@@ -85,18 +85,38 @@ pub fn command(args: &[&str], output: &Output) -> Value {
     })
 }
 
-fn git(args: &[&str]) -> String {
-    let output = Command::new("git")
+fn raw_git(args: &[&str]) -> Vec<u8> {
+    let output = match Command::new("git")
         .args(args)
         .current_dir(env!("CARGO_MANIFEST_DIR"))
         .output()
-        .expect("run git");
+    {
+        Ok(output) => output,
+        Err(error) => panic!("run git {args:?}: {error}"),
+    };
     assert!(
         output.status.success(),
         "git {args:?}: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    String::from_utf8_lossy(&output.stdout).trim().to_owned()
+    output.stdout
+}
+
+fn git(args: &[&str]) -> String {
+    String::from_utf8_lossy(&raw_git(args)).trim().to_owned()
+}
+
+/// The commit Stado exported this tree from. `stado product cargo test
+/// --revision` runs a journey in an exported tree with no Git checkout and
+/// states the commit it exported (`WISENT_SOURCE_COMMIT`), as a release
+/// worker does: that tree is the commit, with nothing uncommitted. Absent,
+/// the journey runs in the checkout and reads its own HEAD and changes.
+fn exported() -> Option<String> {
+    match std::env::var("WISENT_SOURCE_COMMIT") {
+        Ok(commit) => Some(commit),
+        Err(std::env::VarError::NotPresent) => None,
+        Err(error) => panic!("WISENT_SOURCE_COMMIT is set but cannot be read: {error}"),
+    }
 }
 
 fn named(variable: &str) -> String {
@@ -122,16 +142,22 @@ pub fn criterion_report(journey_source: &[u8], commands: Vec<Value>, observed: V
     let Ok(path) = std::env::var("TRANSCRIPT_LAKE_JOURNEY_REPORT") else {
         return;
     };
-    let changed = git(&["status", "--porcelain"]);
-    assert!(
-        changed.is_empty(),
-        "a report names a committed source; the tree has changes:\n{changed}"
-    );
+    let revision = match exported() {
+        Some(commit) => commit,
+        None => {
+            let changed = git(&["status", "--porcelain"]);
+            assert!(
+                changed.is_empty(),
+                "a report names a committed source; the tree has changes:\n{changed}"
+            );
+            git(&["rev-parse", "HEAD"])
+        }
+    };
     let binary = fs::read(env!("CARGO_BIN_EXE_transcript-lake")).expect("read tested binary");
     let document = json!({
         "defectId": named("TRANSCRIPT_LAKE_JOURNEY_SUBJECT"),
         "criterion": named("TRANSCRIPT_LAKE_JOURNEY_CRITERION"),
-        "sourceRevision": git(&["rev-parse", "HEAD"]),
+        "sourceRevision": revision,
         "result": "passed",
         "binarySha256": format!("{:x}", Sha256::digest(binary)),
         "testSha256": format!("{:x}", Sha256::digest(journey_source)),
@@ -201,21 +227,17 @@ pub fn directory() -> std::path::PathBuf {
     let root = Path::new(env!("CARGO_TARGET_TMPDIR"))
         .join(format!("harness-ingestion-{}", uuid::Uuid::new_v4()));
     fs::create_dir_all(&root).expect("create retained journey directory");
-    for (name, args) in [
-        ("source-revision", vec!["rev-parse", "HEAD"]),
-        ("source-patch", vec!["diff", "--binary", "HEAD"]),
-    ] {
-        let output = Command::new("git")
-            .args(args)
-            .current_dir(env!("CARGO_MANIFEST_DIR"))
-            .output()
-            .expect("record source identity");
-        fs::write(root.join(name), &output.stdout).expect("retain source identity");
-        assert!(
-            output.status.success(),
-            "git: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
+    let (revision, patch) = match exported() {
+        Some(commit) => (commit.into_bytes(), Vec::new()),
+        None => (
+            raw_git(&["rev-parse", "HEAD"]),
+            raw_git(&["diff", "--binary", "HEAD"]),
+        ),
+    };
+    for (name, bytes) in [("source-revision", revision), ("source-patch", patch)] {
+        if let Err(error) = fs::write(root.join(name), bytes) {
+            panic!("retain source identity {name}: {error}");
+        }
     }
     let binary = fs::read(env!("CARGO_BIN_EXE_transcript-lake")).expect("read tested binary");
     fs::write(
