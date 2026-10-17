@@ -40,6 +40,10 @@ name = "cursor-damaged-record"
 path = "tests/cursor/damaged_record.rs"
 
 [[test]]
+name = "copilot-unreadable-workspace"
+path = "tests/copilot_chat/unreadable_workspace.rs"
+
+[[test]]
 name = "devin-damaged-node"
 path = "tests/devin/damaged_node.rs"
 
