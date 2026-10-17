@@ -31,8 +31,8 @@ use serde_json::{Map, Value};
 
 use super::common::{
     as_text, database_error, database_of, entry, event, existing_root, file_name,
-    files_with_suffix, int_field, iso_millis, meta, open_database, text_field, tool_call,
-    tool_result, usage,
+    files_with_suffix, int_field, iso_millis, meta, open_database, stored_json, text_field,
+    tool_call, tool_result, usage,
 };
 use crate::types::{Adapter, ParserCtx, RawEvent, Reading, SessionEntry};
 use crate::util::Result;
@@ -135,12 +135,12 @@ fn load(ctx: &ParserCtx) -> Result<Vec<RawEvent>> {
     for row in rows {
         let (part, session, created, message, directory) =
             row.map_err(|error| database_error(path, "a part", error))?;
-        let (Ok(part), Ok(message)) = (
-            serde_json::from_str::<Value>(&part),
-            serde_json::from_str::<Value>(&message),
-        ) else {
-            continue;
-        };
+        let part = stored_json(path, &format!("a part of session {session}"), &part)?;
+        let message = stored_json(
+            path,
+            &format!("the message of a part of session {session}"),
+            &message,
+        )?;
         let mut found = part_events(ctx, &part, &message, iso_millis(created));
         for event in &mut found {
             event.session_id = Some(session.clone());

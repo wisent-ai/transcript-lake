@@ -23,7 +23,8 @@ use serde_json::Value;
 
 use super::common::{
     as_text, database_error, database_of, editor_user_dirs, entry, event, int_field, is_file,
-    iso_millis, iso_millis_field, open_database, text_field, tool_call, tool_result, usage,
+    iso_millis, iso_millis_field, open_database, stored_json, text_field, tool_call, tool_result,
+    usage,
 };
 use crate::types::{Adapter, ParserCtx, RawEvent, Reading, SessionEntry};
 use crate::util::Result;
@@ -117,12 +118,7 @@ fn values(ctx: &ParserCtx, prefix: &str) -> Result<HashMap<String, Value>> {
         let Some(value) = value else {
             continue;
         };
-        let parsed = serde_json::from_str::<Value>(&value).map_err(|error| {
-            crate::util::Error(format!(
-                "chat record {key} in {} is not JSON: {error}",
-                path.display()
-            ))
-        })?;
+        let parsed = stored_json(path, &format!("chat record {key}"), &value)?;
         found.insert(key, parsed);
     }
     Ok(found)

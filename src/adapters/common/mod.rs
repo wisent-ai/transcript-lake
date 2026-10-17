@@ -223,6 +223,18 @@ pub(crate) fn database_error(path: &Path, asked: &str, error: rusqlite::Error) -
     ))
 }
 
+/// A JSON value a database keeps as text, parsed. A value that does not parse
+/// refuses the whole load, naming the record, the database and the parser's
+/// error, so a damaged record never leaves a conversation shorter in silence.
+pub(crate) fn stored_json(path: &Path, record: &str, text: &str) -> Result<serde_json::Value> {
+    serde_json::from_str(text).map_err(|error| {
+        Error(format!(
+            "{record} in {} is not JSON: {error}",
+            path.display()
+        ))
+    })
+}
+
 /// The path a SQLite notification names, mapped to its database: a write
 /// lands in `<db>-wal` (or `<db>-journal`) before the database file.
 pub(crate) fn database_of(path: &Path) -> PathBuf {

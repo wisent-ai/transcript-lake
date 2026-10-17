@@ -25,7 +25,7 @@ use serde_json::{Map, Value};
 
 use super::common::{
     as_text, database_error, database_of, entry, event, existing_root, is_file, meta,
-    open_database, text_field, tool_call, tool_result,
+    open_database, stored_json, text_field, tool_call, tool_result,
 };
 use crate::types::{Adapter, ParserCtx, RawEvent, Reading, SessionEntry};
 use crate::util::Result;
@@ -103,9 +103,11 @@ fn load(ctx: &ParserCtx) -> Result<Vec<RawEvent>> {
     for row in rows {
         let (role, content, stamp, session, directory) =
             row.map_err(|error| database_error(path, "a message", error))?;
-        let Ok(content) = serde_json::from_str::<Value>(&content) else {
-            continue;
-        };
+        let content = stored_json(
+            path,
+            &format!("the content of a {role} message of session {session}"),
+            &content,
+        )?;
         let ts = stamp.map(|mut stamp| {
             if let Some(separator) = stamp.find(' ') {
                 stamp.replace_range(separator..separator + ' '.len_utf8(), "T");

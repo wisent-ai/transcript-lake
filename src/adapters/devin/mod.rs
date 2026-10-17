@@ -28,7 +28,7 @@ use chains::{Identity, Node};
 
 use super::common::{
     chat_messages, database_error, database_of, entry, existing_root, is_file, iso_seconds,
-    open_database, text_field, text_of,
+    open_database, stored_json, text_field, text_of,
 };
 use crate::types::{Adapter, ParserCtx, RawEvent, Reading, SessionEntry};
 use crate::util::Result;
@@ -120,23 +120,21 @@ fn stored_nodes(
             row.map_err(|error| database_error(path, "a message node", error))?;
         let metadata = metadata
             .map(|metadata| {
-                serde_json::from_str::<Value>(&metadata).map_err(|error| {
-                    crate::util::Error(format!(
-                        "the metadata of node {id} of session {session} in {} is not JSON: {error}",
-                        path.display()
-                    ))
-                })
+                stored_json(
+                    path,
+                    &format!("the metadata of node {id} of session {session}"),
+                    &metadata,
+                )
             })
             .transpose()?;
         let scaffolding = metadata
             .and_then(|metadata| metadata.get("is_system_prefix").and_then(Value::as_bool))
             == Some(true);
-        let message = serde_json::from_str::<Value>(&message).map_err(|error| {
-            crate::util::Error(format!(
-                "the message of node {id} of session {session} in {} is not JSON: {error}",
-                path.display()
-            ))
-        })?;
+        let message = stored_json(
+            path,
+            &format!("the message of node {id} of session {session}"),
+            &message,
+        )?;
         let message_id = text_field(&message, "message_id");
         nodes.insert(
             id,

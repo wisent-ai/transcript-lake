@@ -20,7 +20,7 @@ use serde_json::{Map, Value};
 
 use super::common::{
     as_text, database_error, database_of, entry, event, is_file, iso_seconds, meta, open_database,
-    read_json, text_field, tool_call, tool_result,
+    read_json, stored_json, text_field, tool_call, tool_result,
 };
 use crate::types::{Adapter, ParserCtx, RawEvent, Reading, SessionEntry};
 use crate::util::Result;
@@ -117,9 +117,11 @@ fn load(ctx: &ParserCtx) -> Result<Vec<RawEvent>> {
     for row in rows {
         let (role, parts, model, created, session) =
             row.map_err(|error| database_error(path, "a message", error))?;
-        let Ok(parts) = serde_json::from_str::<Value>(&parts) else {
-            continue;
-        };
+        let parts = stored_json(
+            path,
+            &format!("the parts of the {role} message of session {session} created at {created}"),
+            &parts,
+        )?;
         let ts = iso_seconds(created as f64);
         let mut found = part_events(ctx, &role, &parts, ts);
         for event in &mut found {

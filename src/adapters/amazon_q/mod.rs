@@ -26,7 +26,7 @@ use serde_json::Value;
 
 use super::common::{
     as_text, database_error, database_of, entry, event, existing_root, is_file, open_database,
-    text_field, tool_call, tool_result,
+    stored_json, text_field, tool_call, tool_result,
 };
 use crate::types::{Adapter, ParserCtx, RawEvent, Reading, SessionEntry};
 use crate::util::Result;
@@ -116,9 +116,7 @@ fn load(ctx: &ParserCtx, table: &str) -> Result<Vec<RawEvent>> {
     for row in rows {
         let (directory, value) =
             row.map_err(|error| database_error(path, "a conversation", error))?;
-        let Ok(state) = serde_json::from_str::<Value>(&value) else {
-            continue;
-        };
+        let state = stored_json(path, &format!("the conversation of {directory}"), &value)?;
         let session = text_field(&state, "conversation_id");
         let mut found = Vec::new();
         for turn in state
