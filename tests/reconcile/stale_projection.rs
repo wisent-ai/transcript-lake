@@ -6,7 +6,9 @@
 //! duplicating any, leaves the stream cursor after them, and a second run finds
 //! nothing to change. Once the original is gone the partition is unprovable:
 //! reported, exit 1, and kept byte for byte. Inputs, outputs and the source
-//! revision are retained under the package's build directory by `evidence`.
+//! revision are retained under the package's build directory by `evidence`;
+//! with `TRANSCRIPT_LAKE_JOURNEY_REPORT` set, the passed journey also writes
+//! the criterion report `oko defects repaired --evidence` reads.
 #[path = "../harnesses/evidence.rs"]
 mod evidence;
 
@@ -139,22 +141,20 @@ fn stale_rows_are_superseded_from_their_original_and_a_missing_original_is_unpro
         "adopt failed: {}",
         String::from_utf8_lossy(&adopted.stderr)
     );
+    let mut commands = vec![evidence::command(&adopt, &adopted)];
     let current = rows(&lake);
     let stale = make_stale(&lake);
     assert!(!stale.is_empty(), "the journey made no row stale");
     let before = snapshot(&lake);
 
-    let preview = evidence::run(
-        &work,
-        "reconcile-preview",
-        &["--data-dir", lake_arg, "reconcile", "--source", "droid"],
-        environment,
-    );
+    let preview_args = ["--data-dir", lake_arg, "reconcile", "--source", "droid"];
+    let preview = evidence::run(&work, "reconcile-preview", &preview_args, environment);
     assert!(
         preview.status.success(),
         "preview failed: {}",
         String::from_utf8_lossy(&preview.stderr)
     );
+    commands.push(evidence::command(&preview_args, &preview));
     let previewed = report(&preview);
     assert_eq!(previewed["applied"], false);
     assert!(
@@ -169,25 +169,23 @@ fn stale_rows_are_superseded_from_their_original_and_a_missing_original_is_unpro
     );
     assert_eq!(snapshot(&lake), before, "a preview changed the Lake");
 
-    let applied = evidence::run(
-        &work,
-        "reconcile-apply",
-        &[
-            "--data-dir",
-            lake_arg,
-            "reconcile",
-            "--source",
-            "droid",
-            "--apply",
-        ],
-        environment,
-    );
+    let apply_args = [
+        "--data-dir",
+        lake_arg,
+        "reconcile",
+        "--source",
+        "droid",
+        "--apply",
+    ];
+    let applied = evidence::run(&work, "reconcile-apply", &apply_args, environment);
     assert!(
         applied.status.success(),
         "apply failed: {}",
         String::from_utf8_lossy(&applied.stderr)
     );
-    assert_eq!(report(&applied)["applied"], true);
+    commands.push(evidence::command(&apply_args, &applied));
+    let applied_report = report(&applied);
+    assert_eq!(applied_report["applied"], true);
     let reconciled = rows(&lake);
     assert_eq!(
         reconciled.len(),
@@ -216,21 +214,19 @@ fn stale_rows_are_superseded_from_their_original_and_a_missing_original_is_unpro
         "adopt after apply failed: {}",
         String::from_utf8_lossy(&readopted.stderr)
     );
+    commands.push(evidence::command(&adopt, &readopted));
     assert_eq!(
         rows(&lake).len(),
         reconciled.len(),
         "the stream appended what the reconciled partition already held"
     );
 
-    let again = evidence::run(
-        &work,
-        "reconcile-again",
-        &["--data-dir", lake_arg, "reconcile", "--source", "droid"],
-        environment,
-    );
+    let again = evidence::run(&work, "reconcile-again", &preview_args, environment);
     assert!(again.status.success());
+    commands.push(evidence::command(&preview_args, &again));
+    let second = report(&again);
     assert_eq!(
-        report(&again)["partitions"]["changed"],
+        second["partitions"]["changed"],
         Value::Array(Vec::new()),
         "a reconciled Lake still differs from its original"
     );
@@ -282,4 +278,18 @@ fn stale_rows_are_superseded_from_their_original_and_a_missing_original_is_unpro
     );
     assert!(!lone.status.success());
     assert!(String::from_utf8_lossy(&lone.stderr).contains("reconcile --reindex needs --apply"));
+
+    evidence::criterion_report(
+        include_bytes!("stale_projection.rs"),
+        commands,
+        serde_json::json!({
+            "rowsBeforeApply": current.len(),
+            "rowsAfterApply": reconciled.len(),
+            "rowsMadeStale": stale.len(),
+            "providerNotice": notices,
+            "applied": applied_report,
+            "secondRun": second,
+            "unprovableAfterOriginalRemoved": unprovable,
+        }),
+    );
 }

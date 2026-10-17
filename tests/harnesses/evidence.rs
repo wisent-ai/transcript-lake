@@ -74,6 +74,76 @@ pub fn run(root: &Path, name: &str, args: &[&str], environment: &[(&str, &Path)]
     output
 }
 
+/// One command a journey ran and that succeeded, as a criterion report lists
+/// it.
+pub fn command(args: &[&str], output: &Output) -> Value {
+    json!({
+        "executable": env!("CARGO_BIN_EXE_transcript-lake"),
+        "args": args,
+        "exit": output.status.code(),
+        "stderr": String::from_utf8_lossy(&output.stderr),
+    })
+}
+
+fn git(args: &[&str]) -> String {
+    let output = Command::new("git")
+        .args(args)
+        .current_dir(env!("CARGO_MANIFEST_DIR"))
+        .output()
+        .expect("run git");
+    assert!(
+        output.status.success(),
+        "git {args:?}: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8_lossy(&output.stdout).trim().to_owned()
+}
+
+fn named(variable: &str) -> String {
+    match std::env::var(variable) {
+        Ok(value) => value,
+        Err(error) => panic!(
+            "{variable} names what the report answers and TRANSCRIPT_LAKE_JOURNEY_REPORT asks for a report: {error}"
+        ),
+    }
+}
+
+/// With `TRANSCRIPT_LAKE_JOURNEY_REPORT=<file>` a passed journey writes the
+/// criterion report Oko reads before it records a defect repaired: the
+/// committed source revision it ran (a tree with uncommitted changes is
+/// refused), the digests of the tested binary and of the journey's source,
+/// every command that succeeded with its arguments, exit status and stderr,
+/// and the final state it observed. `TRANSCRIPT_LAKE_JOURNEY_SUBJECT` names
+/// the register entry and `TRANSCRIPT_LAKE_JOURNEY_CRITERION` the criterion
+/// the report answers; each is refused by name when a report is asked for
+/// without it. Without the report variable nothing is written.
+pub fn criterion_report(journey_source: &[u8], commands: Vec<Value>, observed: Value) {
+    use sha2::{Digest, Sha256};
+    let Ok(path) = std::env::var("TRANSCRIPT_LAKE_JOURNEY_REPORT") else {
+        return;
+    };
+    let changed = git(&["status", "--porcelain"]);
+    assert!(
+        changed.is_empty(),
+        "a report names a committed source; the tree has changes:\n{changed}"
+    );
+    let binary = fs::read(env!("CARGO_BIN_EXE_transcript-lake")).expect("read tested binary");
+    let document = json!({
+        "defectId": named("TRANSCRIPT_LAKE_JOURNEY_SUBJECT"),
+        "criterion": named("TRANSCRIPT_LAKE_JOURNEY_CRITERION"),
+        "sourceRevision": git(&["rev-parse", "HEAD"]),
+        "result": "passed",
+        "binarySha256": format!("{:x}", Sha256::digest(binary)),
+        "testSha256": format!("{:x}", Sha256::digest(journey_source)),
+        "commands": commands,
+        "observedFinalState": observed,
+    });
+    let bytes = serde_json::to_vec_pretty(&document).expect("serialize the report");
+    if let Err(error) = fs::write(&path, bytes) {
+        panic!("write the report {path}: {error}");
+    }
+}
+
 pub fn show_retains_canonical_extra(
     root: &Path,
     lake: &str,
