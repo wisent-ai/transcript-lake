@@ -143,17 +143,21 @@ fn omp_usage_parts_and_credential_reach_the_partition() {
         String::from_utf8_lossy(&adopted.stderr)
     );
     let rows = store::rows(&lake);
-    let row = rows.iter().find(|row| {
-        row["role"] == "assistant"
-            && row["ts"] == stamp
-            && row["extra"]["credential_id"].as_i64() == Some(usage.credential)
-    });
-    assert!(
-        row.is_some(),
-        "no assistant row dated {stamp} billed to {}",
-        usage.credential
-    );
-    let row = row.expect("the measured row");
+    // Usage belongs to the first emitted block, which can be thinking or a
+    // tool call rather than assistant text. Canonical rows have event_type,
+    // not the native message's role.
+    let billed: Vec<_> = rows
+        .iter()
+        .filter(|row| {
+            row["ts"] == stamp && row["extra"]["credential_id"].as_i64() == Some(usage.credential)
+        })
+        .collect();
+    let [row] = billed.as_slice() else {
+        panic!(
+            "expected one usage-bearing event dated {stamp} billed to {}, got {billed:?}",
+            usage.credential
+        );
+    };
     assert_eq!(row["tokens_in"].as_i64(), Some(usage.whole()), "{row}");
     assert_eq!(row["tokens_out"].as_i64(), Some(usage.output), "{row}");
     assert_eq!(
