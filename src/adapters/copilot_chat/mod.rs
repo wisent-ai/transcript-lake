@@ -219,7 +219,7 @@ fn request_events(ctx: &ParserCtx, request: &Value) -> Vec<RawEvent> {
                     ));
                 }
             }
-            Some(other) => events.push(meta(ctx, ts.clone(), other, String::new(), Map::new())),
+            Some(other) => events.push(meta(ctx, ts.clone(), other, None, Map::new())),
         }
     }
     if !answer.is_empty() {

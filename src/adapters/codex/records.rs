@@ -87,7 +87,7 @@ impl CodexParser {
             if let Some(source) = text_field(&payload, "source") {
                 extra.insert("source".into(), Value::from(source));
             }
-            let mut event = make("meta", "");
+            let mut event = make("meta", None);
             event.extra = extra;
             return vec![event];
         }
@@ -110,27 +110,24 @@ impl CodexParser {
         if record_type == "compacted" {
             let make = self.maker(&ts);
             // A compaction may record no message; its event then has no text.
-            let text = match text_field(&payload, "message") {
-                Some(text) => text,
-                None => String::new(),
-            };
-            let mut event = make("meta", &text);
+            let text = text_field(&payload, "message");
+            let mut event = make("meta", text.as_deref());
             event.extra.insert("kind".into(), Value::from("compacted"));
             return vec![event];
         }
         Vec::new()
     }
 
-    fn maker(&self, ts: &str) -> impl Fn(&str, &str) -> RawEvent {
+    fn maker(&self, ts: &str) -> impl Fn(&str, Option<&str>) -> RawEvent {
         let ts = ts.to_string();
         let session_id = self.session_id.clone();
         let project = self.project.clone();
-        move |event_type: &str, text: &str| RawEvent {
+        move |event_type: &str, text: Option<&str>| RawEvent {
             ts: Some(ts.clone()),
             session_id: session_id.clone(),
             project: project.clone(),
             event_type: event_type.to_string(),
-            text: text.to_string(),
+            text: text.map(str::to_string),
             ..RawEvent::default()
         }
     }
@@ -140,11 +137,8 @@ impl CodexParser {
         match payload.get("type").and_then(Value::as_str) {
             Some("user_message") => {
                 // A user turn may record no message; its event then has no text.
-                let text = match text_field(payload, "message") {
-                    Some(text) => text,
-                    None => String::new(),
-                };
-                vec![make("user", &text)]
+                let text = text_field(payload, "message");
+                vec![make("user", text.as_deref())]
             }
             // Current Codex writes no user_message: the operator's turn is the
             // completed item whose type is UserMessage, without the injected
@@ -159,7 +153,7 @@ impl CodexParser {
                         Some((first, words)) if words == text => first,
                         _ => ts.to_string(),
                     };
-                    vec![self.maker(&said)("user", &text)]
+                    vec![self.maker(&said)("user", Some(&text))]
                 }
                 _ => Vec::new(),
             },
@@ -202,7 +196,7 @@ impl CodexParser {
                 if !usage.is_reported() {
                     return Vec::new();
                 }
-                let mut event = make("meta", "");
+                let mut event = make("meta", None);
                 event.model = self.model.clone();
                 event
                     .extra
@@ -240,7 +234,7 @@ impl CodexParser {
             if text.is_empty() {
                 return Vec::new();
             }
-            let mut event = make("thinking", &text);
+            let mut event = make("thinking", Some(&text));
             event.model = self.model.clone();
             return vec![event];
         }
@@ -250,21 +244,17 @@ impl CodexParser {
             if let Some(call_id) = text_field(payload, "call_id") {
                 extra.insert("call_id".into(), Value::from(call_id));
             }
-            let mut event = make("tool_result", &output_text(payload.get("output")));
+            let output = output_text(payload.get("output"));
+            let mut event = make("tool_result", output.as_deref());
             event.extra = extra;
             return vec![event];
         }
         if sub.ends_with("_call") {
             // The call's text is its arguments or input as recorded, else the
             // JSON of its action, else nothing.
-            let args =
-                match text_field(payload, "arguments").or_else(|| text_field(payload, "input")) {
-                    Some(args) => args,
-                    None => match payload.get("action") {
-                        Some(action) => action.to_string(),
-                        None => String::new(),
-                    },
-                };
+            let args = text_field(payload, "arguments")
+                .or_else(|| text_field(payload, "input"))
+                .or_else(|| payload.get("action").map(Value::to_string));
             let mut extra = Map::new();
             extra.insert("kind".into(), Value::from(sub.clone()));
             if let Some(call_id) = text_field(payload, "call_id") {
@@ -275,7 +265,7 @@ impl CodexParser {
                 Some(name) => name,
                 None => sub,
             };
-            let mut event = make("tool_call", &args);
+            let mut event = make("tool_call", args.as_deref());
             event.tool_name = Some(tool_name);
             event.model = self.model.clone();
             event.extra = extra;

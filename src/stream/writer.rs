@@ -64,7 +64,7 @@ impl Writer {
 
     fn canonicalize(&mut self, event: &RawEvent, runtime: &str) -> (CanonicalEvent, String) {
         let date = date_of(event.ts.as_deref());
-        let text = self.masker.mask(&event.text);
+        let text = event.text.as_deref().map(|text| self.masker.mask(text));
         let extra = mask_deep(Value::Object(event.extra.clone()), &mut self.masker);
         let canonical = CanonicalEvent {
             ts: event.ts.clone(),

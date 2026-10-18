@@ -66,7 +66,7 @@ pub(super) fn part_events(
             if let Some(mime) = data.get("mimeType") {
                 fields.insert("mime_type".into(), mime.clone());
             }
-            events.push(meta(ctx, ts.clone(), "attachment", String::new(), fields));
+            events.push(meta(ctx, ts.clone(), "attachment", None, fields));
         }
     }
     events

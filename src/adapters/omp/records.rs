@@ -67,15 +67,22 @@ impl Parser for OmpParser {
 }
 
 impl OmpParser {
-    fn make(&self, ts: Option<&String>, event_type: &str, text: &str) -> RawEvent {
+    fn make(&self, ts: Option<&String>, event_type: &str, text: Option<&str>) -> RawEvent {
         RawEvent {
             ts: ts.cloned(),
             session_id: self.session_id.clone(),
             project: self.project.clone(),
             event_type: event_type.to_string(),
-            text: text.to_string(),
+            text: text.map(str::to_string),
             ..RawEvent::default()
         }
+    }
+
+    /// A metadata event of record type `kind` with the record's `text`.
+    fn noted(&self, ts: Option<&String>, kind: &str, text: Option<&str>) -> RawEvent {
+        let mut event = self.make(ts, "meta", text);
+        event.extra.insert("kind".into(), Value::from(kind));
+        event
     }
 
     /// `None` means the record's epoch timestamp is unrepresentable, which threw
@@ -99,84 +106,74 @@ impl OmpParser {
         let ts = self.stamp(rec)?;
         // A record whose type is not text is none of the kinds below; it
         // becomes the unknown meta event at the end, carrying what it held.
-        let record_type = match rec.get("type") {
-            Some(Value::String(kind)) => kind.clone(),
-            _ => String::new(),
-        };
-        if record_type == "session" {
-            if let Some(Value::String(cwd)) = rec.get("cwd") {
-                if !cwd.is_empty() {
-                    self.project = Some(cwd.clone());
+        let at = ts.as_ref();
+        match rec.get("type").and_then(Value::as_str) {
+            Some("session") => {
+                if let Some(Value::String(cwd)) = rec.get("cwd") {
+                    if !cwd.is_empty() {
+                        self.project = Some(cwd.clone());
+                    }
                 }
-            }
-            if let Some(Value::String(id)) = rec.get("id") {
-                if !id.is_empty() {
-                    self.session_id = Some(id.clone());
+                if let Some(Value::String(id)) = rec.get("id") {
+                    if !id.is_empty() {
+                        self.session_id = Some(id.clone());
+                    }
                 }
+                let mut event = self.noted(at, "session", None);
+                prune(&mut event.extra, "version", rec.get("version"));
+                Some(vec![event])
             }
-            let mut extra = Map::new();
-            extra.insert("kind".into(), Value::from(record_type));
-            prune(&mut extra, "version", rec.get("version"));
-            let mut event = self.make(ts.as_ref(), "meta", "");
-            event.extra = extra;
-            return Some(vec![event]);
-        }
-        if record_type == "message" {
-            return Some(self.message_events(rec, ts.as_ref()));
-        }
-        if record_type == "title" || record_type == "title_change" {
-            let title = match rec.get("title") {
-                Some(Value::String(title)) => title.clone(),
-                _ => String::new(),
-            };
-            let mut event = self.make(ts.as_ref(), "meta", &title);
-            event.extra.insert("kind".into(), Value::from(record_type));
-            return Some(vec![event]);
-        }
-        if record_type == "model_change" {
-            if let Some(Value::String(model)) = rec.get("model") {
-                self.model = Some(model.clone());
+            Some("message") => Some(self.message_events(rec, at)),
+            Some(kind @ "title") => {
+                let title = rec.get("title").and_then(Value::as_str);
+                Some(vec![self.noted(at, kind, title)])
             }
-            let mut event = self.make(ts.as_ref(), "meta", "");
-            event.extra.insert("kind".into(), Value::from(record_type));
-            event.model = self.model.clone();
-            return Some(vec![event]);
+            Some(kind @ "title_change") => {
+                let title = rec.get("title").and_then(Value::as_str);
+                Some(vec![self.noted(at, kind, title)])
+            }
+            Some("model_change") => {
+                if let Some(Value::String(model)) = rec.get("model") {
+                    self.model = Some(model.clone());
+                }
+                let mut event = self.noted(at, "model_change", None);
+                event.model = self.model.clone();
+                Some(vec![event])
+            }
+            Some("thinking_level_change") => {
+                let mut event = self.noted(at, "thinking_level_change", None);
+                prune(&mut event.extra, "level", rec.get("thinkingLevel"));
+                Some(vec![event])
+            }
+            Some("compaction") => {
+                let summary = rec.get("summary").and_then(Value::as_str);
+                let mut event = self.noted(at, "compaction", summary);
+                prune(&mut event.extra, "tokens_before", rec.get("tokensBefore"));
+                prune(
+                    &mut event.extra,
+                    "first_kept_entry",
+                    rec.get("firstKeptEntryId"),
+                );
+                Some(vec![event])
+            }
+            Some(kind @ "custom_message") => Some(vec![self.custom(at, kind, rec)]),
+            Some(kind @ "custom") => Some(vec![self.custom(at, kind, rec)]),
+            _ => {
+                let mut event = self.noted(at, "unknown", None);
+                event
+                    .extra
+                    .insert("omp_type".into(), Value::from(js_string(rec.get("type"))));
+                Some(vec![event])
+            }
         }
-        if record_type == "thinking_level_change" {
-            let mut extra = Map::new();
-            extra.insert("kind".into(), Value::from(record_type));
-            prune(&mut extra, "level", rec.get("thinkingLevel"));
-            let mut event = self.make(ts.as_ref(), "meta", "");
-            event.extra = extra;
-            return Some(vec![event]);
-        }
-        if record_type == "compaction" {
-            let summary = match rec.get("summary") {
-                Some(Value::String(text)) => text.clone(),
-                _ => String::new(),
-            };
-            let mut extra = Map::new();
-            extra.insert("kind".into(), Value::from(record_type));
-            prune(&mut extra, "tokens_before", rec.get("tokensBefore"));
-            prune(&mut extra, "first_kept_entry", rec.get("firstKeptEntryId"));
-            let mut event = self.make(ts.as_ref(), "meta", &summary);
-            event.extra = extra;
-            return Some(vec![event]);
-        }
-        if record_type == "custom_message" || record_type == "custom" {
-            let mut extra = Map::new();
-            extra.insert("kind".into(), Value::from(record_type));
-            prune(&mut extra, "custom_type", rec.get("customType"));
-            let mut event = self.make(ts.as_ref(), "meta", &text_joined(rec.get("content")));
-            event.extra = extra;
-            return Some(vec![event]);
-        }
-        let mut event = self.make(ts.as_ref(), "meta", "");
-        event.extra.insert("kind".into(), Value::from("unknown"));
+    }
+
+    /// A custom record: its content as text and its custom type.
+    fn custom(&self, ts: Option<&String>, kind: &str, rec: &Value) -> RawEvent {
+        let content = text_joined(rec.get("content"));
+        let mut event = self.noted(ts, kind, Some(&content));
+        prune(&mut event.extra, "custom_type", rec.get("customType"));
         event
-            .extra
-            .insert("omp_type".into(), Value::from(js_string(rec.get("type"))));
-        Some(vec![event])
     }
 
     fn flush_text(
@@ -190,7 +187,7 @@ impl OmpParser {
         if buffer.is_empty() {
             return;
         }
-        let mut event = self.make(ts, text_type, &buffer.join("\n"));
+        let mut event = self.make(ts, text_type, Some(&buffer.join("\n")));
         if text_type == "meta" {
             event.extra.insert("kind".into(), Value::from("message"));
             event.extra.insert("role".into(), Value::from(role));

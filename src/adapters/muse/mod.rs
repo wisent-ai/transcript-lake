@@ -125,7 +125,7 @@ impl MuseParser {
                     _ => Vec::new(),
                 }
             }
-            Some(other) => vec![meta(&self.ctx, ts, other, String::new(), Map::new())],
+            Some(other) => vec![meta(&self.ctx, ts, other, None, Map::new())],
             None => Vec::new(),
         }
     }

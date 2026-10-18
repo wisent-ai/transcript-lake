@@ -106,7 +106,7 @@ impl Parser for CopilotParser {
                 {
                     self.ctx.project = Some(cwd);
                 }
-                vec![meta(&self.ctx, ts, kind, String::new(), Map::new())]
+                vec![meta(&self.ctx, ts, kind, None, Map::new())]
             }
             "session.model_change" => {
                 self.model = text_field(data, "newModel");
@@ -150,7 +150,7 @@ impl Parser for CopilotParser {
                     Map::new(),
                 )]
             }
-            other => vec![meta(&self.ctx, ts, other, String::new(), Map::new())],
+            other => vec![meta(&self.ctx, ts, other, None, Map::new())],
         }
     }
 }

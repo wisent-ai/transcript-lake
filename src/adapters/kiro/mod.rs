@@ -201,7 +201,7 @@ impl KiroParser {
                     None,
                 ));
             }
-            other => out.push(meta(&self.ctx, ts, other, String::new(), Map::new())),
+            other => out.push(meta(&self.ctx, ts, other, None, Map::new())),
         }
         out.extend(events);
         out
@@ -239,7 +239,7 @@ impl KiroParser {
                 _ => Vec::new(),
             },
             Some("tool_result") => vec![tool_result(&self.ctx, ts, None, words, None, None)],
-            Some(other) => vec![meta(&self.ctx, ts, other, String::new(), Map::new())],
+            Some(other) => vec![meta(&self.ctx, ts, other, None, Map::new())],
             None => Vec::new(),
         }
     }

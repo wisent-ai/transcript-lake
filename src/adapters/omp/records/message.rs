@@ -11,7 +11,7 @@ use crate::adapters::common::{int_field, js_string, prune, text_joined, Usage};
 impl OmpParser {
     pub(super) fn message_events(&self, rec: &Value, ts: Option<&String>) -> Vec<RawEvent> {
         let Some(msg) = rec.get("message").filter(|value| value.is_object()) else {
-            let mut event = self.make(ts, "meta", "");
+            let mut event = self.make(ts, "meta", None);
             event.extra.insert("kind".into(), Value::from("message"));
             return vec![event];
         };
@@ -20,7 +20,8 @@ impl OmpParser {
             _ => "unknown".to_string(),
         };
         if role == "toolResult" {
-            let mut event = self.make(ts, "tool_result", &text_joined(msg.get("content")));
+            let output = text_joined(msg.get("content"));
+            let mut event = self.make(ts, "tool_result", Some(&output));
             event.tool_name = match msg.get("toolName") {
                 Some(Value::String(name)) => Some(name.clone()),
                 _ => None,
@@ -60,31 +61,25 @@ impl OmpParser {
             }
             match block.get("type").and_then(Value::as_str) {
                 Some("text") => {
-                    buffer.push(match block.get("text") {
-                        Some(Value::String(text)) => text.clone(),
-                        _ => String::new(),
-                    });
+                    // A text block without text adds no words.
+                    if let Some(Value::String(text)) = block.get("text") {
+                        buffer.push(text.clone());
+                    }
                 }
                 Some("thinking") => {
                     self.flush_text(&mut events, &mut buffer, ts, text_type, &role);
-                    let thinking = match block.get("thinking") {
-                        Some(Value::String(text)) => text.clone(),
-                        _ => String::new(),
-                    };
-                    events.push(self.make(ts, "thinking", &thinking));
+                    let thinking = block.get("thinking").and_then(Value::as_str);
+                    events.push(self.make(ts, "thinking", thinking));
                 }
                 Some("toolCall") => {
                     self.flush_text(&mut events, &mut buffer, ts, text_type, &role);
                     // The call's arguments are the row's text, as the claude
                     // adapter writes a tool_use block's input: a reader of the
                     // projection sees what the agent ran, not only that it ran
-                    // something. `arguments` is already JSON; its text form
-                    // is the call's arguments.
-                    let args = match block.get("arguments") {
-                        Some(arguments) => arguments.to_string(),
-                        None => String::new(),
-                    };
-                    let mut event = self.make(ts, "tool_call", &args);
+                    // something. `arguments` is already JSON; its text form is
+                    // the call's arguments, and a call without them has none.
+                    let args = block.get("arguments").map(Value::to_string);
+                    let mut event = self.make(ts, "tool_call", args.as_deref());
                     event.tool_name = match block.get("name") {
                         Some(Value::String(name)) => Some(name.clone()),
                         _ => None,
@@ -94,7 +89,7 @@ impl OmpParser {
                 }
                 _ => {
                     self.flush_text(&mut events, &mut buffer, ts, text_type, &role);
-                    let mut event = self.make(ts, "meta", "");
+                    let mut event = self.make(ts, "meta", None);
                     event.extra.insert("kind".into(), Value::from("block"));
                     event.extra.insert(
                         "omp_block".into(),

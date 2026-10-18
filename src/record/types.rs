@@ -20,7 +20,7 @@ pub fn supported_sources() -> Vec<&'static str> {
 }
 
 /// The canonical event types, in the order the Lake contract lists them.
-pub const EVENT_TYPES: [&str; 7] = [
+pub const EVENT_TYPES: &[&str] = &[
     "user",
     "assistant",
     "thinking",
@@ -53,7 +53,9 @@ pub struct RawEvent {
     pub session_id: Option<String>,
     pub project: Option<String>,
     pub event_type: String,
-    pub text: String,
+    /// The words the source recorded for this event; none when it recorded
+    /// none, never an empty stand-in.
+    pub text: Option<String>,
     pub tool_name: Option<String>,
     pub model: Option<String>,
     pub tokens_in: Option<i64>,
@@ -71,7 +73,8 @@ pub struct CanonicalEvent {
     pub session_id: Option<String>,
     pub project: Option<String>,
     pub event_type: String,
-    pub text: String,
+    /// The masked text, persisted as null when the source recorded none.
+    pub text: Option<String>,
     pub tool_name: Option<String>,
     pub model: Option<String>,
     pub tokens_in: Option<i64>,

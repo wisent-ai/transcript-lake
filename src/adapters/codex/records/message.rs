@@ -27,12 +27,12 @@ impl CodexParser {
             if text.is_empty() {
                 return Vec::new();
             }
-            let mut event = make("assistant", &text);
+            let mut event = make("assistant", Some(&text));
             event.model = self.model.clone();
             return vec![event];
         }
         // developer / system prompts: record presence only, never the text.
-        let mut event = make("meta", "");
+        let mut event = make("meta", None);
         event
             .extra
             .insert("kind".into(), Value::from("system_prompt"));
@@ -61,29 +61,30 @@ pub(super) fn content_text(content: Option<&Value>) -> String {
 /// `function_call_output.output` is usually a plain string; some CLI versions wrap it
 /// as a JSON string or object `{ output | content, metadata }`. Unwrap the readable
 /// part. A leading '{' does not guarantee JSON: the raw string IS the tool output then.
-pub(super) fn output_text(value: Option<&Value>) -> String {
-    match value {
-        Some(Value::String(text)) => {
+/// An output the item does not carry is none.
+pub(super) fn output_text(value: Option<&Value>) -> Option<String> {
+    match value? {
+        Value::String(text) => {
             let trimmed = text.trim();
             if trimmed.starts_with('{') && trimmed.contains("\"output\"") {
                 if let Ok(parsed) = serde_json::from_str::<Value>(trimmed) {
                     if let Some(Value::String(output)) = parsed.get("output") {
-                        return output.clone();
+                        return Some(output.clone());
                     }
                 }
             }
-            text.clone()
+            Some(text.clone())
         }
-        Some(object @ Value::Object(map)) => {
+        object @ Value::Object(map) => {
             if let Some(Value::String(output)) = map.get("output") {
-                return output.clone();
+                return Some(output.clone());
             }
             if let Some(Value::String(content)) = map.get("content") {
-                return content.clone();
+                return Some(content.clone());
             }
-            object.to_string()
+            Some(object.to_string())
         }
-        Some(items @ Value::Array(_)) => items.to_string(),
-        _ => String::new(),
+        items @ Value::Array(_) => Some(items.to_string()),
+        _ => None,
     }
 }

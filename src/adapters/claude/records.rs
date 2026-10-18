@@ -58,12 +58,12 @@ impl ClaudeParser {
         };
         let session_id = self.session_id.clone();
         let project = self.project.clone();
-        let make = move |event_type: &str, text: &str| RawEvent {
+        let make = move |event_type: &str, text: Option<&str>| RawEvent {
             ts: Some(ts.clone()),
             session_id: session_id.clone(),
             project: project.clone(),
             event_type: event_type.to_string(),
-            text: text.to_string(),
+            text: text.map(str::to_string),
             ..RawEvent::default()
         };
         match rec.get("type").and_then(Value::as_str) {
@@ -72,23 +72,19 @@ impl ClaudeParser {
             Some("system") => {
                 // A system record may carry neither content nor a stop
                 // reason; its event then says that it happened, with no text.
-                let text =
-                    match text_field(rec, "content").or_else(|| text_field(rec, "stopReason")) {
-                        Some(text) => text,
-                        None => String::new(),
-                    };
+                let text = text_field(rec, "content").or_else(|| text_field(rec, "stopReason"));
                 let mut extra = Map::new();
                 extra.insert("kind".into(), Value::from("system"));
                 if let Some(subtype) = text_field(rec, "subtype") {
                     extra.insert("subtype".into(), Value::from(subtype));
                 }
-                let mut event = make("meta", &text);
+                let mut event = make("meta", text.as_deref());
                 event.extra = extra;
                 vec![event]
             }
             Some("summary") => match text_field(rec, "summary") {
                 Some(summary) => {
-                    let mut event = make("meta", &summary);
+                    let mut event = make("meta", Some(&summary));
                     event.extra.insert("kind".into(), Value::from("summary"));
                     vec![event]
                 }
@@ -99,7 +95,7 @@ impl ClaudeParser {
     }
 }
 
-fn map_user(rec: &Value, make: &dyn Fn(&str, &str) -> RawEvent) -> Vec<RawEvent> {
+fn map_user(rec: &Value, make: &dyn Fn(&str, Option<&str>) -> RawEvent) -> Vec<RawEvent> {
     let Some(msg) = rec.get("message").filter(|value| value.is_object()) else {
         return Vec::new();
     };
@@ -128,7 +124,7 @@ fn map_user(rec: &Value, make: &dyn Fn(&str, &str) -> RawEvent) -> Vec<RawEvent>
     match msg.get("content") {
         Some(Value::String(content)) => {
             if !content.trim().is_empty() {
-                let mut event = make(event_type, content);
+                let mut event = make(event_type, Some(content));
                 event.extra = flag;
                 events.push(event);
             }
@@ -153,7 +149,7 @@ fn map_user(rec: &Value, make: &dyn Fn(&str, &str) -> RawEvent) -> Vec<RawEvent>
             }
             let text = text_parts.join("\n").trim().to_string();
             if !text.is_empty() {
-                let mut event = make(event_type, &text);
+                let mut event = make(event_type, Some(&text));
                 event.extra = flag;
                 events.push(event);
             }
@@ -165,11 +161,12 @@ fn map_user(rec: &Value, make: &dyn Fn(&str, &str) -> RawEvent) -> Vec<RawEvent>
 
 fn tool_result_event(
     block: &Value,
-    make: &dyn Fn(&str, &str) -> RawEvent,
+    make: &dyn Fn(&str, Option<&str>) -> RawEvent,
     flag: &Map<String, Value>,
 ) -> RawEvent {
+    // A result block without content recorded no output.
     let text = match block.get("content") {
-        Some(Value::String(content)) => content.clone(),
+        Some(Value::String(content)) => Some(content.clone()),
         Some(Value::Array(items)) => {
             let mut parts = Vec::new();
             for item in items {
@@ -183,9 +180,9 @@ fn tool_result_event(
                     _ => {}
                 }
             }
-            parts.join("\n")
+            Some(parts.join("\n"))
         }
-        _ => String::new(),
+        _ => None,
     };
     let mut extra = flag.clone();
     if let Some(tool_use_id) = text_field(block, "tool_use_id") {
@@ -194,10 +191,10 @@ fn tool_result_event(
     if block.get("is_error") == Some(&Value::Bool(true)) {
         extra.insert("is_error".into(), Value::Bool(true));
     }
-    if let Some(reference) = persisted_output_path(&text) {
+    if let Some(reference) = text.as_deref().and_then(persisted_output_path) {
         extra.insert("result_file".into(), Value::from(reference));
     }
-    let mut event = make("tool_result", &text);
+    let mut event = make("tool_result", text.as_deref());
     event.extra = extra;
     event
 }

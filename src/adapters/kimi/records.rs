@@ -53,16 +53,16 @@ impl Parser for KimiParser {
 }
 
 impl KimiParser {
-    fn maker(&self, ts: &str) -> impl Fn(&str, &str) -> RawEvent {
+    fn maker(&self, ts: &str) -> impl Fn(&str, Option<&str>) -> RawEvent {
         let ts = ts.to_string();
         let session_id = self.session_id.clone();
         let project = self.project.clone();
-        move |event_type: &str, text: &str| RawEvent {
+        move |event_type: &str, text: Option<&str>| RawEvent {
             ts: Some(ts.clone()),
             session_id: session_id.clone(),
             project: project.clone(),
             event_type: event_type.to_string(),
-            text: text.to_string(),
+            text: text.map(str::to_string),
             ..RawEvent::default()
         }
     }
@@ -105,7 +105,7 @@ impl KimiParser {
             if let Some(app) = text_field(rec, "app_version") {
                 extra.insert("app".into(), Value::from(app));
             }
-            let mut event = make("meta", "");
+            let mut event = make("meta", None);
             event.extra = extra;
             return vec![event];
         }
@@ -116,20 +116,20 @@ impl KimiParser {
             if let Some(profile) = text_field(rec, "profileName") {
                 extra.insert("profile".into(), Value::from(profile));
             }
-            let mut event = make("meta", "");
+            let mut event = make("meta", None);
             event.extra = extra;
             return vec![event];
         }
         if record_type == "context.apply_compaction" {
             if let Some(summary) = text_field(rec, "summary") {
-                let mut event = make("meta", &summary);
+                let mut event = make("meta", Some(&summary));
                 event.extra.insert("kind".into(), Value::from("compaction"));
                 return vec![event];
             }
             return Vec::new();
         }
         if record_type == "turn.cancel" {
-            let mut event = make("meta", "");
+            let mut event = make("meta", None);
             event
                 .extra
                 .insert("kind".into(), Value::from("turn.cancel"));
@@ -153,7 +153,7 @@ impl KimiParser {
                 match part.get("type").and_then(Value::as_str) {
                     Some("text") => match text_field(part, "text") {
                         Some(text) => {
-                            let mut out = make("assistant", &text);
+                            let mut out = make("assistant", Some(&text));
                             out.model = self.last_model.clone();
                             vec![out]
                         }
@@ -161,7 +161,7 @@ impl KimiParser {
                     },
                     Some("think") => match text_field(part, "think") {
                         Some(text) => {
-                            let mut out = make("thinking", &text);
+                            let mut out = make("thinking", Some(&text));
                             out.model = self.last_model.clone();
                             vec![out]
                         }
@@ -176,21 +176,17 @@ impl KimiParser {
                 if let (Some(call_id), Some(name)) = (&call_id, &name) {
                     self.tool_names.insert(call_id.clone(), name.clone());
                 }
-                // Mirror the claude adapter: the argument JSON is the searchable text.
-                let mut text = match ev.get("args") {
-                    Some(args) => args.to_string(),
-                    None => String::new(),
-                };
-                if text.is_empty() {
-                    if let Some(description) = text_field(ev, "description") {
-                        text = description;
-                    }
-                }
+                // Mirror the claude adapter: the argument JSON is the searchable
+                // text, else the call's description, else none.
+                let text = ev
+                    .get("args")
+                    .map(Value::to_string)
+                    .or_else(|| text_field(ev, "description"));
                 let mut extra = Map::new();
                 if let Some(call_id) = &call_id {
                     extra.insert("tool_use_id".into(), Value::from(call_id.clone()));
                 }
-                let mut out = make("tool_call", &text);
+                let mut out = make("tool_call", text.as_deref());
                 out.tool_name = name;
                 out.model = self.last_model.clone();
                 out.extra = extra;
@@ -200,10 +196,10 @@ impl KimiParser {
                 let call_id = text_field(ev, "toolCallId").or_else(|| text_field(ev, "parentUuid"));
                 let result = ev.get("result").filter(|value| value.is_object());
                 let text = match result.and_then(|result| result.get("output")) {
-                    Some(Value::String(output)) => output.clone(),
+                    Some(Value::String(output)) => Some(output.clone()),
                     _ => match ev.get("result") {
-                        Some(Value::String(output)) => output.clone(),
-                        _ => String::new(),
+                        Some(Value::String(output)) => Some(output.clone()),
+                        _ => None,
                     },
                 };
                 let tool_name = call_id
@@ -219,7 +215,7 @@ impl KimiParser {
                 if is_error {
                     extra.insert("is_error".into(), Value::Bool(true));
                 }
-                let mut out = make("tool_result", &text);
+                let mut out = make("tool_result", text.as_deref());
                 out.tool_name = tool_name;
                 out.extra = extra;
                 vec![out]
@@ -251,7 +247,7 @@ impl KimiParser {
         if !usage.is_reported() {
             return Vec::new();
         }
-        let mut event = self.maker(ts)("meta", "");
+        let mut event = self.maker(ts)("meta", None);
         event.model = self.last_model.clone();
         event.extra.insert("kind".into(), Value::from("usage"));
         usage.record(&mut event);

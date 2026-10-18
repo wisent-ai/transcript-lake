@@ -58,7 +58,7 @@ impl Parser for SettingsParser {
             session_id: self.ctx.session_id.clone(),
             project: self.ctx.project.clone(),
             event_type: "meta".to_string(),
-            text: String::new(),
+            text: None,
             tool_name: None,
             model: None,
             tokens_in: usage.and_then(|usage| int_field(usage, "inputTokens")),

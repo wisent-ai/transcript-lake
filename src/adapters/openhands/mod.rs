@@ -145,5 +145,5 @@ fn event_of(ctx: &ParserCtx, record: &Value) -> Vec<RawEvent> {
     if let Some(kind) = record.get("kind") {
         fields.insert("event_kind".into(), kind.clone());
     }
-    vec![meta(ctx, ts, "openhands_event", String::new(), fields)]
+    vec![meta(ctx, ts, "openhands_event", None, fields)]
 }

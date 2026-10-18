@@ -98,7 +98,7 @@ impl Parser for CommandCodeParser {
                 if let Some(cwd) = text_field(&record, "cwd") {
                     self.ctx.project = Some(cwd);
                 }
-                vec![meta(&self.ctx, ts, "session", String::new(), Map::new())]
+                vec![meta(&self.ctx, ts, "session", None, Map::new())]
             }
             Some("message") => {
                 let Some(message) = record.get("message") else {
@@ -116,7 +116,7 @@ impl Parser for CommandCodeParser {
                 as_text(record.get("summary")),
                 Map::new(),
             )],
-            Some(other) => vec![meta(&self.ctx, ts, other, String::new(), Map::new())],
+            Some(other) => vec![meta(&self.ctx, ts, other, None, Map::new())],
             None => match text_field(&record, "role") {
                 Some(role) => anthropic_blocks(&self.ctx, &role, record.get("content"), ts),
                 None => Vec::new(),

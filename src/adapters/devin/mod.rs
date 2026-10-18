@@ -224,7 +224,7 @@ fn load(ctx: &ParserCtx) -> Result<Vec<RawEvent>> {
                     event.session_id = Some(session_id.clone());
                     event.project = directory.clone();
                     if message.get("role").and_then(Value::as_str) == Some("system") {
-                        event.text = text_of(message.get("content"));
+                        event.text = Some(text_of(message.get("content")));
                     }
                     if let Some(name) = &chain_name {
                         event

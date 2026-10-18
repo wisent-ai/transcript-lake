@@ -65,13 +65,13 @@ impl Parser for TranscriptParser {
 }
 
 impl TranscriptParser {
-    fn make(&self, ts: Option<&String>, event_type: &str, text: &str) -> RawEvent {
+    fn make(&self, ts: Option<&String>, event_type: &str, text: Option<&str>) -> RawEvent {
         RawEvent {
             ts: ts.cloned(),
             session_id: self.session_id.clone(),
             project: self.project.clone(),
             event_type: event_type.to_string(),
-            text: text.to_string(),
+            text: text.map(str::to_string),
             ..RawEvent::default()
         }
     }
@@ -94,73 +94,67 @@ impl TranscriptParser {
         let ts = self.stamp(rec)?;
         // A record whose type is not text is none of the kinds below; it
         // becomes the unknown meta event at the end.
-        let record_type = match rec.get("type") {
-            Some(Value::String(kind)) => kind.clone(),
-            _ => String::new(),
-        };
-        if record_type == "session_start" {
-            if let Some(Value::String(cwd)) = rec.get("cwd") {
-                if !cwd.is_empty() {
-                    self.project = Some(cwd.clone());
+        match rec.get("type").and_then(Value::as_str) {
+            Some("session_start") => {
+                if let Some(Value::String(cwd)) = rec.get("cwd") {
+                    if !cwd.is_empty() {
+                        self.project = Some(cwd.clone());
+                    }
                 }
-            }
-            if let Some(Value::String(id)) = rec.get("id") {
-                if !id.is_empty() {
-                    self.session_id = Some(id.clone());
+                if let Some(Value::String(id)) = rec.get("id") {
+                    if !id.is_empty() {
+                        self.session_id = Some(id.clone());
+                    }
                 }
+                let title = match rec.get("sessionTitle") {
+                    Some(Value::String(title)) if !title.is_empty() => Some(title.as_str()),
+                    _ => rec.get("title").and_then(Value::as_str),
+                };
+                let mut extra = Map::new();
+                extra.insert("kind".into(), Value::from("session_start"));
+                prune(&mut extra, "version", rec.get("version"));
+                let mut event = self.make(ts.as_ref(), "meta", title);
+                event.extra = extra;
+                Some(vec![event])
             }
-            let title = match rec.get("sessionTitle") {
-                Some(Value::String(title)) if !title.is_empty() => title.clone(),
-                _ => match rec.get("title") {
-                    Some(Value::String(title)) => title.clone(),
-                    _ => String::new(),
-                },
-            };
-            let mut extra = Map::new();
-            extra.insert("kind".into(), Value::from(record_type));
-            prune(&mut extra, "version", rec.get("version"));
-            let mut event = self.make(ts.as_ref(), "meta", &title);
-            event.extra = extra;
-            return Some(vec![event]);
-        }
-        if record_type == "message" {
-            return Some(self.message_events(rec, ts.as_ref()));
-        }
-        if record_type == "todo_state" {
-            let mut event = self.make(ts.as_ref(), "meta", "");
-            event.extra.insert("kind".into(), Value::from(record_type));
-            // A todo state that records no list says nothing about its count.
-            if let Some(todos) = rec
-                .get("todos")
-                .and_then(|box_value| box_value.get("todos"))
-                .and_then(Value::as_array)
-            {
+            Some("message") => Some(self.message_events(rec, ts.as_ref())),
+            Some("todo_state") => {
+                let mut event = self.make(ts.as_ref(), "meta", None);
+                event.extra.insert("kind".into(), Value::from("todo_state"));
+                // A todo state that records no list says nothing about its count.
+                if let Some(todos) = rec
+                    .get("todos")
+                    .and_then(|box_value| box_value.get("todos"))
+                    .and_then(Value::as_array)
+                {
+                    event
+                        .extra
+                        .insert("todo_count".into(), Value::from(todos.len()));
+                }
+                Some(vec![event])
+            }
+            Some("compaction_state") => {
+                let summary = rec.get("summaryText").and_then(Value::as_str);
+                let mut event = self.make(ts.as_ref(), "meta", summary);
                 event
                     .extra
-                    .insert("todo_count".into(), Value::from(todos.len()));
+                    .insert("kind".into(), Value::from("compaction_state"));
+                Some(vec![event])
             }
-            return Some(vec![event]);
+            _ => {
+                let mut event = self.make(ts.as_ref(), "meta", None);
+                event.extra.insert("kind".into(), Value::from("unknown"));
+                event
+                    .extra
+                    .insert("droid_type".into(), Value::from(js_string(rec.get("type"))));
+                Some(vec![event])
+            }
         }
-        if record_type == "compaction_state" {
-            let summary = match rec.get("summaryText") {
-                Some(Value::String(text)) => text.clone(),
-                _ => String::new(),
-            };
-            let mut event = self.make(ts.as_ref(), "meta", &summary);
-            event.extra.insert("kind".into(), Value::from(record_type));
-            return Some(vec![event]);
-        }
-        let mut event = self.make(ts.as_ref(), "meta", "");
-        event.extra.insert("kind".into(), Value::from("unknown"));
-        event
-            .extra
-            .insert("droid_type".into(), Value::from(js_string(rec.get("type"))));
-        Some(vec![event])
     }
 
     fn message_events(&self, rec: &Value, ts: Option<&String>) -> Vec<RawEvent> {
         let Some(msg) = rec.get("message").filter(|value| value.is_object()) else {
-            let mut event = self.make(ts, "meta", "");
+            let mut event = self.make(ts, "meta", None);
             event.extra.insert("kind".into(), Value::from("message"));
             return vec![event];
         };
@@ -192,28 +186,22 @@ impl TranscriptParser {
             }
             match block.get("type").and_then(Value::as_str) {
                 Some("text") => {
-                    buffer.push(match block.get("text") {
-                        Some(Value::String(text)) => text.clone(),
-                        _ => String::new(),
-                    });
+                    // A text block without text adds no words.
+                    if let Some(Value::String(text)) = block.get("text") {
+                        buffer.push(text.clone());
+                    }
                 }
                 Some("thinking") => {
                     self.flush_text(&mut events, &mut buffer, ts, text_type, &role, visibility);
-                    let thinking = match block.get("thinking") {
-                        Some(Value::String(text)) => text.clone(),
-                        _ => String::new(),
-                    };
-                    events.push(self.make(ts, "thinking", &thinking));
+                    let thinking = block.get("thinking").and_then(Value::as_str);
+                    events.push(self.make(ts, "thinking", thinking));
                 }
                 Some("tool_use") => {
                     self.flush_text(&mut events, &mut buffer, ts, text_type, &role, visibility);
                     // The same shape as the omp adapter's toolCall: the input
                     // is the row's text, so a reader sees what was run.
-                    let args = match block.get("input") {
-                        Some(input) => input.to_string(),
-                        None => String::new(),
-                    };
-                    let mut event = self.make(ts, "tool_call", &args);
+                    let args = block.get("input").map(Value::to_string);
+                    let mut event = self.make(ts, "tool_call", args.as_deref());
                     event.tool_name = match block.get("name") {
                         Some(Value::String(name)) => Some(name.clone()),
                         _ => None,
@@ -223,14 +211,14 @@ impl TranscriptParser {
                 }
                 Some("tool_result") => {
                     self.flush_text(&mut events, &mut buffer, ts, text_type, &role, visibility);
-                    let mut event =
-                        self.make(ts, "tool_result", &text_joined(block.get("content")));
+                    let output = text_joined(block.get("content"));
+                    let mut event = self.make(ts, "tool_result", Some(&output));
                     prune(&mut event.extra, "call_id", block.get("tool_use_id"));
                     events.push(event);
                 }
                 _ => {
                     self.flush_text(&mut events, &mut buffer, ts, text_type, &role, visibility);
-                    let mut event = self.make(ts, "meta", "");
+                    let mut event = self.make(ts, "meta", None);
                     event.extra.insert("kind".into(), Value::from("block"));
                     event.extra.insert(
                         "droid_block".into(),
@@ -256,7 +244,7 @@ impl TranscriptParser {
         if buffer.is_empty() {
             return;
         }
-        let mut event = self.make(ts, text_type, &buffer.join("\n"));
+        let mut event = self.make(ts, text_type, Some(&buffer.join("\n")));
         event.extra.insert("role".into(), Value::from(role));
         if text_type == "meta" {
             event.extra.insert("kind".into(), Value::from("message"));

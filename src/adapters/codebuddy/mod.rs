@@ -152,7 +152,7 @@ impl Parser for CodeBuddyParser {
                     vec![event(ctx, ts, "thinking", thought)]
                 }
             }
-            Some(other) => vec![meta(ctx, ts, other, String::new(), Map::new())],
+            Some(other) => vec![meta(ctx, ts, other, None, Map::new())],
             None => Vec::new(),
         }
     }

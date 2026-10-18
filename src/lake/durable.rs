@@ -12,6 +12,13 @@ fn step<T>(result: std::io::Result<T>, action: &str, path: &Path) -> Result<T> {
     result.map_err(|error| Error(format!("could not {action} {}: {error}", path.display())))
 }
 
+/// Flush `directory` so the names it holds survive a crash; a failure names
+/// the step and the directory.
+pub fn sync_directory(directory: &Path) -> Result<()> {
+    let opened = step(File::open(directory), "open the directory", directory)?;
+    step(opened.sync_all(), "flush the directory", directory)
+}
+
 /// Publish `bytes` as the whole content of `path`. A path without a directory
 /// or without a file name is refused, because the sibling and the directory
 /// flush need both. A failed step names itself and its path; a sibling left
@@ -59,8 +66,7 @@ pub fn publish(path: &Path, bytes: &[u8]) -> Result<()> {
             "rename the new content over",
             path,
         )?;
-        let opened = step(File::open(directory), "open the directory", directory)?;
-        step(opened.sync_all(), "flush the directory", directory)
+        sync_directory(directory)
     })();
     if written.is_err() {
         match fs::remove_file(&sibling) {

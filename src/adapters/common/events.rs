@@ -6,19 +6,20 @@ use serde_json::{Map, Value};
 use super::{as_text, iso_millis, text_field, text_of};
 use crate::types::{ParserCtx, RawEvent};
 
-/// One event of `ctx`'s session at `ts`.
+/// One event of `ctx`'s session at `ts`, with the text the harness recorded
+/// (a `String`) or `None` when it recorded none.
 pub(crate) fn event(
     ctx: &ParserCtx,
     ts: Option<String>,
     event_type: &str,
-    text: String,
+    text: impl Into<Option<String>>,
 ) -> RawEvent {
     RawEvent {
         ts,
         session_id: ctx.session_id.clone(),
         project: ctx.project.clone(),
         event_type: event_type.to_string(),
-        text,
+        text: text.into(),
         ..RawEvent::default()
     }
 }
@@ -28,7 +29,7 @@ pub(crate) fn tool_call(
     ctx: &ParserCtx,
     ts: Option<String>,
     name: Option<&str>,
-    input: String,
+    input: impl Into<Option<String>>,
     id: Option<&str>,
 ) -> RawEvent {
     let mut call = event(ctx, ts, "tool_call", input);
@@ -45,7 +46,7 @@ pub(crate) fn tool_result(
     ctx: &ParserCtx,
     ts: Option<String>,
     name: Option<&str>,
-    output: String,
+    output: impl Into<Option<String>>,
     id: Option<&str>,
     failed: Option<bool>,
 ) -> RawEvent {
@@ -68,7 +69,7 @@ pub(crate) fn meta(
     ctx: &ParserCtx,
     ts: Option<String>,
     kind: &str,
-    text: String,
+    text: impl Into<Option<String>>,
     fields: Map<String, Value>,
 ) -> RawEvent {
     let mut note = event(ctx, ts, "meta", text);
@@ -87,7 +88,7 @@ pub(crate) fn usage(
     tokens_in: Option<i64>,
     tokens_out: Option<i64>,
 ) -> RawEvent {
-    let mut note = event(ctx, ts, "meta", String::new());
+    let mut note = event(ctx, ts, "meta", None);
     note.model = model;
     note.tokens_in = tokens_in;
     note.tokens_out = tokens_out;
@@ -159,13 +160,7 @@ pub(crate) fn chat_messages(
             Some("system") => {
                 let mut fields = Map::new();
                 fields.insert("role".into(), Value::String("system".into()));
-                events.push(meta(
-                    ctx,
-                    at.clone(),
-                    "system_prompt",
-                    String::new(),
-                    fields,
-                ));
+                events.push(meta(ctx, at.clone(), "system_prompt", None, fields));
             }
             _ => {}
         }
@@ -196,7 +191,8 @@ pub(crate) fn anthropic_blocks(
                     // Words under a role that is neither side of the
                     // conversation (a tool's, a command's) are tool output.
                     match role {
-                        "assistant" | "user" => events.push(event(ctx, at.clone(), role, words)),
+                        "assistant" => events.push(event(ctx, at.clone(), role, words)),
+                        "user" => events.push(event(ctx, at.clone(), role, words)),
                         _ => {
                             events.push(tool_result(ctx, at.clone(), Some(role), words, None, None))
                         }
@@ -229,13 +225,7 @@ pub(crate) fn anthropic_blocks(
             Some(other) => {
                 let mut fields = Map::new();
                 fields.insert("block_type".into(), Value::String(other.to_string()));
-                events.push(meta(
-                    ctx,
-                    at.clone(),
-                    "unknown_block",
-                    String::new(),
-                    fields,
-                ));
+                events.push(meta(ctx, at.clone(), "unknown_block", None, fields));
             }
             None => {}
         }

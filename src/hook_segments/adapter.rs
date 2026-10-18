@@ -20,10 +20,6 @@ pub fn hooks_adapter() -> Box<dyn Adapter> {
     Box::new(Hooks)
 }
 
-const PICK: [&str; 7] = [
-    "event", "decision", "tool", "code", "ms", "timedOut", "infra",
-];
-
 struct Hooks;
 
 impl Adapter for Hooks {
@@ -105,10 +101,11 @@ impl Parser for HooksParser {
         }
         let ts = match rec.get("ts") {
             Some(Value::Number(number)) => {
-                let millis = number.as_f64().unwrap_or(f64::NAN);
-                if !millis.is_finite() {
+                // A time that is not a finite number of milliseconds is no
+                // moment, and the line is dropped as one without a time.
+                let Some(millis) = number.as_f64().filter(|millis| millis.is_finite()) else {
                     return Vec::new();
-                }
+                };
                 // `new Date(ms).toISOString()` threw a RangeError here, which the
                 // driver caught per line and reported; the line is still dropped.
                 match epoch_iso(millis) {
@@ -128,11 +125,14 @@ impl Parser for HooksParser {
         let Some(ts) = ts.filter(|value| !value.is_empty()) else {
             return Vec::new();
         };
+        // Every field the writer recorded travels in `extra` under its own
+        // name, so the decision, event and infra flags downstream SQL reads
+        // arrive unchanged; a null field records nothing.
         let mut extra = Map::new();
-        for key in PICK {
-            if let Some(value) = rec.get(key) {
+        if let Value::Object(fields) = &rec {
+            for (key, value) in fields {
                 if !value.is_null() {
-                    extra.insert(key.to_string(), value.clone());
+                    extra.insert(key.clone(), value.clone());
                 }
             }
         }
@@ -142,8 +142,8 @@ impl Parser for HooksParser {
             project: first_present(&rec, &["project", "cwd"]),
             event_type: "hook_decision".to_string(),
             text: match rec.get("reason") {
-                Some(Value::String(reason)) => reason.clone(),
-                _ => String::new(),
+                Some(Value::String(reason)) => Some(reason.clone()),
+                _ => None,
             },
             tool_name: match rec.get("id") {
                 Some(Value::String(id)) => Some(id.clone()),

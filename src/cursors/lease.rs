@@ -1,5 +1,5 @@
 //! Durable single-writer leases and cursor-store publication locks.
-use std::fs::{self, File, OpenOptions};
+use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
@@ -8,10 +8,8 @@ use serde_json::json;
 
 use crate::lake::owner;
 use crate::util::{machine_name, Error, Result};
-pub(super) fn sync_directory(path: &Path) -> Result<()> {
-    File::open(path)?.sync_all()?;
-    Ok(())
-}
+
+pub(super) use crate::lake::durable::sync_directory;
 
 /// The owner record a lease is published with: the machine and process that
 /// hold it, the start time that tells that process from a later one with the

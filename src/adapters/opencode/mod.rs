@@ -223,7 +223,7 @@ pub(crate) fn part_events(
                 count("output"),
             )]
         }
-        Some(other) => vec![meta(ctx, ts, other, String::new(), Map::new())],
+        Some(other) => vec![meta(ctx, ts, other, None, Map::new())],
         None => Vec::new(),
     }
 }

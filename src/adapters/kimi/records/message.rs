@@ -27,7 +27,7 @@ pub(super) fn is_truthy(value: &Value) -> bool {
 
 pub(super) fn map_message(
     msg: Option<&Value>,
-    make: &dyn Fn(&str, &str) -> RawEvent,
+    make: &dyn Fn(&str, Option<&str>) -> RawEvent,
 ) -> Vec<RawEvent> {
     let Some(msg) = msg.filter(|value| value.is_object()) else {
         return Vec::new();
@@ -61,12 +61,12 @@ pub(super) fn map_message(
         if let Some(origin) = origin.as_deref().filter(|origin| *origin != "user") {
             // Injections and background-task notifications are synthetic context,
             // not turns.
-            let mut event = make("meta", &text);
+            let mut event = make("meta", Some(&text));
             event.extra.insert("kind".into(), Value::from("injected"));
             event.extra.insert("origin".into(), Value::from(origin));
             return vec![event];
         }
-        let mut event = make("user", &text);
+        let mut event = make("user", Some(&text));
         if origin.as_deref() == Some("user") {
             event
                 .extra
@@ -75,7 +75,7 @@ pub(super) fn map_message(
         return vec![event];
     }
     if role == "assistant" {
-        return vec![make("assistant", &text)];
+        return vec![make("assistant", Some(&text))];
     }
     Vec::new()
 }

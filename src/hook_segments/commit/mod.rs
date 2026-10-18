@@ -50,7 +50,7 @@ pub(super) fn publish_ack(ready_dir: &Path, segment: &Segment, commit: &Value) -
     });
     let content = format!("{}\n", serde_json::to_string_pretty(&ack)?);
     if !acked(&path)? {
-        return durable_write(&path, content.as_bytes());
+        return crate::lake::durable::publish(&path, content.as_bytes());
     }
     // An acknowledgement that cannot be read is not a data conflict; saying
     // "conflict" sent the operator after a disagreement that never existed.
@@ -66,9 +66,9 @@ pub(super) fn publish_ack(ready_dir: &Path, segment: &Segment, commit: &Value) -
     // more than one process — a cursor restored from backup, a rebuild, or a
     // resumed stream. A differing process id alone is not a data conflict.
     // An acknowledgement that is not JSON is not a disagreement either.
-    let prior = parse(&raw).ok_or_else(|| {
+    let prior = parse(&raw).map_err(|cause| {
         Error(format!(
-            "hook segment acknowledgement {} is not a JSON object",
+            "hook segment acknowledgement {} {cause}",
             path.display()
         ))
     })?;
@@ -87,7 +87,7 @@ pub(super) fn publish_ack(ready_dir: &Path, segment: &Segment, commit: &Value) -
     }
     // Re-point the acknowledgement at the commit the cursor now holds, so the two
     // records stop diverging on the next run.
-    durable_write(&path, content.as_bytes())
+    crate::lake::durable::publish(&path, content.as_bytes())
 }
 
 pub(super) fn process_segment(

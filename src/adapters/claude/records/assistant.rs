@@ -8,7 +8,10 @@ use crate::types::RawEvent;
 
 use crate::adapters::common::{int_field, text_field, Usage};
 
-pub(super) fn map_assistant(rec: &Value, make: &dyn Fn(&str, &str) -> RawEvent) -> Vec<RawEvent> {
+pub(super) fn map_assistant(
+    rec: &Value,
+    make: &dyn Fn(&str, Option<&str>) -> RawEvent,
+) -> Vec<RawEvent> {
     let Some(msg) = rec.get("message").filter(|value| value.is_object()) else {
         return Vec::new();
     };
@@ -36,7 +39,7 @@ pub(super) fn map_assistant(rec: &Value, make: &dyn Fn(&str, &str) -> RawEvent) 
             Some("text") => {
                 if let Some(Value::String(text)) = block.get("text") {
                     if !text.trim().is_empty() {
-                        let mut event = make("assistant", text);
+                        let mut event = make("assistant", Some(text));
                         event.model = model.clone();
                         event.extra = flag.clone();
                         events.push(event);
@@ -48,7 +51,7 @@ pub(super) fn map_assistant(rec: &Value, make: &dyn Fn(&str, &str) -> RawEvent) 
                 // signature; skip those.
                 if let Some(Value::String(thinking)) = block.get("thinking") {
                     if !thinking.trim().is_empty() {
-                        let mut event = make("thinking", thinking);
+                        let mut event = make("thinking", Some(thinking));
                         event.model = model.clone();
                         event.extra = flag.clone();
                         events.push(event);
@@ -56,16 +59,14 @@ pub(super) fn map_assistant(rec: &Value, make: &dyn Fn(&str, &str) -> RawEvent) 
                 }
             }
             Some("tool_use") => {
-                // block.input is already JSON; its text form is the call's arguments.
-                let args = match block.get("input") {
-                    Some(input) => input.to_string(),
-                    None => String::new(),
-                };
+                // block.input is already JSON; its text form is the call's
+                // arguments, and a call without input recorded none.
+                let args = block.get("input").map(Value::to_string);
                 let mut extra = flag.clone();
                 if let Some(id) = text_field(block, "id") {
                     extra.insert("tool_use_id".into(), Value::from(id));
                 }
-                let mut event = make("tool_call", &args);
+                let mut event = make("tool_call", args.as_deref());
                 event.tool_name = text_field(block, "name");
                 event.model = model.clone();
                 event.extra = extra;
@@ -85,7 +86,7 @@ pub(super) fn attach_usage(
     events: &mut Vec<RawEvent>,
     usage: Option<&Value>,
     model: Option<&str>,
-    make: &dyn Fn(&str, &str) -> RawEvent,
+    make: &dyn Fn(&str, Option<&str>) -> RawEvent,
 ) {
     let Some(usage) = usage else {
         return;
@@ -103,7 +104,7 @@ pub(super) fn attach_usage(
         usage.record(first);
         return;
     }
-    let mut event = make("meta", "");
+    let mut event = make("meta", None);
     event.model = model.map(str::to_string);
     event.extra.insert("kind".into(), Value::from("usage"));
     usage.record(&mut event);

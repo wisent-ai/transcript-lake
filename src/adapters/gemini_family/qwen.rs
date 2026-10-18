@@ -167,7 +167,7 @@ impl Parser for QwenParser {
                 if let Some(written) = subtype {
                     fields.insert("subtype".into(), Value::String(written.to_string()));
                 }
-                vec![meta(ctx, ts.clone(), "system", String::new(), fields)]
+                vec![meta(ctx, ts.clone(), "system", None, fields)]
             }
             _ => Vec::new(),
         };

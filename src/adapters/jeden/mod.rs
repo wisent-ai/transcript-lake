@@ -183,9 +183,9 @@ impl JedenParser {
             "agent_state" if text_field(data, "purpose").is_some() => {
                 let mut fields = Map::new();
                 fields.insert("purpose".into(), data["purpose"].clone());
-                vec![meta(ctx, ts, "delegated_session", String::new(), fields)]
+                vec![meta(ctx, ts, "delegated_session", None, fields)]
             }
-            other => vec![meta(ctx, ts, other, String::new(), Map::new())],
+            other => vec![meta(ctx, ts, other, None, Map::new())],
         }
     }
 }

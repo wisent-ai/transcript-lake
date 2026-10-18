@@ -42,8 +42,8 @@ pub(super) fn validate_hook_segment(path: &Path) -> std::result::Result<Segment,
     let [opening, frames @ .., closing] = rows.as_slice() else {
         return Err("holds no footer after its header".into());
     };
-    let header = parse(opening).ok_or("header is not a JSON object")?;
-    let footer = parse(closing).ok_or("footer is not a JSON object")?;
+    let header = parse(opening).map_err(|cause| format!("header {cause}"))?;
+    let footer = parse(closing).map_err(|cause| format!("footer {cause}"))?;
     if header.get("kind").and_then(Value::as_str) != Some("segment_open") {
         return Err("header is not a segment_open frame".into());
     }
@@ -58,9 +58,11 @@ pub(super) fn validate_hook_segment(path: &Path) -> std::result::Result<Segment,
         .ok_or("header has no finite createdAt")?;
     string_field(&header, "producerId").ok_or("header has no producerId")?;
     string_field(&header, "invocationId").ok_or("header has no invocationId")?;
-    let source_ok = header.get("source").is_some_and(|value| {
-        truthy(value) && value.get("producer").and_then(Value::as_str) == Some("hooks-rotator")
-    });
+    let source_ok = header
+        .get("source")
+        .and_then(|source| source.get("producer"))
+        .and_then(Value::as_str)
+        == Some("hooks-rotator");
     if !source_ok {
         return Err("header source is not the hooks-rotator producer".into());
     }
@@ -70,8 +72,7 @@ pub(super) fn validate_hook_segment(path: &Path) -> std::result::Result<Segment,
     }
     let mut events = Vec::new();
     for row in frames {
-        let frame =
-            parse(row).ok_or_else(|| format!("frame {} is not a JSON object", events.len()))?;
+        let frame = parse(row).map_err(|cause| format!("frame {} {cause}", events.len()))?;
         if frame.get("kind").and_then(Value::as_str) != Some("event") {
             return Err(format!("frame {} is not an event frame", events.len()));
         }
