@@ -103,12 +103,13 @@ pub(super) fn download(url: &str, destination: &Path) -> Result<()> {
     })?;
     fs::create_dir_all(parent)?;
     let temporary = destination.with_extension(format!("download-{}", std::process::id()));
-    let status = Command::new("curl")
-        .args(["--fail", "--location", "--output"])
-        .arg(&temporary)
-        .arg(url)
-        .status()
-        .map_err(|error| Error(format!("failed to start curl for model artifact: {error}")))?;
+    let status = stado_wait::status(
+        Command::new("curl")
+            .args(["--fail", "--location", "--output"])
+            .arg(&temporary)
+            .arg(url),
+    )
+    .map_err(|error| Error(format!("failed to start curl for model artifact: {error}")))?;
     if !status.success() {
         // curl may leave nothing or a partial file; a partial file that cannot
         // be removed is named with the failure.
@@ -121,7 +122,18 @@ pub(super) fn download(url: &str, destination: &Path) -> Result<()> {
             "model artifact download from {url} failed with status {status}{left}"
         )));
     }
-    fs::rename(&temporary, destination)?;
+    if let Err(error) = fs::rename(&temporary, destination) {
+        let left = match fs::remove_file(&temporary) {
+            Ok(()) => String::new(),
+            Err(cleanup) if cleanup.kind() == io::ErrorKind::NotFound => String::new(),
+            Err(cleanup) => format!("; {} was left behind: {cleanup}", temporary.display()),
+        };
+        return Err(Error(format!(
+            "could not publish model artifact {} as {}: {error}{left}",
+            temporary.display(),
+            destination.display()
+        )));
+    }
     Ok(())
 }
 
@@ -174,11 +186,7 @@ pub(super) fn validate_model(data_dir: &Path, path: &Path) -> Result<()> {
         }
     }
     validate_digest(path, MODEL_SHA256, "model")?;
-    fs::create_dir_all(artifact_dir(data_dir))?;
-    let temporary = stamp_path.with_extension(format!("json-{}", std::process::id()));
-    fs::write(&temporary, serde_json::to_vec(&expected)?)?;
-    fs::rename(temporary, stamp_path)?;
-    Ok(())
+    crate::lake::durable::publish(&stamp_path, &serde_json::to_vec(&expected)?)
 }
 
 pub(super) fn validate_digest(path: &Path, expected: &str, name: &str) -> Result<()> {

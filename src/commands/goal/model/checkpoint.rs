@@ -96,7 +96,7 @@ pub(crate) fn resolve_checkpoint(data_dir: &Path, model: &Path) -> Result<PathBu
                     ))
                 })?
                 .to_owned();
-            fs::write(&recorded, &sha)?;
+            crate::lake::durable::publish(&recorded, sha.as_bytes())?;
             sha
         }
         Err(error) => {
