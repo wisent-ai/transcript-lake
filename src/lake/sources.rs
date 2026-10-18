@@ -4,16 +4,16 @@
 //! canonical stream before this registry is changed, so a selected source is a
 //! statement about accepted Lake state rather than an onboarding preference.
 use std::fs;
-use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use uuid::Uuid;
 
 use crate::util::{now_iso, Error, Result};
 
 pub const SOURCE_REGISTRY_FILE: &str = "sources.json";
+/// The registry format this Lake reads and writes:
+// https://github.com/wisent-ai/transcript-lake/blob/main/docs/sources.md#format
 const SOURCE_REGISTRY_SCHEMA: u32 = 1;
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -38,12 +38,14 @@ pub fn registry_path(data_dir: &Path) -> PathBuf {
     data_dir.join(SOURCE_REGISTRY_FILE)
 }
 
+/// A source's id as docs/sources.md defines it.
 pub fn source_identity(runtime: &str, root: &Path) -> String {
     let mut digest = Sha256::new();
     digest.update(runtime.as_bytes());
-    digest.update([0]);
+    digest.update(b"\0");
     digest.update(root.as_os_str().as_encoded_bytes());
     let hash = format!("{:x}", digest.finalize());
+    // https://github.com/wisent-ai/transcript-lake/blob/main/docs/sources.md#identity
     format!("{runtime}:{}", &hash[..24])
 }
 
@@ -74,11 +76,15 @@ pub fn selected_source(data_dir: &Path) -> Result<Option<AdoptedSource>> {
 
 pub fn persist_selection(data_dir: &Path, runtime: &str, root: &Path) -> Result<AdoptedSource> {
     let id = source_identity(runtime, root);
-    let mut registry = read_registry(data_dir)?.unwrap_or(SourceRegistry {
-        schema_version: SOURCE_REGISTRY_SCHEMA,
-        selected_source_id: id.clone(),
-        sources: Vec::new(),
-    });
+    // A Lake that has adopted no source yet starts its registry here.
+    let mut registry = match read_registry(data_dir)? {
+        Some(registry) => registry,
+        None => SourceRegistry {
+            schema_version: SOURCE_REGISTRY_SCHEMA,
+            selected_source_id: id.clone(),
+            sources: Vec::new(),
+        },
+    };
     let source = match registry.sources.iter().find(|source| source.id == id) {
         Some(existing) => existing.clone(),
         None => {
@@ -96,10 +102,9 @@ pub fn persist_selection(data_dir: &Path, runtime: &str, root: &Path) -> Result<
     registry
         .sources
         .sort_by(|left, right| left.id.cmp(&right.id));
-    durable_write(
-        &registry_path(data_dir),
-        &serde_json::to_vec_pretty(&registry)?,
-    )?;
+    let mut bytes = serde_json::to_vec_pretty(&registry)?;
+    bytes.push(b'\n');
+    crate::lake::durable::publish(&registry_path(data_dir), &bytes)?;
     Ok(source)
 }
 
@@ -151,30 +156,4 @@ fn validate_registry(registry: &SourceRegistry, path: &Path) -> Result<()> {
         )));
     }
     Ok(())
-}
-
-fn durable_write(path: &Path, bytes: &[u8]) -> Result<()> {
-    let parent = path.parent().unwrap_or_else(|| Path::new("."));
-    fs::create_dir_all(parent)?;
-    let temporary = parent.join(format!(".sources.{}.tmp", Uuid::new_v4()));
-    let result = (|| -> Result<()> {
-        let mut file = fs::OpenOptions::new()
-            .create_new(true)
-            .write(true)
-            .open(&temporary)?;
-        file.write_all(bytes)?;
-        file.write_all(b"\n")?;
-        file.sync_all()?;
-        drop(file);
-        fs::rename(&temporary, path)?;
-        fs::File::open(parent)?.sync_all()?;
-        Ok(())
-    })();
-    if result.is_err() {
-        // A temporary file that stays is said; nothing else removes it.
-        if let Err(error) = fs::remove_file(&temporary) {
-            crate::stream::warn(&format!("{} was left behind: {error}", temporary.display()));
-        }
-    }
-    result
 }
