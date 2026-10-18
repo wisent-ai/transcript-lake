@@ -166,12 +166,6 @@ impl Writer {
     }
 }
 
-/// Whole-file publish for immutable output, so a reader never observes a
-/// partial segment partition.
-fn durable_write(path: &Path, content: &str) -> Result<()> {
-    crate::lake::durable::publish(path, content.as_bytes())
-}
-
 /// Closed segments are immutable and content-addressed: republishing the same
 /// bytes is a no-op, republishing different bytes under the same name is a
 /// refusal, never an overwrite.
@@ -215,7 +209,7 @@ impl EventSink for Writer {
                     )));
                 }
             } else {
-                durable_write(&path, &content)?;
+                crate::lake::durable::publish(&path, content.as_bytes())?;
             }
             outputs.push(SegmentOutput { path, sha256 });
         }
