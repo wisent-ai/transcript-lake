@@ -5,7 +5,7 @@ use serde_json::{Map, Value};
 
 use crate::types::{Parser, ParserCtx, RawEvent};
 
-use crate::adapters::common::{int_field, prune};
+use crate::adapters::common::{int_field, prune, stored_json};
 
 /// A sidecar is small and is not line-oriented: the lines are kept until the
 /// end of the file, where they are parsed once as one JSON document.
@@ -30,8 +30,13 @@ impl Parser for SettingsParser {
     }
 
     fn end(&mut self) -> Vec<RawEvent> {
-        let Ok(rec) = serde_json::from_str::<Value>(&self.lines.join("\n")) else {
-            return Vec::new();
+        let text = self.lines.join("\n");
+        let rec = match stored_json(&self.ctx.file, "the settings sidecar", &text) {
+            Ok(rec) => rec,
+            Err(error) => {
+                eprintln!("sessions: {error}");
+                return Vec::new();
+            }
         };
         if !rec.is_object() {
             return Vec::new();

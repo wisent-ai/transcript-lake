@@ -22,8 +22,8 @@ use std::path::{Path, PathBuf};
 use serde_json::{Map, Value};
 
 use super::common::{
-    as_text, entry, event, existing_root, int_field, is_file, iso_millis, meta, subdirectories,
-    text_field, tool_call, tool_result, usage,
+    appended_record, as_text, entry, event, existing_root, int_field, is_file, iso_millis, meta,
+    stored_json, subdirectories, text_field, tool_call, tool_result, usage,
 };
 use crate::types::{Adapter, Parser, ParserCtx, RawEvent, Reading, SessionEntry};
 
@@ -103,6 +103,8 @@ impl MuseParser {
         if own.is_some() && own != self.ctx.session_id {
             return Vec::new();
         }
+        // recorded_at counts microseconds, a thousand to the millisecond:
+        // https://www.bipm.org/en/publications/si-brochure
         let ts = int_field(record, "recorded_at").and_then(|micros| iso_millis(micros / 1000));
         let Some(payload) = record.get("payload") else {
             return Vec::new();
@@ -177,7 +179,7 @@ impl MuseParser {
 
 impl Parser for MuseParser {
     fn on_line(&mut self, line: &str) -> Vec<RawEvent> {
-        let Ok(record) = serde_json::from_str::<Value>(line) else {
+        let Some(record) = appended_record(&self.ctx.file, line) else {
             return Vec::new();
         };
         let Some(children) = record.get("children").and_then(Value::as_array) else {
@@ -185,10 +187,14 @@ impl Parser for MuseParser {
         };
         let mut events = Vec::new();
         for child in children {
-            if let Some(inner) = text_field(child, "record_json")
-                .and_then(|json| serde_json::from_str::<Value>(&json).ok())
-            {
-                events.extend(self.record(&inner));
+            let Some(json) = text_field(child, "record_json") else {
+                continue;
+            };
+            // A child whose record is not JSON is named, as a line that is not
+            // JSON is, rather than left out without a word.
+            match stored_json(&self.ctx.file, "a child's record_json", &json) {
+                Ok(inner) => events.extend(self.record(&inner)),
+                Err(error) => eprintln!("sessions: {error}"),
             }
         }
         events

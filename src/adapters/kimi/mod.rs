@@ -29,7 +29,7 @@ use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 
-use super::common::{dirent_type, read_dirents};
+use super::common::{appended_record, dirent_type, read_dirents};
 use crate::types::{Adapter, ParserCtx, Reading, SessionEntry};
 
 pub struct Kimi;
@@ -151,11 +151,9 @@ fn read_work_dir_index(root: &Path) -> HashMap<String, String> {
         }
     };
     for line in text.split('\n') {
-        if line.trim().is_empty() {
-            continue;
-        }
-        // A torn index line only costs a project attribution, never the session.
-        let Ok(rec) = serde_json::from_str::<Value>(line) else {
+        // A torn index line only costs a project attribution, never the
+        // session; it is named, as every line that is not JSON is.
+        let Some(rec) = appended_record(&index, line) else {
             continue;
         };
         if let (Some(Value::String(session_id)), Some(Value::String(work_dir))) =

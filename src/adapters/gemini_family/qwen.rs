@@ -20,8 +20,8 @@ use serde_json::{Map, Value};
 use super::gemini::chat_roots;
 use super::parts::{part_events, parts, usage_metadata};
 use crate::adapters::common::{
-    as_text, entry, existing_root, file_name, files_with_suffix, is_file, meta, text_field,
-    tool_result,
+    appended_record, as_text, entry, existing_root, file_name, files_with_suffix, is_file, meta,
+    text_field, tool_result,
 };
 use crate::types::{Adapter, Parser, ParserCtx, RawEvent, Reading, SessionEntry};
 
@@ -83,7 +83,7 @@ struct QwenParser {
 
 impl Parser for QwenParser {
     fn on_line(&mut self, line: &str) -> Vec<RawEvent> {
-        let Ok(record) = serde_json::from_str::<Value>(line) else {
+        let Some(record) = appended_record(&self.ctx.file, line) else {
             return Vec::new();
         };
         let ts = text_field(&record, "timestamp");

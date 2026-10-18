@@ -26,8 +26,8 @@ use std::path::{Path, PathBuf};
 use serde_json::{Map, Value};
 
 use super::common::{
-    as_text, entry, event, existing_root, is_file, iso_seconds, meta, sidecar_json, subdirectories,
-    text_field, tool_call, tool_result,
+    appended_record, as_text, entry, event, existing_root, is_file, iso_seconds, meta,
+    sidecar_json, subdirectories, text_field, tool_call, tool_result,
 };
 use crate::types::{Adapter, Parser, ParserCtx, RawEvent, Reading, SessionEntry};
 
@@ -90,7 +90,7 @@ struct JedenParser {
 
 impl Parser for JedenParser {
     fn on_line(&mut self, line: &str) -> Vec<RawEvent> {
-        let Ok(record) = serde_json::from_str::<Value>(line) else {
+        let Some(record) = appended_record(&self.ctx.file, line) else {
             return Vec::new();
         };
         // Schema 2 wraps the event in `payload`; an older ledger is the event.

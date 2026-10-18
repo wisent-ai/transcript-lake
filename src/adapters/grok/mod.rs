@@ -20,8 +20,8 @@ use std::path::{Path, PathBuf};
 use serde_json::Value;
 
 use super::common::{
-    as_text, entry, event, existing_root, int_field, is_file, iso_millis, iso_seconds,
-    sidecar_json, subdirectories, text_field, text_of, tool_call, tool_result,
+    appended_record, as_text, entry, event, existing_root, int_field, is_file, iso_millis,
+    iso_seconds, sidecar_json, subdirectories, text_field, text_of, tool_call, tool_result,
 };
 use crate::types::{Adapter, Parser, ParserCtx, RawEvent, Reading, SessionEntry};
 
@@ -115,7 +115,7 @@ struct GrokParser {
 
 impl Parser for GrokParser {
     fn on_line(&mut self, line: &str) -> Vec<RawEvent> {
-        let Ok(record) = serde_json::from_str::<Value>(line) else {
+        let Some(record) = appended_record(&self.ctx.file, line) else {
             return Vec::new();
         };
         let Some(update) = record.get("params").and_then(|params| params.get("update")) else {

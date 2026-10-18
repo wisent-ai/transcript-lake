@@ -14,11 +14,11 @@
 //! The older format is one flat `{role, content, timestamp, sessionId}` per line.
 use std::path::{Path, PathBuf};
 
-use serde_json::{Map, Value};
+use serde_json::Map;
 
 use super::common::{
-    anthropic_blocks, as_text, entry, existing_root, file_name, files_with_suffix, is_file, meta,
-    subdirectories, text_field,
+    anthropic_blocks, appended_record, as_text, entry, existing_root, file_name, files_with_suffix,
+    is_file, meta, subdirectories, text_field,
 };
 use crate::types::{Adapter, Parser, ParserCtx, RawEvent, Reading, SessionEntry};
 
@@ -86,7 +86,7 @@ struct CommandCodeParser {
 
 impl Parser for CommandCodeParser {
     fn on_line(&mut self, line: &str) -> Vec<RawEvent> {
-        let Ok(record) = serde_json::from_str::<Value>(line) else {
+        let Some(record) = appended_record(&self.ctx.file, line) else {
             return Vec::new();
         };
         let ts = text_field(&record, "timestamp");

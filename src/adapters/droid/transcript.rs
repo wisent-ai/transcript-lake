@@ -2,13 +2,16 @@
 //! timestamp it has seen so far, and what each record contributes - including
 //! a tool call whose result arrives on a later line.
 
+use std::path::PathBuf;
+
 use serde_json::{Map, Value};
 
 use crate::types::{Parser, ParserCtx, RawEvent};
 
-use crate::adapters::common::{iso_epoch_millis, js_string, prune, text_joined};
+use crate::adapters::common::{appended_record, iso_epoch_millis, js_string, prune, text_joined};
 
 pub(super) struct TranscriptParser {
+    file: PathBuf,
     project: Option<String>,
     session_id: Option<String>,
     last_ts: Option<String>,
@@ -23,6 +26,7 @@ impl TranscriptParser {
         Self {
             project: ctx.project.clone(),
             session_id: ctx.session_id.clone(),
+            file: ctx.file,
             last_ts: None,
             pending: Vec::new(),
             ready: false,
@@ -32,10 +36,7 @@ impl TranscriptParser {
 
 impl Parser for TranscriptParser {
     fn on_line(&mut self, line: &str) -> Vec<RawEvent> {
-        if line.trim().is_empty() {
-            return Vec::new();
-        }
-        let Ok(rec) = serde_json::from_str::<Value>(line) else {
+        let Some(rec) = appended_record(&self.file, line) else {
             return Vec::new();
         };
         if !rec.is_object() {

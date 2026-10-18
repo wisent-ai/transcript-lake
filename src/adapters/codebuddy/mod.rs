@@ -25,8 +25,8 @@ use std::path::{Path, PathBuf};
 use serde_json::{Map, Value};
 
 use super::common::{
-    as_text, entry, event, existing_root, file_name, files_with_suffix, int_field, is_file,
-    iso_millis, meta, subdirectories, text_field, text_of, tool_call, tool_result,
+    appended_record, as_text, entry, event, existing_root, file_name, files_with_suffix, int_field,
+    is_file, iso_millis, meta, subdirectories, text_field, text_of, tool_call, tool_result,
 };
 use crate::types::{Adapter, Parser, ParserCtx, RawEvent, Reading, SessionEntry};
 
@@ -108,7 +108,7 @@ struct CodeBuddyParser {
 
 impl Parser for CodeBuddyParser {
     fn on_line(&mut self, line: &str) -> Vec<RawEvent> {
-        let Ok(item) = serde_json::from_str::<Value>(line) else {
+        let Some(item) = appended_record(&self.ctx.file, line) else {
             return Vec::new();
         };
         if let Some(cwd) = text_field(&item, "cwd") {
