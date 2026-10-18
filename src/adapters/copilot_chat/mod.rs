@@ -176,11 +176,11 @@ fn request_events(ctx: &ParserCtx, request: &Value) -> Vec<RawEvent> {
         .and_then(iso_millis);
     let mut events = Vec::new();
     let words = match request.get("message") {
-        Some(Value::String(text)) => text.clone(),
-        Some(message) => as_text(message.get("text")),
-        None => String::new(),
+        Some(Value::String(text)) => Some(text.clone()),
+        Some(message) => Some(as_text(message.get("text"))),
+        None => None,
     };
-    if !words.is_empty() {
+    if let Some(words) = words.filter(|words| !words.is_empty()) {
         events.push(event(ctx, ts.clone(), "user", words));
     }
     let mut answer: Vec<String> = Vec::new();
