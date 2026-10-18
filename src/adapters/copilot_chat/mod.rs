@@ -105,9 +105,11 @@ impl Adapter for CopilotChat {
     }
 }
 
-/// The local folder a workspace's `workspace.json` names. A workspace without
-/// the file names no folder; one whose file cannot be read or parsed is said
-/// on stderr, so its sessions are not silently left without a project.
+/// The local folder a workspace's `workspace.json` names. A window without
+/// the file, or whose file names no `folder` (a multi-root workspace names
+/// its `workspace` file instead), has no folder; a file that cannot be read
+/// or parsed, or a folder that is not a local `file://` URI, is said on
+/// stderr, so its sessions are not silently left without a project.
 fn workspace_folder(sessions: &Path) -> Option<String> {
     let file = sessions.parent()?.join("workspace.json");
     if let Err(error) = std::fs::symlink_metadata(&file) {
@@ -123,11 +125,17 @@ fn workspace_folder(sessions: &Path) -> Option<String> {
             return None;
         }
     };
-    Some(
-        text_field(&workspace, "folder")?
-            .strip_prefix("file://")?
-            .to_string(),
-    )
+    let folder = text_field(&workspace, "folder")?;
+    match folder.strip_prefix("file://") {
+        Some(local) => Some(local.to_string()),
+        None => {
+            eprintln!(
+                "copilot chat: {} names the folder {folder}, which is not a local file:// URI; its sessions get no project",
+                file.display()
+            );
+            None
+        }
+    }
 }
 
 fn session_entry(file: &Path, project: Option<String>) -> Option<SessionEntry> {
