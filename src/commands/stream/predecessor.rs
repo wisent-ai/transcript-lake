@@ -19,7 +19,7 @@ pub(super) const DECLARED_UNIT: &str = "com.wisent.transcript-lake";
 /// The units whose work the declared service does or has retired: the
 /// catalog's retired units of Transcript Lake, in the same order.
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
-const PREDECESSORS: [&str; 4] = [
+const PREDECESSORS: &[&str] = &[
     "com.wisent.compute.service.transcript-lake",
     "com.wisent.transcript-lake-stream",
     "com.wisent.transcript-lake-secret-scrub",
@@ -35,6 +35,11 @@ pub(super) fn retire() {
     }
 }
 
+/// Boot one predecessor out and remove its launch agent. Each launchctl call
+/// is announced through the shared wait mechanism while it stands, and a
+/// call that cannot run, a bootout launchd refuses and a launch agent that
+/// cannot be examined are each said with their cause; the predecessor is
+/// then left as it is rather than reported retired.
 #[cfg(target_os = "macos")]
 fn launchd(predecessor: &str) {
     use std::process::Command;
@@ -47,18 +52,47 @@ fn launchd(predecessor: &str) {
     let plist = crate::util::home_dir()
         .join("Library/LaunchAgents")
         .join(format!("{predecessor}.plist"));
-    let loaded = Command::new("/bin/launchctl")
-        .arg("print")
-        .arg(&target)
-        .output()
-        .is_ok_and(|output| output.status.success());
-    if !loaded && !plist.exists() {
+    let loaded = match stado_wait::output(Command::new("/bin/launchctl").arg("print").arg(&target))
+    {
+        Ok(output) => output.status.success(),
+        Err(error) => {
+            eprintln!("stream: {predecessor} stays: launchctl print {target} could not run: {error}");
+            return;
+        }
+    };
+    let present = match std::fs::symlink_metadata(&plist) {
+        Ok(_) => true,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
+        Err(error) => {
+            eprintln!(
+                "stream: {predecessor} stays: {} cannot be examined: {error}",
+                plist.display()
+            );
+            return;
+        }
+    };
+    if !loaded && !present {
         return;
     }
-    let _ = Command::new("/bin/launchctl")
-        .arg("bootout")
-        .arg(&target)
-        .output();
+    if loaded {
+        match stado_wait::output(Command::new("/bin/launchctl").arg("bootout").arg(&target)) {
+            Ok(output) if output.status.success() => {}
+            Ok(output) => {
+                eprintln!(
+                    "stream: {predecessor} stays: launchctl bootout {target} ended {}: {}",
+                    output.status,
+                    String::from_utf8_lossy(&output.stderr).trim()
+                );
+                return;
+            }
+            Err(error) => {
+                eprintln!(
+                    "stream: {predecessor} stays: launchctl bootout {target} could not run: {error}"
+                );
+                return;
+            }
+        }
+    }
     match std::fs::remove_file(&plist) {
         Err(error) if error.kind() != std::io::ErrorKind::NotFound => eprintln!(
             "stream: {predecessor} is stopped but {} stays: {error}",
