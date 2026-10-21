@@ -7,7 +7,14 @@
 --
 -- Empty stores bind a typed in-memory relation. Populated stores bind their
 -- live glob. Neither branch creates or overwrites a scratch file.
+--
+-- Each view's statements follow a line `-- view: <name> [after <view> ...]`
+-- naming the view and the views it is written over. DuckDB binds a view
+-- when it is created, and binding `events` reads every event part file's
+-- name, so a statement is given only the sections of the views it
+-- references and of the views those are written over (src/lake/views).
 
+-- view: events
 SET VARIABLE lake_glob =
   coalesce(getvariable('lake_data'), '.') || '/events/*/*/*.ndjson';
 
@@ -45,6 +52,7 @@ SELECT
   tool_name, model, tokens_in, tokens_out, extra, filename
 FROM query(getvariable('lake_events_query'));
 
+-- view: sessions after events
 -- One row per session: identity, span, message mix, summed usage counters.
 CREATE OR REPLACE VIEW sessions AS
 SELECT
@@ -65,6 +73,7 @@ FROM events
 WHERE session_id IS NOT NULL
 GROUP BY runtime, session_id;
 
+-- view: tools_daily after events
 -- Tool usage per day / runtime / tool.
 CREATE OR REPLACE VIEW tools_daily AS
 SELECT
@@ -77,6 +86,7 @@ FROM events
 WHERE event_type = 'tool_call' AND tool_name IS NOT NULL
 GROUP BY day, runtime, tool_name;
 
+-- view: tokens_daily after events
 -- Usage counters per day / runtime / model.
 CREATE OR REPLACE VIEW tokens_daily AS
 SELECT
@@ -90,6 +100,7 @@ FROM events
 WHERE tokens_in IS NOT NULL OR tokens_out IS NOT NULL
 GROUP BY day, runtime, model;
 
+-- view: hook_decisions after events
 -- Hook telemetry stream: one row per adaptive-hook decision.
 -- extra carries decision / event / infra passed through by the ingest driver;
 -- tool_name is the hook id and text is the (masked) reason.
@@ -106,6 +117,7 @@ SELECT
 FROM events
 WHERE runtime = 'hooks' AND event_type = 'hook_decision';
 
+-- view: blocks_by_hook after hook_decisions
 -- Blocking pressure per hook id.
 CREATE OR REPLACE VIEW blocks_by_hook AS
 SELECT
@@ -119,6 +131,7 @@ FROM hook_decisions
 WHERE decision = 'block'
 GROUP BY hook_id;
 
+-- view: interrupted_sessions after events sessions
 -- Conversations that stopped without an answer. The last recorded turn is
 -- either a user message the agent never replied to, or a tool call whose run
 -- was cut off before the agent spoke again. Newest first, so the top row is
@@ -167,6 +180,7 @@ JOIN sessions AS s ON s.runtime = t.runtime AND s.session_id = t.session_id
 LEFT JOIN final_request AS r ON r.runtime = t.runtime AND r.session_id = t.session_id
 ORDER BY s.last_ts DESC;
 
+-- view: labels
 -- Operator label store: one row per aspect/value assignment over a session,
 -- appended by transcript-lake label add beneath <lake_data>/labels/, and one
 -- row with a NULL value per withdrawal, appended by transcript-lake label

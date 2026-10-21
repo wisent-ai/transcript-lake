@@ -8,3 +8,4 @@ pub mod durable;
 pub mod owner;
 pub mod paths;
 pub mod sources;
+pub mod views;

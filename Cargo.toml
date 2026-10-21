@@ -83,6 +83,10 @@ path = "tests/reconcile/stale_projection.rs"
 name = "cli-usage"
 path = "tests/cli/usage.rs"
 
+[[test]]
+name = "query-views"
+path = "tests/query/views.rs"
+
 [dependencies]
 # preserve_order keeps `extra` in adapter insertion order, so a ported
 # partition line is byte-identical to the one the previous implementation wrote.

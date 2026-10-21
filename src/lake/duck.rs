@@ -35,10 +35,11 @@ fn script(name: &str, embedded: &'static str) -> Result<String> {
     Ok(std::fs::read_to_string(&path)?)
 }
 
-/// The full script for one query: data-dir variable, canonical views,
-/// optionally the signal views, then the caller's SQL.
+/// The full script for one query: data-dir variable, the canonical views the
+/// statement needs (every one when the signal views are included, since they
+/// are written over them), optionally the signal views, then the caller's SQL.
 pub fn views_script(sql: &str, include_signals: bool) -> Result<String> {
-    let mut setup = script("views.sql", VIEWS_SQL)?;
+    let mut setup = super::views::needed(&script("views.sql", VIEWS_SQL)?, sql, include_signals)?;
     if include_signals {
         // ATTACH takes a literal path and DuckDB does not expand a tilde, so
         // the placeholder in signals.sql is resolved here, against the same
@@ -73,16 +74,17 @@ pub fn run_duck_query(sql: &str, json: bool, include_signals: bool) -> Result<i3
 /// Run a statement and parse its JSON rows for programmatic use.
 pub fn query_duck_json(sql: &str) -> Result<Vec<Value>> {
     let script = views_script(sql, false)?;
-    let output = Command::new("duckdb")
-        .args(["-json", "-c", &script])
-        .output()
+    let mut command = Command::new("duckdb");
+    command.args(["-json", "-c", &script]);
+    let output = stado_wait::output(&mut command)
         .map_err(|error| Error(format!("duckdb failed to start: {error}")))?;
-    let Some(code) = output.status.code() else {
+    if output.status.code().is_none() {
         return Err(Error("duckdb terminated by signal".into()));
-    };
-    if code != 0 {
+    }
+    if !output.status.success() {
         return Err(Error(format!(
-            "duckdb exited with status {code}: {}",
+            "duckdb exited with {}: {}",
+            output.status,
             String::from_utf8_lossy(&output.stderr).trim()
         )));
     }
