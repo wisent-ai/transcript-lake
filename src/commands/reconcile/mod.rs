@@ -189,16 +189,19 @@ fn reindex_oko() -> Result<()> {
         .ok_or_else(|| {
             Error("oko-cli is not on PATH and OKO_CLI names none; the corrected projection is written, and `transcript-lake projection refresh --target oko` hands it to Oko".into())
         })?;
-    let status = Command::new(&binary)
-        .args(["transcripts", "reindex"])
-        .stdout(io::stderr())
-        .status()
-        .map_err(|error| {
-            Error(format!(
-                "cannot run {} transcripts reindex: {error}",
-                binary.display()
-            ))
-        })?;
+    // The reindex runs as long as Oko takes; stado_wait says on stderr what
+    // it waits on, where and since when, so a long one names itself.
+    let status = stado_wait::status(
+        Command::new(&binary)
+            .args(["transcripts", "reindex"])
+            .stdout(io::stderr()),
+    )
+    .map_err(|error| {
+        Error(format!(
+            "cannot run {} transcripts reindex: {error}",
+            binary.display()
+        ))
+    })?;
     if status.success() {
         return Ok(());
     }
