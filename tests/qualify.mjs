@@ -23,18 +23,20 @@ const root = resolve(import.meta.dirname, '..');
 // argv holds node and this script before the caller's words.
 const [, , revision, ...targets] = process.argv;
 assert.ok(revision, 'usage: node tests/qualify.mjs <revision> [<test-target>...]');
-const succeeded = spawnSync('true').status;
+// A run succeeded when it started, no signal ended it and it exited zero
+// (https://nodejs.org/api/child_process.html#child_processspawnsynccommand-args-options).
+const succeeded = (run) => !run.error && run.signal === null && !run.status;
 
 const resolved = spawnSync('git', ['-C', root, 'rev-parse', '--verify', `${revision}^{commit}`], { encoding: 'utf8' });
-assert.equal(resolved.status, succeeded, `git cannot name ${revision} as a commit: ${resolved.stderr}`);
+assert.ok(succeeded(resolved), `git cannot name ${revision} as a commit: ${resolved.stderr}`);
 const commit = resolved.stdout.trim();
 const exported = join(root, 'target', 'qualify', commit);
 rmSync(exported, { recursive: true, force: true });
 mkdirSync(exported, { recursive: true });
 const archive = spawnSync('git', ['-C', root, 'archive', '--format=tar', commit], { maxBuffer: Infinity });
-assert.equal(archive.status, succeeded, `git archive ${commit} failed: ${archive.stderr}`);
+assert.ok(succeeded(archive), `git archive ${commit} failed: ${archive.stderr}`);
 const unpacked = spawnSync('tar', ['-x', '-C', exported], { input: archive.stdout });
-assert.equal(unpacked.status, succeeded, `tar could not unpack ${commit}: ${unpacked.stderr}`);
+assert.ok(succeeded(unpacked), `tar could not unpack ${commit}: ${unpacked.stderr}`);
 
 // One build directory for every qualified revision, so a later revision
 // recompiles only what changed.
@@ -46,8 +48,8 @@ function cargo(label, args) {
     stdio: ['ignore', process.stderr, process.stderr],
   });
   if (ran.error) throw new Error(`cargo could not be started: ${ran.error.message}`, { cause: ran.error });
-  if (ran.status !== succeeded) console.log(`${label}: failed (${ran.status ?? ran.signal})`);
-  return ran.status === succeeded;
+  if (!succeeded(ran)) console.log(`${label}: failed (${ran.status ?? ran.signal})`);
+  return succeeded(ran);
 }
 if (cargo('compile', ['--no-run'])) {
   for (const target of targets) cargo(target, ['--test', target]);
