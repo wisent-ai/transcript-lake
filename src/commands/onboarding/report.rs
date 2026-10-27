@@ -4,7 +4,7 @@
 
 use serde_json::{json, Map, Value};
 
-use crate::util::Result;
+use crate::util::{Error, Result};
 
 use super::journey::*;
 use super::*;
@@ -23,31 +23,30 @@ pub(super) struct Report {
 }
 
 impl Report {
-    pub(super) fn new(definition: &Value, reset: bool, json: bool) -> Self {
-        Self {
-            journey_version: string_field(definition, "journey_version").unwrap_or_default(),
+    pub(super) fn new(definition: &Value, reset: bool, json: bool) -> Result<Self> {
+        Ok(Self {
+            journey_version: required(definition, "journey_version", "the canonical onboarding journey")?,
             reset,
             json,
             steps: Vec::new(),
             status: "in_progress",
             current_screen_id: String::new(),
             next: String::new(),
-        }
+        })
     }
 
-    pub(super) fn render(&mut self, screen: &Value) {
-        let presentation = screen.get("presentation");
-        let title = presentation
-            .and_then(|value| value.get("title"))
-            .and_then(Value::as_str)
-            .unwrap_or("Transcript Lake onboarding");
-        let body = presentation
-            .and_then(|value| value.get("body"))
-            .and_then(Value::as_str)
-            .unwrap_or_default();
-        let command = presentation
-            .and_then(|value| value.get("command"))
-            .and_then(Value::as_str);
+    /// Show `screen`: its title and body, which [`canonical_definition`]
+    /// requires of every screen, so a screen without them is refused here
+    /// rather than shown under an invented title or as an empty page.
+    pub(super) fn render(&mut self, screen: &Value) -> Result<()> {
+        let id = screen.get("screen_id").and_then(Value::as_str);
+        let Some(presentation) = screen.get("presentation") else {
+            return Err(Error(format!("onboarding screen {id:?} has no presentation")));
+        };
+        let shown = format!("the presentation of onboarding screen {id:?}");
+        let title = required(presentation, "title", &shown)?;
+        let body = required(presentation, "body", &shown)?;
+        let command = presentation.get("command").and_then(Value::as_str);
         if self.json {
             self.steps.push(json!({
                 "screen_id": screen.get("screen_id"),
@@ -57,12 +56,13 @@ impl Report {
                 "command": command,
                 "actions": screen.get("actions"),
             }));
-            return;
+            return Ok(());
         }
         println!("\n== {title} ==\n{body}");
         if let Some(command) = command {
             println!("command: {command}");
         }
+        Ok(())
     }
 
     /// A line about what this machine actually holds, printed under the screen
@@ -73,13 +73,10 @@ impl Report {
             return;
         }
         if let Some(step) = self.steps.last_mut() {
-            let notes = step
-                .get_mut("notes")
-                .and_then(Value::as_array_mut)
-                .map(std::mem::take);
-            let mut notes = notes.unwrap_or_default();
-            notes.push(Value::String(text.to_string()));
-            step["notes"] = Value::Array(notes);
+            match step.get_mut("notes").and_then(Value::as_array_mut) {
+                Some(notes) => notes.push(Value::String(text.to_string())),
+                None => step["notes"] = Value::Array(vec![Value::String(text.to_string())]),
+            }
         }
     }
 
@@ -97,17 +94,21 @@ impl Report {
         }
     }
 
-    pub(super) fn finish(&mut self, status: &'static str, state: &Value, next: &str) {
+    /// End the walk at the screen `state` stands on. A state without one is
+    /// refused: reported as an empty screen id, a reader could not tell where
+    /// the next run resumes.
+    pub(super) fn finish(&mut self, status: &'static str, state: &Value, next: &str) -> Result<()> {
         self.status = status;
-        self.current_screen_id = string_field(state, "current_screen_id").unwrap_or_default();
+        self.current_screen_id = required(state, "current_screen_id", "the onboarding state")?;
         self.next = next.to_string();
+        Ok(())
     }
 
     pub(super) fn emit(self) -> Result<i32> {
         if !self.json {
             println!("\nstatus: {}", self.status);
             println!("next: {}", self.next);
-            return Ok(0);
+            return Ok(libc::EXIT_SUCCESS);
         }
         write_json(&json!({
             "product_id": PRODUCT_ID,
@@ -120,6 +121,11 @@ impl Report {
             "steps": self.steps,
             "next": self.next,
         }))?;
-        Ok(0)
+        Ok(libc::EXIT_SUCCESS)
     }
+}
+
+/// The text `key` of `value`, refused naming the key and `what` holds it.
+fn required(value: &Value, key: &str, what: &str) -> Result<String> {
+    string_field(value, key).ok_or_else(|| Error(format!("{what} has no {key} text")))
 }

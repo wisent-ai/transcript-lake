@@ -36,7 +36,7 @@ SET VARIABLE lake_event_columns = {
 SET VARIABLE lake_events_query = (
   SELECT CASE
     WHEN EXISTS (SELECT * FROM glob(getvariable('lake_glob'))) THEN
-      'SELECT * FROM read_ndjson_auto(getvariable(''lake_glob''), filename=true, ignore_errors=true, columns=getvariable(''lake_event_columns''))'
+      'SELECT * FROM read_ndjson_auto(getvariable(''lake_glob''), filename=true, ignore_errors=false, columns=getvariable(''lake_event_columns''))'
     ELSE
       'SELECT unnest(from_json(''{}'', to_json(getvariable(''lake_event_columns'')))), NULL::VARCHAR AS filename WHERE false'
   END
@@ -45,7 +45,7 @@ SET VARIABLE lake_events_query = (
 -- The canonical event schema is frozen, so inference is disabled via an
 -- explicit column list: cross-partition drift can never re-type a column.
 -- filename=true exposes the source partition file for every row and
--- ignore_errors=true skips a torn final line while an ingest is appending.
+-- malformed event lines are errors, not silently omitted from an audit.
 CREATE OR REPLACE VIEW events AS
 SELECT
   ts, runtime, machine, session_id, project, event_type, text,

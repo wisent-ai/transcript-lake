@@ -131,7 +131,7 @@ pub(super) fn acquire_lock(data_dir: &Path, lock_path: &Path) -> Result<String> 
                         prepared.display()
                     ),
                 }
-                if !lock_path.exists() {
+                if !crate::lake::paths::present(&lock_path)? {
                     return Err(error);
                 }
             }

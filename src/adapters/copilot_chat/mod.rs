@@ -45,14 +45,10 @@ impl Adapter for CopilotChat {
     fn watch_roots(&self, home: &Path) -> Vec<PathBuf> {
         let mut roots = Vec::new();
         for user in editor_user_dirs(home) {
-            let workspaces = user.join("workspaceStorage");
-            if workspaces.is_dir() {
-                roots.push(workspaces);
-            }
-            let empty = user.join("globalStorage").join(EMPTY_WINDOW);
-            if empty.is_dir() {
-                roots.push(empty);
-            }
+            roots.extend(crate::adapters::common::existing_root(user.join("workspaceStorage")));
+            roots.extend(crate::adapters::common::existing_root(
+                user.join("globalStorage").join(EMPTY_WINDOW),
+            ));
         }
         roots
     }
@@ -61,15 +57,11 @@ impl Adapter for CopilotChat {
         let mut roots = Vec::new();
         for user in editor_user_dirs(home) {
             for workspace in subdirectories(&user.join("workspaceStorage")) {
-                let sessions = workspace.join(SESSIONS);
-                if sessions.is_dir() {
-                    roots.push(sessions);
-                }
+                roots.extend(crate::adapters::common::existing_root(workspace.join(SESSIONS)));
             }
-            let empty = user.join("globalStorage").join(EMPTY_WINDOW);
-            if empty.is_dir() {
-                roots.push(empty);
-            }
+            roots.extend(crate::adapters::common::existing_root(
+                user.join("globalStorage").join(EMPTY_WINDOW),
+            ));
         }
         roots
     }
@@ -152,7 +144,7 @@ fn load(ctx: &ParserCtx) -> Result<Vec<RawEvent>> {
         .extension()
         .is_some_and(|extension| extension == "jsonl")
     {
-        log::replay(&read_json_lines(&ctx.file)?)
+        log::replay(&read_json_lines(&ctx.file)?)?
     } else {
         read_json(&ctx.file)?
     };

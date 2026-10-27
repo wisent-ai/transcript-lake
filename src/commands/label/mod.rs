@@ -43,10 +43,10 @@ fn add(rest: &[String]) -> Result<i32> {
         &["aspect", "value", "note", "runtime", "source"],
         &["json"],
     )?;
-    if parsed.positionals.len() != 1 {
+    let [session_id] = parsed.positionals.as_slice() else {
         return Err(Error(ADD_USAGE.into()));
-    }
-    let session_id = parsed.positionals[0].trim().to_string();
+    };
+    let session_id = session_id.trim().to_string();
     if session_id.is_empty() {
         return Err(Error("label add requires a session id".into()));
     }
@@ -59,20 +59,17 @@ fn add(rest: &[String]) -> Result<i32> {
     append_label(&resolve_data_dir(None), &record)?;
     if parsed.flag("json") {
         write_json(&record)?;
-        return Ok(0);
+        return Ok(libc::EXIT_SUCCESS);
     }
     let note = match &record.note {
         Some(note) => format!(" (note: {note})"),
         None => String::new(),
     };
     println!(
-        "labeled {} ({}): {} = {}{note}",
-        record.session_id,
-        record.runtime,
-        record.aspect,
-        record.value.as_deref().unwrap_or_default()
+        "labeled {} ({}): {} = {value}{note}",
+        record.session_id, record.runtime, record.aspect,
     );
-    Ok(0)
+    Ok(libc::EXIT_SUCCESS)
 }
 
 /// `label remove`: withdraw the assignment in force for one session and
@@ -86,10 +83,10 @@ fn remove(rest: &[String]) -> Result<i32> {
         &["aspect", "note", "runtime", "source"],
         &["json"],
     )?;
-    if parsed.positionals.len() != 1 {
+    let [session_id] = parsed.positionals.as_slice() else {
         return Err(Error(REMOVE_USAGE.into()));
-    }
-    let session_id = parsed.positionals[0].trim().to_string();
+    };
+    let session_id = session_id.trim().to_string();
     if session_id.is_empty() {
         return Err(Error("label remove requires a session id".into()));
     }
@@ -98,7 +95,7 @@ fn remove(rest: &[String]) -> Result<i32> {
     let source = normalize_source(parsed.value("source"))?;
     let runtime = session_runtime(&session_id, parsed.value("runtime"))?;
     let in_force = query_duck_json(&format!(
-        "SELECT value FROM ({}) WHERE rn = CAST('1' AS BIGINT) AND value IS NOT NULL",
+        "SELECT value FROM ({}) WHERE value IS NOT NULL",
         latest_labels_inner(&[
             format!("session_id = {}", quote_sql(&session_id)),
             format!("aspect = {}", quote_sql(&aspect)),
@@ -113,13 +110,13 @@ fn remove(rest: &[String]) -> Result<i32> {
     append_label(&resolve_data_dir(None), &record)?;
     if parsed.flag("json") {
         write_json(&record)?;
-        return Ok(0);
+        return Ok(libc::EXIT_SUCCESS);
     }
     println!(
         "removed the {} label of {} ({})",
         record.aspect, record.session_id, record.runtime
     );
-    Ok(0)
+    Ok(libc::EXIT_SUCCESS)
 }
 
 /// The runtime a session is held under in the selected Lake. The session
@@ -136,14 +133,17 @@ fn session_runtime(session_id: &str, requested: Option<&str>) -> Result<String> 
             " (check the id or start the stream first)"
         )));
     }
-    let mut runtimes: Vec<String> = rows
+    // A row without its runtime text is refused, never joined as an empty
+    // runtime the label could then be written under.
+    let mut runtimes = rows
         .iter()
         .map(|row| match row.get("runtime") {
-            Some(Value::String(text)) => text.clone(),
-            Some(other) => other.to_string(),
-            None => String::new(),
+            Some(Value::String(text)) => Ok(text.clone()),
+            other => Err(Error(format!(
+                "the Lake holds session \"{session_id}\" under a runtime that is not text: {other:?}"
+            ))),
         })
-        .collect();
+        .collect::<Result<Vec<String>>>()?;
     runtimes.sort_unstable();
     if let Some(selected) = require_runtime(requested)? {
         if !runtimes.iter().any(|known| known == &selected) {
@@ -154,26 +154,27 @@ fn session_runtime(session_id: &str, requested: Option<&str>) -> Result<String> 
         }
         return Ok(selected);
     }
-    if runtimes.len() > 1 {
-        return Err(Error(format!(
+    match runtimes.as_mut_slice() {
+        [only] => Ok(std::mem::take(only)),
+        several => Err(Error(format!(
             "session id \"{session_id}\" is ambiguous across runtimes ({}); repeat with --runtime",
-            runtimes.join(", ")
-        )));
+            several.join(", ")
+        ))),
     }
-    Ok(runtimes.remove(0))
 }
 
-/// The append log ranked per session and aspect, newest first, so the outer
-/// query keeps only the assignment currently in force.
+/// The assignment in force per session and aspect: the newest record of
+/// each pair in the append log (a withdrawal is a newest record with no
+/// value, which the outer query leaves out).
 fn latest_labels_inner(where_clauses: &[String]) -> String {
-    let mut sql = "SELECT ts, session_id, runtime, aspect, value, note, source, \
-                   row_number() OVER (PARTITION BY session_id, aspect ORDER BY ts DESC) AS rn \
+    let mut sql = "SELECT DISTINCT ON (session_id, aspect) ts, session_id, runtime, aspect, value, note, source \
                    FROM labels"
         .to_string();
     if !where_clauses.is_empty() {
         sql.push_str(" WHERE ");
         sql.push_str(&where_clauses.join(" AND "));
     }
+    sql.push_str(" ORDER BY session_id, aspect, ts DESC");
     sql
 }
 
@@ -202,7 +203,7 @@ fn list(rest: &[String]) -> Result<i32> {
     run_duck_query(
         &format!(
             "SELECT ts, session_id, runtime, aspect, value, note, source FROM ({}) \
-             WHERE rn = CAST('1' AS BIGINT) AND value IS NOT NULL ORDER BY ts DESC{limit}",
+             WHERE value IS NOT NULL ORDER BY ts DESC{limit}",
             latest_labels_inner(&where_clauses)
         ),
         parsed.flag("json"),
@@ -217,7 +218,7 @@ fn aspects(rest: &[String]) -> Result<i32> {
         &format!(
             "SELECT aspect, count(DISTINCT value) AS values, count(*) AS labels, \
              count(DISTINCT session_id) AS sessions FROM ({}) \
-             WHERE rn = CAST('1' AS BIGINT) AND value IS NOT NULL GROUP BY aspect ORDER BY labels DESC, aspect",
+             WHERE value IS NOT NULL GROUP BY aspect ORDER BY labels DESC, aspect",
             latest_labels_inner(&[])
         ),
         parsed.flag("json"),

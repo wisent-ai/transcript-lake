@@ -1,17 +1,18 @@
-//! Running the stream as a service: what one structured line looks like, how
-//! a stop signal is observed, and where the live state is written so another
-//! command can read what the stream is doing without asking this process.
+//! Running the stream as a service: what one structured line looks like and
+//! where the live state is written so another command can read what the
+//! stream is doing without asking this process.
+//!
+//! A catch-up that cannot run (a missing masking declaration, an unreadable
+//! cursor store) is kept as the state `failed` with its error before the
+//! process exits with it, and the next start carries that failure as
+//! `lastFailure` until a catch-up completes: a stream its supervisor restarts
+//! after every failure reads as failing, never as catching up.
 
 use std::collections::BTreeSet;
 use std::fs;
-use std::io::Read;
-use std::os::fd::IntoRawFd;
-use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicI32, Ordering};
-use std::sync::mpsc::{channel, Sender};
+use std::sync::mpsc::channel;
 
-use notify::{RecursiveMode, Watcher};
 use serde_json::{json, Map, Value};
 
 use crate::args::{parse_options, require_flags_only};
@@ -19,13 +20,7 @@ use crate::paths::{resolve_data_dir, STREAM_STATUS_FILE};
 use crate::util::{now_iso, Error, Result};
 
 use super::source_roots;
-
-/// What wakes the foreground loop: a changed source path or a stop signal.
-/// Both arrive on one channel, so the loop blocks on it with no tick.
-enum Wake {
-    Path(PathBuf),
-    Stop,
-}
+use super::watch::{unwatch, watch, Wake};
 
 /// One structured stream line: JSON when requested, otherwise timestamped
 /// key=value text for service logs.
@@ -59,49 +54,6 @@ pub(super) fn log(json: bool, kind: &str, details: &[(&str, Value)]) {
     }
 }
 
-/// Write end of the self-pipe the signal handler pokes; -1 until installed.
-static STOP_FD: AtomicI32 = AtomicI32::new(-1);
-
-extern "C" fn on_stop_signal(_signal: i32) {
-    extern "C" {
-        fn write(fd: i32, buffer: *const u8, count: usize) -> isize;
-    }
-    let fd = STOP_FD.load(Ordering::SeqCst);
-    if fd >= 0 {
-        let byte = 1u8;
-        // write(2) is async-signal-safe; nothing else runs in the handler.
-        unsafe {
-            write(fd, &byte, 1);
-        }
-    }
-}
-
-/// Ask for a clean stop on SIGINT and SIGTERM instead of the default kill, so
-/// the loop returns the success status a supervisor expects from a requested
-/// shutdown. The handler writes one byte to a socket pair; a reader thread
-/// turns it into `Wake::Stop` on the loop's own channel.
-fn install_stop_handlers(wake: Sender<Wake>) -> Result<()> {
-    extern "C" {
-        fn signal(signal: i32, handler: usize) -> usize;
-    }
-    const SIGINT: i32 = 2;
-    const SIGTERM: i32 = 15;
-    let (mut reader, writer) = UnixStream::pair()
-        .map_err(|error| Error(format!("stream could not create its stop channel: {error}")))?;
-    STOP_FD.store(writer.into_raw_fd(), Ordering::SeqCst);
-    std::thread::spawn(move || {
-        let mut byte = [0u8; 1];
-        let _ = reader.read(&mut byte);
-        let _ = wake.send(Wake::Stop);
-    });
-    let handler = on_stop_signal as extern "C" fn(i32) as usize;
-    unsafe {
-        signal(SIGINT, handler);
-        signal(SIGTERM, handler);
-    }
-    Ok(())
-}
-
 pub(super) fn write_stream_state(data_dir: &Path, state: &Value) -> Result<()> {
     fs::create_dir_all(data_dir)?;
     let path = data_dir.join(STREAM_STATUS_FILE);
@@ -114,39 +66,69 @@ pub(super) fn write_stream_state(data_dir: &Path, state: &Value) -> Result<()> {
     Ok(())
 }
 
+/// Write `state`, or say on the log why it could not be kept.
+fn keep_state(json_output: bool, data_dir: &Path, state: &Value) {
+    if let Err(error) = write_stream_state(data_dir, state) {
+        log(
+            json_output,
+            "state-error",
+            &[("error", Value::String(error.to_string()))],
+        );
+    }
+}
+
+/// The failure the previous start kept, carried while this start has not
+/// caught up: its own `failed` state, or the one it still carried. A state
+/// file that is absent carries none; one that cannot be read is itself the
+/// failure carried.
+fn previous_failure(data_dir: &Path) -> Value {
+    let path = data_dir.join(STREAM_STATUS_FILE);
+    let text = match fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Value::Null,
+        Err(error) => {
+            let cause = format!("{} cannot be read: {error}", path.display());
+            return json!({ "error": cause });
+        }
+    };
+    match serde_json::from_str::<Value>(&text) {
+        Ok(state) if state["state"] == "failed" => {
+            json!({ "at": state["failedAt"], "error": state["error"], "starts": state["failedStarts"] })
+        }
+        Ok(state) => state["lastFailure"].clone(),
+        Err(error) => json!({ "error": format!("{} is not JSON: {error}", path.display()) }),
+    }
+}
+
+/// A pass's state, from its summary: `degraded` when a file failed.
+fn passed(summary: &Value) -> &'static str {
+    match summary["partial"] == true {
+        true => "degraded",
+        false => "running",
+    }
+}
+
 fn process_paths(json_output: bool, data_dir: &Path, paths: &[PathBuf]) {
     match crate::stream::stream_paths(data_dir, paths) {
         Ok(summary) => {
-            let files = summary
-                .get("filesStreamed")
-                .and_then(Value::as_u64)
-                .unwrap_or(0);
-            let failures = summary.get("failures").and_then(Value::as_u64).unwrap_or(0);
-            let duration = summary.get("durationMs").cloned().unwrap_or(Value::Null);
             log(
                 json_output,
                 "commit",
                 &[
-                    ("files", Value::from(files)),
-                    ("failures", Value::from(failures)),
-                    ("ms", duration.clone()),
+                    ("files", summary["filesStreamed"].clone()),
+                    ("failures", summary["failures"].clone()),
+                    ("ms", summary["durationMs"].clone()),
                 ],
             );
             let state = json!({
-                "state": "running",
+                "state": passed(&summary),
                 "updatedAt": now_iso(),
                 "paths": paths.len(),
-                "filesStreamed": files,
-                "failures": failures,
-                "durationMs": duration,
+                "filesStreamed": summary["filesStreamed"],
+                "failures": summary["failures"],
+                "durationMs": summary["durationMs"],
             });
-            if let Err(error) = write_stream_state(data_dir, &state) {
-                log(
-                    json_output,
-                    "state-error",
-                    &[("error", Value::String(error.to_string()))],
-                );
-            }
+            keep_state(json_output, data_dir, &state);
         }
         Err(error) => {
             log(
@@ -160,7 +142,7 @@ fn process_paths(json_output: bool, data_dir: &Path, paths: &[PathBuf]) {
                 "paths": paths.len(),
                 "error": error.to_string(),
             });
-            let _ = write_stream_state(data_dir, &state);
+            keep_state(json_output, data_dir, &state);
         }
     }
 }
@@ -179,13 +161,32 @@ fn remove_obsolete_summary(data_dir: &Path) -> Result<()> {
 
 /// Follow source writes continuously. Each notification is consumed
 /// immediately; notifications already queued by the same filesystem operation
-/// are deduplicated without a timer or quiet-period delay.
+/// are deduplicated without a timer or quiet-period delay. Every error the
+/// run returns once it knows its data directory (no source root, a root it
+/// cannot watch, the stop handler, the catch-up) is kept as `failed` with the
+/// error before the process exits with it.
 pub fn stream(rest: &[String]) -> Result<i32> {
     let parsed = parse_options("stream", rest, &[], &["json"])?;
     require_flags_only("stream", &parsed)?;
     let json_output = parsed.flag("json");
     super::predecessor::retire();
     let data_dir = resolve_data_dir(None);
+    let started_at = now_iso();
+    following(json_output, &data_dir, &started_at).inspect_err(|error| {
+        let failed = json!({
+            "state": "failed",
+            "startedAt": started_at,
+            "failedAt": now_iso(),
+            "error": error.to_string(),
+            "failedStarts": crate::lake::paths::failed_starts(&previous_failure(&data_dir)),
+        });
+        keep_state(json_output, &data_dir, &failed);
+    })
+}
+
+/// One run of the stream from its start to a requested stop.
+fn following(json_output: bool, data_dir: &Path, started_at: &str) -> Result<i32> {
+    let data_dir = data_dir.to_path_buf();
     remove_obsolete_summary(&data_dir)?;
     let roots = source_roots(&data_dir)?;
     if roots.is_empty() {
@@ -194,104 +195,99 @@ pub fn stream(rest: &[String]) -> Result<i32> {
         ));
     }
     let (sender, receiver) = channel();
-    let paths = sender.clone();
-    let mut watcher = notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
-        if let Ok(event) = event {
-            for path in event.paths {
-                let _ = paths.send(Wake::Path(path));
-            }
-        }
-    })
-    .map_err(|error| Error(format!("stream could not start: {error}")))?;
-    for root in &roots {
-        watcher
-            .watch(root, RecursiveMode::Recursive)
-            .map_err(|error| {
-                Error(format!(
-                    "stream could not watch {}: {error}",
-                    root.display()
-                ))
-            })?;
-    }
-    install_stop_handlers(sender)?;
-    let started_at = now_iso();
+    let mut watcher = watch(&roots, sender.clone())?;
+    super::signals::on_stop(sender, Wake::Stop)?;
+    // A start after a failed one carries that failure until a catch-up
+    // completes; its process is recorded so `status` tells it from one whose
+    // process ended without finishing.
+    let last_failure = previous_failure(&data_dir);
+    let process = crate::lake::owner::own_record("the stream's catch-up record")?;
     write_stream_state(
         &data_dir,
-        &json!({"state": "catching-up", "startedAt": started_at, "roots": roots.len()}),
+        &json!({
+            "state": "catching-up", "startedAt": started_at, "roots": roots.len(),
+            "lastFailure": last_failure, "process": process,
+        }),
     )?;
     log(json_output, "start", &[("roots", Value::from(roots.len()))]);
 
     // Watch first, then close any cursor gap left by downtime. Notifications
     // arriving during this pass stay queued and become cheap cursor no-ops.
     let summary = crate::stream::catch_up(&data_dir)?;
-    let discovered = summary
-        .get("filesDiscovered")
-        .and_then(Value::as_u64)
-        .unwrap_or(0);
-    let streamed = summary
-        .get("filesStreamed")
-        .and_then(Value::as_u64)
-        .unwrap_or(0);
-    let failures = summary.get("failures").and_then(Value::as_u64).unwrap_or(0);
-    let duration = summary.get("durationMs").cloned().unwrap_or(Value::Null);
     log(
         json_output,
         "catch-up",
         &[
-            ("files", Value::from(discovered)),
-            ("streamed", Value::from(streamed)),
-            ("failures", Value::from(failures)),
-            ("ms", duration.clone()),
+            ("files", summary["filesDiscovered"].clone()),
+            ("streamed", summary["filesStreamed"].clone()),
+            ("failures", summary["failures"].clone()),
+            ("ms", summary["durationMs"].clone()),
         ],
     );
     write_stream_state(
         &data_dir,
         &json!({
-            "state": if failures == 0 { "running" } else { "degraded" },
+            "state": passed(&summary),
             "startedAt": started_at,
             "updatedAt": now_iso(),
             "roots": roots.len(),
-            "filesDiscovered": discovered,
-            "filesStreamed": streamed,
-            "failures": failures,
-            "durationMs": duration,
+            "filesDiscovered": summary["filesDiscovered"],
+            "filesStreamed": summary["filesStreamed"],
+            "failures": summary["failures"],
+            "durationMs": summary["durationMs"],
         }),
     )?;
 
-    // Blocks until a path changes or a stop signal arrives; no tick.
-    while let Ok(Wake::Path(first)) = receiver.recv() {
+    // Blocks until a path changes, the watcher fails or a stop signal
+    // arrives; no tick.
+    while let Ok(first) = receiver.recv() {
         let mut pending = BTreeSet::new();
-        pending.insert(first);
+        let mut failures = Vec::new();
         let mut stop = false;
-        for wake in receiver.try_iter() {
+        for wake in std::iter::once(first).chain(receiver.try_iter()) {
             match wake {
                 Wake::Path(path) => {
                     pending.insert(path);
                 }
+                Wake::Failed(error) => failures.push(error),
                 Wake::Stop => stop = true,
             }
         }
-        let paths: Vec<PathBuf> = pending.into_iter().collect();
-        log(
-            json_output,
-            "event",
-            &[
-                ("paths", Value::from(paths.len())),
-                ("first", Value::String(paths[0].display().to_string())),
-            ],
-        );
-        process_paths(json_output, &data_dir, &paths);
+        if !failures.is_empty() {
+            // The watcher lost changes it cannot name, so every root is
+            // caught up again from its cursors.
+            log(json_output, "watch-failed", &[("errors", json!(failures))]);
+            let summary = crate::stream::catch_up(&data_dir)?;
+            log(
+                json_output,
+                "catch-up",
+                &[
+                    ("files", summary["filesDiscovered"].clone()),
+                    ("streamed", summary["filesStreamed"].clone()),
+                    ("failures", summary["failures"].clone()),
+                    ("ms", summary["durationMs"].clone()),
+                ],
+            );
+        }
+        if let Some(first) = pending.first().map(|path| path.display().to_string()) {
+            let paths: Vec<PathBuf> = pending.into_iter().collect();
+            log(
+                json_output,
+                "event",
+                &[("paths", Value::from(paths.len())), ("first", Value::String(first))],
+            );
+            process_paths(json_output, &data_dir, &paths);
+        }
         if stop {
             break;
         }
     }
-    for root in &roots {
-        let _ = watcher.unwatch(root);
-    }
-    write_stream_state(
-        &data_dir,
-        &json!({"state": "stopped", "updatedAt": now_iso(), "roots": roots.len()}),
-    )?;
+    let unwatch_failures = unwatch(&mut watcher, &roots);
+    let stopped = json!({
+        "state": "stopped", "updatedAt": now_iso(), "roots": roots.len(),
+        "unwatchFailures": unwatch_failures,
+    });
+    write_stream_state(&data_dir, &stopped)?;
     log(json_output, "stop", &[]);
-    Ok(0)
+    Ok(Default::default())
 }

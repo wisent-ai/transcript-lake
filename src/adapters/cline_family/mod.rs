@@ -74,7 +74,7 @@ impl Adapter for ClineFamily {
                     .join(self.extension)
                     .join("tasks")
             })
-            .filter(|tasks| tasks.is_dir())
+            .flat_map(existing_root)
             .collect();
         if let Some(parts) = self.cli_tasks {
             roots.extend(existing_root(

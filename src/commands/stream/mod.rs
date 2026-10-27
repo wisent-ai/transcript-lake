@@ -64,21 +64,39 @@ pub fn rebuild(rest: &[String]) -> Result<i32> {
 /// persistent parents rather than a one-time enumeration of current children.
 pub(super) fn source_roots(data_dir: &Path) -> Result<Vec<PathBuf>> {
     if let Some(selected) = crate::sources::selected_source(data_dir)? {
-        if !selected.root.is_dir() {
-            return Err(Error(format!(
-                "selected source root is unavailable: {}",
-                selected.root.display()
-            )));
+        match std::fs::metadata(&selected.root) {
+            Ok(metadata) if metadata.is_dir() => {}
+            Ok(_not_directory) => {
+                return Err(Error(format!(
+                    "selected source root is not a directory: {}",
+                    selected.root.display()
+                )))
+            }
+            Err(error) => {
+                return Err(Error(format!(
+                    "selected source root is unavailable: {}: {error}",
+                    selected.root.display()
+                )))
+            }
         }
         return Ok(vec![selected.root]);
     }
     let home = home_dir();
-    let mut roots: Vec<PathBuf> = crate::adapters::all()
+    let mut candidates: Vec<PathBuf> = crate::adapters::all()
         .iter()
         .flat_map(|adapter| adapter.watch_roots(&home))
         .collect();
-    roots.extend(hook_source_roots().roots);
-    roots.retain(|root| root.exists());
+    candidates.extend(hook_source_roots().roots);
+    // A root that cannot be examined is said, as the adapters say theirs:
+    // dropped silently, its appends were never streamed and nothing told why.
+    let mut roots = Vec::new();
+    for root in candidates {
+        match crate::lake::paths::present(&root) {
+            Ok(true) => roots.push(root),
+            Ok(false) => {}
+            Err(cause) => eprintln!("stream: {cause}, so it is not watched"),
+        }
+    }
     roots.sort();
     roots.dedup();
     // A root inside another is already watched recursively through it.
@@ -93,5 +111,7 @@ pub(super) fn source_roots(data_dir: &Path) -> Result<Vec<PathBuf>> {
 
 mod predecessor;
 mod service;
+mod signals;
+mod watch;
 
 pub use service::stream;

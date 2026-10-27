@@ -3,7 +3,7 @@
 //! partitions" — which made `compact` tell the operator to start the stream
 //! about a lake that holds events. A lake with no events directory, or an
 //! empty one, is still no partitions. The lake lives in the retained journey
-//! directory under CARGO_TARGET_TMPDIR; every command and its output are kept
+//! directory in the checkout's ignored `.build/journeys`; every command and its output are kept
 //! there.
 #[path = "../harnesses/evidence.rs"]
 mod evidence;

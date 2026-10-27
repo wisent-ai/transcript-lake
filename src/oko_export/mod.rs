@@ -47,10 +47,12 @@ pub fn oko_index_path() -> PathBuf {
     oko_support_dir().join("transcript-index.sqlite")
 }
 
+/// What an export read and could not use: the parse error of every malformed
+/// Lake row, in the order they were met. How many there were is how many are
+/// listed, so nothing is counted by hand.
 #[derive(Default)]
 pub(crate) struct Tally {
-    pub(crate) malformed: u64,
-    pub(crate) last_error: Option<String>,
+    pub(crate) malformed: Vec<String>,
 }
 
 pub(crate) fn session_key(runtime: &str, session_id: &str) -> String {

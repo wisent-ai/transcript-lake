@@ -5,7 +5,7 @@
 //! `tools_daily` answered, and refuses the one that does; a section line that
 //! names no view is refused naming the line. The Lake, the override and every
 //! command's output stay in the retained journey directory under
-//! CARGO_TARGET_TMPDIR.
+//! the checkout's ignored `.build/journeys`.
 #[path = "../harnesses/evidence.rs"]
 mod evidence;
 

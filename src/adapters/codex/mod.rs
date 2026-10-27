@@ -50,14 +50,11 @@ impl Adapter for CodexStore {
     }
 
     fn roots(&self, home: &Path) -> Vec<PathBuf> {
-        let dir = self
-            .sessions
-            .iter()
-            .fold(home.to_path_buf(), |path, part| path.join(part));
-        if dir.exists() {
-            return vec![dir];
-        }
-        Vec::new()
+        crate::adapters::common::existing_root(
+            self.sessions
+                .iter()
+                .fold(home.to_path_buf(), |path, part| path.join(part)),
+        )
     }
 
     fn list_sessions(&self, root: &Path) -> Vec<SessionEntry> {

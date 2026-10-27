@@ -30,6 +30,20 @@ struct DoctorReport {
 pub fn doctor(rest: &[String]) -> Result<i32> {
     let parsed = parse_options("doctor", rest, &[], &["json"])?;
     require_flags_only("doctor", &parsed)?;
+    let masking = match crate::redact::Masker::declared() {
+        Ok(_) => Check {
+            name: "masking-policy",
+            status: "ok",
+            detail: "declared secret formats are readable and valid; ingestion was not run".to_string(),
+        },
+        Err(error) => Check {
+            name: "masking-policy",
+            status: "error",
+            detail: format!(
+                "{error}; configure the declared formats before adopt, stream or recovery replay; see https://transcript-lake.wisent.com/docs/masking-guarantees/"
+            ),
+        },
+    };
     let paths = lake_paths();
     let cursors = read_cursor_status(&paths.cursors);
     let sources = source_report()?;
@@ -39,15 +53,26 @@ pub fn doctor(rest: &[String]) -> Result<i32> {
         .filter_map(|row| row.error.as_deref().map(|error| (row, error)))
         .collect();
     let checks = vec![
-        Check {
-            name: "state-root",
+        masking,
+        match crate::lake::paths::present(&paths.data_dir) {
             // An absent state root is the zero state; the stream creates it
             // when the service starts.
-            status: "ok",
-            detail: if paths.data_dir.exists() {
-                paths.data_dir.to_string_lossy().into_owned()
-            } else {
-                format!("absent zero-state: {}", paths.data_dir.display())
+            Ok(true) => Check {
+                name: "state-root",
+                status: "ok",
+                detail: paths.data_dir.to_string_lossy().into_owned(),
+            },
+            Ok(false) => Check {
+                name: "state-root",
+                status: "ok",
+                detail: format!("absent zero-state: {}", paths.data_dir.display()),
+            },
+            // One that cannot be examined is not the zero state: whatever
+            // it holds is out of this process's reach.
+            Err(cause) => Check {
+                name: "state-root",
+                status: "error",
+                detail: cause.to_string(),
             },
         },
         Check {

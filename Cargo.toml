@@ -56,6 +56,10 @@ name = "masking-declaration"
 path = "tests/masking/declaration.rs"
 
 [[test]]
+name = "stream-failure"
+path = "tests/stream/failure.rs"
+
+[[test]]
 name = "codex-completed-user-item"
 path = "tests/codex/completed_user_item.rs"
 
@@ -100,6 +104,8 @@ sha2 = "0.10"
 regex = "1"
 uuid = { version = "1", features = ["v4"] }
 gethostname = "1"
+# The stop signals and the write a signal handler may make, as the system declares them.
+libc = "0.2.189"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 notify = "8"
 rusqlite = { version = "0.40.2", features = ["bundled"] }

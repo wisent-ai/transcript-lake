@@ -26,7 +26,7 @@ fn script(name: &str, embedded: &'static str) -> Result<String> {
         return Ok(embedded.to_string());
     };
     let path = PathBuf::from(dir).join(name);
-    if !path.exists() {
+    if !crate::lake::paths::present(&path)? {
         return Err(Error(format!(
             "missing {} (TRANSCRIPT_LAKE_SQL is set but incomplete)",
             path.display()

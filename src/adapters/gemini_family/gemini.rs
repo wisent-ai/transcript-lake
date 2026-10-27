@@ -67,7 +67,7 @@ pub(super) fn chat_roots(tmp: &Path) -> Vec<PathBuf> {
     subdirectories(tmp)
         .into_iter()
         .map(|project| project.join(CHATS))
-        .filter(|chats| chats.is_dir())
+        .flat_map(crate::adapters::common::existing_root)
         .collect()
 }
 

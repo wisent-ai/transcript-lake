@@ -57,7 +57,7 @@ impl Adapter for Crush {
                     path.join(data)
                 })
             })
-            .filter(|data| data.is_dir())
+            .flat_map(crate::adapters::common::existing_root)
             .collect()
     }
 

@@ -1,4 +1,6 @@
 //! Real adoption rejects omitted masking classes before publishing events.
+#[path = "doctor.rs"]
+mod doctor;
 #[path = "../harnesses/evidence.rs"]
 mod evidence;
 
@@ -57,6 +59,13 @@ fn masking_classes_require_explicit_declarations_before_adoption() {
         )
         .expect("write owned declaration");
         let lake = work.join(format!("lake-missing-{missing}"));
+        doctor::refused(
+            &work,
+            &lake,
+            &declaration,
+            &format!("doctor-missing-{missing}"),
+            missing,
+        );
         let output = evidence::run(
             &work,
             &format!("refuse-missing-{missing}"),
@@ -125,4 +134,66 @@ fn masking_classes_require_explicit_declarations_before_adoption() {
         persisted.iter().any(|event| event["text"] == expected),
         "native message not persisted"
     );
+    let (diagnostic, report, policy) =
+        doctor::masking(&work, &lake, &declaration, "doctor-valid-masking-policy");
+    assert!(
+        diagnostic.status.success(),
+        "doctor refused valid masking policy: {}",
+        String::from_utf8_lossy(&diagnostic.stdout)
+    );
+    assert_eq!(report["healthy"], true);
+    assert_eq!(policy["status"], "ok");
+    assert_eq!(
+        events(&lake.join("events")),
+        persisted,
+        "read-only doctor changed canonical events"
+    );
+}
+
+/// With no file named, the masker reads the declaration shipped with the
+/// product, so a stream started without the setting masks provider tokens
+/// instead of refusing to take any transcript.
+#[test]
+fn doctor_reads_the_shipped_declaration_when_no_file_is_named() {
+    let work = evidence::directory();
+    let (_, _, policy) =
+        doctor::masking(&work, &work.join("lake-shipped"), Path::new(""), "doctor-shipped-declaration");
+    assert_eq!(policy["status"], "ok", "the shipped declaration is not read as a valid policy: {policy}");
+}
+
+#[test]
+fn doctor_rejects_invalid_policies_without_creating_lake() {
+    let work = evidence::directory();
+    let unreadable = work.join("formats-directory");
+    fs::create_dir(&unreadable).expect("create unreadable declaration directory");
+    doctor::refused(
+        &work,
+        &work.join("lake-unreadable"),
+        &unreadable,
+        "doctor-unreadable",
+        "cannot be read",
+    );
+    let declaration = work.join("formats.json");
+    for (name, contents, expected) in [
+        ("invalid-json", "{", "not a secret-format declaration"),
+        (
+            "unknown-field",
+            r#"{"assignment":null,"token":null,"entropy":null,"unexpected":null}"#,
+            "unknown field",
+        ),
+        (
+            "invalid-pattern",
+            r#"{"assignment":"[","token":null,"entropy":null}"#,
+            "invalid assignment pattern",
+        ),
+    ] {
+        fs::write(&declaration, contents).expect("write invalid declaration");
+        doctor::refused(
+            &work,
+            &work.join(format!("lake-{name}")),
+            &declaration,
+            &format!("doctor-{name}"),
+            expected,
+        );
+    }
 }

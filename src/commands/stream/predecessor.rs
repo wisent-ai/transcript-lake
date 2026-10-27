@@ -56,7 +56,9 @@ fn launchd(predecessor: &str) {
     {
         Ok(output) => output.status.success(),
         Err(error) => {
-            eprintln!("stream: {predecessor} stays: launchctl print {target} could not run: {error}");
+            eprintln!(
+                "stream: {predecessor} stays: launchctl print {target} could not run: {error}"
+            );
             return;
         }
     };

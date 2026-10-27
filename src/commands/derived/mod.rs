@@ -12,7 +12,7 @@ use crate::args::{parse_options, require_flags_only, require_no_args, require_ru
 use crate::cursors::open_writer_lease;
 use crate::oko_export;
 use crate::paths::{lake_paths, partition_report, path_size, resolve_data_dir};
-use crate::util::{find_on_path, quote_sql, run_binary, write_json, Error, Result};
+use crate::util::{quote_sql, run_binary, write_json, Error, Result};
 
 /// Rebuild the per-runtime Parquet mirror of each NDJSON partition set. The
 /// mirror is additive: DuckDB rewrites `events.parquet` and the NDJSON stays.
@@ -33,7 +33,7 @@ pub fn compact(rest: &[String]) -> Result<i32> {
     }
     let _lease = open_writer_lease(&data_dir)?;
     let mut report: Vec<Value> = Vec::new();
-    let mut exit_code = 0;
+    let mut exit_code = libc::EXIT_SUCCESS;
     for row in &rows {
         let runtime_name = format!("runtime={}", row.runtime);
         let source_glob = data_dir
@@ -54,7 +54,7 @@ pub fn compact(rest: &[String]) -> Result<i32> {
             quote_sql(out_file.to_string_lossy())
         );
         let status = run_binary("duckdb", &["-c", &script])?;
-        if status != 0 {
+        if status != libc::EXIT_SUCCESS {
             eprintln!("compact: duckdb failed for {runtime_name}");
             exit_code = status;
             report.push(json!({
@@ -125,27 +125,24 @@ pub fn projection(rest: &[String]) -> Result<i32> {
                 oko_export::export_oko_with_reindex(true, reindex, &resolve_data_dir(None))?;
             write_json(&summary)?;
             let reindexed = summary.get("reindex").is_some_and(|report| {
-                report.get("ran").and_then(Value::as_bool).unwrap_or(false)
-                    && report.get("status").and_then(Value::as_i64) == Some(0)
+                report.get("ran").and_then(Value::as_bool) == Some(true)
+                    && report.get("status").and_then(Value::as_i64)
+                        == Some(i64::from(libc::EXIT_SUCCESS))
             });
             if reindex && !reindexed {
-                return Ok(1);
+                return Ok(libc::EXIT_FAILURE);
             }
-            Ok(0)
+            Ok(libc::EXIT_SUCCESS)
         }
         "refresh" => {
             let parsed = parse_options("projection refresh", rest, &["target"], &[])?;
             require_flags_only("projection refresh", &parsed)?;
             projection_target(&parsed, "projection refresh")?;
-            let binary = std::env::var_os("OKO_CLI")
-                .map(PathBuf::from)
-                .filter(|path| !path.as_os_str().is_empty())
-                .or_else(|| find_on_path("oko-cli"));
-            let Some(binary) = binary else {
+            let Some(binary) = crate::paths::oko_cli() else {
                 eprintln!(
                     "oko-cli is not on PATH; install Oko or set OKO_CLI, then run: oko-cli transcripts reindex"
                 );
-                return Ok(1);
+                return Ok(libc::EXIT_FAILURE);
             };
             run_binary(&binary.to_string_lossy(), &["transcripts", "reindex"])
         }
@@ -180,7 +177,11 @@ impl CleanTarget {
 pub fn clean(rest: &[String]) -> Result<i32> {
     let parsed = parse_options("clean", rest, &["target"], &["apply", "json"])?;
     require_flags_only("clean", &parsed)?;
-    let target = parsed.value("target").unwrap_or("all");
+    // No --target names every derived artifact; the help and README say so.
+    let target = match parsed.value("target") {
+        Some(target) => target,
+        None => "all",
+    };
     let Some(target) = CleanTarget::named(target) else {
         return Err(Error("--target must be parquet, oko, or all".to_string()));
     };
@@ -226,12 +227,11 @@ pub fn clean(rest: &[String]) -> Result<i32> {
     if parsed.flag("json") {
         write_json(&report)?;
     } else {
-        for entry in &report {
+        for ((name, path), entry) in selected.iter().zip(&report) {
             println!(
-                "{} {}: {} ({} bytes)",
+                "{} {name}: {} ({} bytes)",
                 if apply { "removed" } else { "would remove" },
-                entry["target"].as_str().unwrap_or_default(),
-                entry["path"].as_str().unwrap_or_default(),
+                path.display(),
                 entry["bytes"]
             );
         }
@@ -239,5 +239,5 @@ pub fn clean(rest: &[String]) -> Result<i32> {
             println!("preview only; add --apply to remove derived data");
         }
     }
-    Ok(0)
+    Ok(libc::EXIT_SUCCESS)
 }

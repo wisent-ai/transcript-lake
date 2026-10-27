@@ -28,23 +28,23 @@ impl Adapter for Hooks {
     }
 
     fn roots(&self, home: &Path) -> Vec<PathBuf> {
-        let dir = home.join(".hooks-adaptive");
-        if dir.exists() {
-            return vec![dir];
-        }
-        Vec::new()
+        crate::adapters::common::existing_root(home.join(".hooks-adaptive"))
     }
 
     fn list_sessions(&self, root: &Path) -> Vec<SessionEntry> {
         let mut out = Vec::new();
         for name in ["telemetry.prev.jsonl", "telemetry.jsonl"] {
             let file = root.join(name);
-            if file.exists() {
-                out.push(SessionEntry {
+            // A log that cannot be examined is said, as an unreadable root
+            // is: skipped silently, its events read as never written.
+            match crate::lake::paths::present(&file) {
+                Ok(true) => out.push(SessionEntry {
                     file,
                     session_id: None,
                     project: None,
-                });
+                }),
+                Ok(false) => {}
+                Err(cause) => eprintln!("sessions: {cause}, so it is not read"),
             }
         }
         out

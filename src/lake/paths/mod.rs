@@ -11,7 +11,7 @@ use crate::util::{absolute, find_on_path, home_dir, Result};
 
 mod status;
 
-pub use status::{read_cursor_status, read_stream_status, CursorStatus, StreamStatus};
+pub use status::{failed_starts, read_cursor_status, read_stream_status, CursorStatus, StreamStatus};
 
 pub const STREAM_STATUS_FILE: &str = "stream-status.json";
 
@@ -27,6 +27,18 @@ pub fn resolve_data_dir(selected: Option<&Path>) -> PathBuf {
         }
     }
     home_dir().join(".transcript-lake")
+}
+
+/// Whether anything is at `path`. Only an absent path is `false`; one that
+/// cannot be examined is the error naming it and the cause, so a state file,
+/// override or source root this process may not look at is never read as
+/// absent and replaced by a default, a fresh start or the zero state.
+pub fn present(path: &Path) -> Result<bool> {
+    match fs::metadata(path) {
+        Ok(_found) => Ok(true),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(format!("{} cannot be examined: {error}", path.display()).into()),
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -64,6 +76,17 @@ pub(crate) fn hook_segments_ready() -> PathBuf {
     }
 }
 
+/// The Oko CLI every caller hands work to: `OKO_CLI` when it names a path,
+/// else `oko-cli` on PATH, else none. One resolver, so `paths`, `doctor`,
+/// the projection refresh and the reconcile hand-off cannot disagree about
+/// which program is Oko.
+pub(crate) fn oko_cli() -> Option<PathBuf> {
+    match env::var_os("OKO_CLI").filter(|path| !path.is_empty()) {
+        Some(path) => Some(PathBuf::from(path)),
+        None => find_on_path("oko-cli"),
+    }
+}
+
 pub fn lake_paths() -> LakePaths {
     let data_dir = resolve_data_dir(None);
     LakePaths {
@@ -76,10 +99,7 @@ pub fn lake_paths() -> LakePaths {
         oko_staging: data_dir.join("staging").join("oko-export"),
         hook_segments: hook_segments_ready(),
         duckdb: find_on_path("duckdb"),
-        oko_cli: env::var_os("OKO_CLI")
-            .map(PathBuf::from)
-            .filter(|path| !path.as_os_str().is_empty())
-            .or_else(|| find_on_path("oko-cli")),
+        oko_cli: oko_cli(),
         data_dir,
     }
 }
@@ -117,14 +137,28 @@ pub fn partition_report(data_dir: &Path) -> Result<Vec<PartitionRow>> {
     for runtime_entry in runtimes {
         let runtime_entry = runtime_entry.map_err(unlisted)?;
         let name = runtime_entry.file_name().to_string_lossy().to_string();
-        if !runtime_entry.path().is_dir() || !name.starts_with("runtime=") {
+        if !name.starts_with("runtime=") {
+            continue;
+        }
+        // A runtime directory that cannot be examined is refused: skipped,
+        // the inventory reported the lake without that runtime's partitions.
+        let runtime_path = runtime_entry.path();
+        if !present(&runtime_path)? || !runtime_path.is_dir() {
             continue;
         }
         let mut sizes = Vec::new();
         let mut unreadable = Vec::new();
         for date in entries_of(&runtime_entry.path(), &mut unreadable) {
-            if !date.is_dir() {
-                continue;
+            // A date directory that cannot be examined is named among the
+            // unreadable, as an unlistable one is; skipped, its parts were
+            // left out of the sizes without a word.
+            match fs::metadata(&date) {
+                Ok(meta) if meta.is_dir() => {}
+                Ok(_not_directory) => continue,
+                Err(error) => {
+                    unreadable.push(format!("{}: {error}", date.display()));
+                    continue;
+                }
             }
             for file in entries_of(&date, &mut unreadable) {
                 let part = file

@@ -53,3 +53,13 @@ pub fn alive(host: &str, pid: u32, started: &str) -> Result<bool> {
     }
     Ok(start_time(pid)?.as_deref() == Some(started))
 }
+
+/// This process as an owner record names it, {host, pid, started}, for a
+/// record `what` that a later reader checks with [`alive`].
+pub fn own_record(what: &str) -> Result<serde_json::Value> {
+    Ok(serde_json::json!({
+        "host": crate::util::machine_name(),
+        "pid": std::process::id(),
+        "started": own_start_time(what)?,
+    }))
+}

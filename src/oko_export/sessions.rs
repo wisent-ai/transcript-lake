@@ -12,7 +12,7 @@ use serde_json::Value;
 use super::partitions::{read_dir_names, LineReader, Partition};
 use super::row::{accepted, dedupe, export_line, fingerprint, render, row_order, row_runtime};
 use super::{atomic_write, hash_text, read_text, session_key, Tally};
-use crate::util::Result;
+use crate::util::{Error, Result};
 
 pub(crate) struct StagedSession {
     runtime: String,
@@ -44,10 +44,7 @@ pub(crate) fn stage_events(
     let mut seen: HashSet<String> = HashSet::new();
     let mut buffers: HashMap<PathBuf, String> = HashMap::new();
     for partition in partitions {
-        if partition.size == 0 {
-            continue;
-        }
-        let mut reader = LineReader::open(&partition.path, 0, partition.size)?;
+        let mut reader = LineReader::open(&partition.path, None, partition.size)?;
         while let Some(line) = reader.next_line()? {
             if line.trim().is_empty() {
                 continue;
@@ -55,8 +52,7 @@ pub(crate) fn stage_events(
             let event: Value = match serde_json::from_str(&line) {
                 Ok(event) => event,
                 Err(error) => {
-                    tally.malformed += 1;
-                    tally.last_error = Some(error.to_string());
+                    tally.malformed.push(error.to_string());
                     continue;
                 }
             };
@@ -64,7 +60,10 @@ pub(crate) fn stage_events(
                 continue;
             }
             let runtime = row_runtime(&event, &partition.runtime);
-            let session_id = event["session_id"].as_str().unwrap_or_default().to_string();
+            // `accepted` holds every row it lets through to a text session id.
+            let Some(session_id) = event["session_id"].as_str() else {
+                continue;
+            };
             let key = session_key(&runtime, &session_id);
             let session_hash = hash_text(&key);
             let staged_file = staging_root
@@ -108,19 +107,21 @@ pub(crate) fn materialize_session(
     output_root: &Path,
 ) -> Result<SessionWrite> {
     let staged = read_text(&entry.staged_file)?.ok_or_else(|| {
-        crate::util::Error(format!(
+        Error(format!(
             "staged session {} is missing, so its export is not rewritten empty",
             entry.staged_file.display()
         ))
     })?;
+    // The staging file was written by this export a moment ago: a row of it
+    // that does not parse is a damaged staging, refused rather than left out.
     let mut rows = Vec::new();
-    for line in staged.split('\n') {
-        if line.is_empty() {
-            continue;
-        }
-        if let Ok(row) = serde_json::from_str::<Value>(line) {
-            rows.push(row);
-        }
+    for line in staged.split('\n').filter(|line| !line.is_empty()) {
+        rows.push(serde_json::from_str::<Value>(line).map_err(|error| {
+            Error(format!(
+                "staged session {} holds an unreadable row: {error}",
+                entry.staged_file.display()
+            ))
+        })?);
     }
     let mut rows = dedupe(rows);
     rows.sort_by(row_order);
@@ -143,7 +144,7 @@ pub(crate) fn materialize_session(
 }
 
 pub(crate) fn prune_outputs(output_root: &Path, expected: &HashSet<PathBuf>) -> Result<u64> {
-    let mut pruned = 0;
+    let mut pruned = Vec::new();
     for runtime_name in read_dir_names(output_root)? {
         if !runtime_name.starts_with("runtime=") {
             continue;
@@ -155,10 +156,10 @@ pub(crate) fn prune_outputs(output_root: &Path, expected: &HashSet<PathBuf>) -> 
                 continue;
             }
             fs::remove_file(&file)?;
-            pruned += 1;
+            pruned.push(file);
         }
     }
-    Ok(pruned)
+    Ok(pruned.len() as u64)
 }
 
 pub(crate) struct IncrementalSession {

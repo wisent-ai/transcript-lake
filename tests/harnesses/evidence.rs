@@ -224,7 +224,8 @@ pub fn show_retains_canonical_extra(
 
 pub fn directory() -> std::path::PathBuf {
     use sha2::{Digest, Sha256};
-    let root = Path::new(env!("CARGO_TARGET_TMPDIR"))
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join(".build/journeys")
         .join(format!("harness-ingestion-{}", uuid::Uuid::new_v4()));
     fs::create_dir_all(&root).expect("create retained journey directory");
     let (revision, patch) = match exported() {

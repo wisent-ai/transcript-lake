@@ -3,9 +3,10 @@
 
 use std::fs::{self, File};
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
+use std::num::NonZeroU64;
 use std::path::{Path, PathBuf};
 
-use crate::util::{mtime_ms, Result};
+use crate::util::{mtime_ms, Error, Result};
 
 /// Directory entries, treating a missing or non-directory path as empty.
 /// Sorted by name: `readdirSync` returns strcmp order, and the export walk is
@@ -13,10 +14,10 @@ use crate::util::{mtime_ms, Result};
 pub(crate) fn read_dir_names(dir: &Path) -> Result<Vec<String>> {
     match fs::read_dir(dir) {
         Ok(entries) => {
-            let mut names: Vec<String> = entries
-                .flatten()
-                .map(|entry| entry.file_name().to_string_lossy().into_owned())
-                .collect();
+            // An entry the directory cannot list is the error, never skipped.
+            let mut names = entries
+                .map(|entry| entry.map(|entry| entry.file_name().to_string_lossy().into_owned()))
+                .collect::<std::io::Result<Vec<String>>>()?;
             names.sort_unstable_by(|left, right| left.as_bytes().cmp(right.as_bytes()));
             Ok(names)
         }
@@ -37,29 +38,37 @@ pub(crate) fn read_dir_names(dir: &Path) -> Result<Vec<String>> {
 /// is read backwards in the filesystem's own preferred I/O size.
 fn newline_aligned_size(path: &Path, size: u64) -> Result<u64> {
     use std::os::unix::fs::MetadataExt;
-    if size == 0 {
-        return Ok(0);
-    }
     let handle = File::open(path)?;
-    let block = handle.metadata()?.blksize().max(1);
-    let mut buffer = vec![0u8; std::cmp::min(block, size) as usize];
+    let Some(block) = NonZeroU64::new(handle.metadata()?.blksize()) else {
+        return Err(Error(format!(
+            "{} reports no preferred I/O size to read it back by",
+            path.display()
+        )));
+    };
+    let mut buffer = Vec::new();
     let mut end = size;
-    while end > 0 {
-        let start = end.saturating_sub(buffer.len() as u64);
-        let length = (end - start) as usize;
-        read_exact_at(&handle, &mut buffer[..length], start)?;
-        if let Some(at) = buffer[..length].iter().rposition(|byte| *byte == b'\n') {
-            return Ok(start + at as u64 + 1);
+    loop {
+        let start = end.saturating_sub(block.get());
+        // An empty range is the start of the file reached with no separator:
+        // no line of it is complete yet.
+        if start == end {
+            return Ok(start);
+        }
+        let mut reader = &handle;
+        reader.seek(SeekFrom::Start(start))?;
+        buffer.clear();
+        reader.take(end - start).read_to_end(&mut buffer)?;
+        if buffer.len() as u64 != end - start {
+            return Err(Error(format!(
+                "{} shrank while its last complete line was being found",
+                path.display()
+            )));
+        }
+        if let Some(at) = buffer.iter().rposition(|byte| *byte == b'\n') {
+            return Ok(start + buffer[..=at].len() as u64);
         }
         end = start;
     }
-    Ok(0)
-}
-
-fn read_exact_at(handle: &File, buffer: &mut [u8], offset: u64) -> Result<()> {
-    use std::os::unix::fs::FileExt;
-    handle.read_exact_at(buffer, offset)?;
-    Ok(())
 }
 
 /// One append-only partition file, measured the way the export cursor records it.
@@ -77,9 +86,9 @@ pub(crate) fn event_partition_files(data_dir: &Path) -> Result<Vec<Partition>> {
     let mut files = Vec::new();
     let events_root = data_dir.join("events");
     for runtime_name in read_dir_names(&events_root)? {
-        if !runtime_name.starts_with("runtime=") || runtime_name == "runtime=hooks" {
+        let Some(runtime) = runtime_name.strip_prefix("runtime=").filter(|runtime| *runtime != "hooks") else {
             continue;
-        }
+        };
         let runtime_dir = events_root.join(&runtime_name);
         for date_name in read_dir_names(&runtime_dir)? {
             if !date_name.starts_with("date=") {
@@ -93,7 +102,7 @@ pub(crate) fn event_partition_files(data_dir: &Path) -> Result<Vec<Partition>> {
                 let path = date_dir.join(&part_name);
                 let meta = fs::metadata(&path)?;
                 files.push(Partition {
-                    runtime: runtime_name["runtime=".len()..].to_string(),
+                    runtime: runtime.to_string(),
                     size: newline_aligned_size(&path, meta.len())?,
                     physical_size: meta.len(),
                     mtime_ms: mtime_ms(&meta),
@@ -115,28 +124,32 @@ pub(crate) struct LineReader {
 }
 
 impl LineReader {
-    pub(crate) fn open(path: &Path, start: u64, end: u64) -> Result<Self> {
+    /// The lines between `start` (the file's beginning when none) and `end`.
+    pub(crate) fn open(path: &Path, start: Option<u64>, end: u64) -> Result<Self> {
         let mut file = File::open(path)?;
-        if start > 0 {
+        let mut remaining = end;
+        if let Some(start) = start {
             file.seek(SeekFrom::Start(start))?;
+            remaining = end.saturating_sub(start);
         }
         Ok(Self {
-            inner: BufReader::new(file).take(end.saturating_sub(start)),
-            buffer: Vec::with_capacity(4096),
+            inner: BufReader::new(file).take(remaining),
+            buffer: Vec::new(),
         })
     }
 
     pub(crate) fn next_line(&mut self) -> Result<Option<String>> {
         self.buffer.clear();
-        if self.inner.read_until(b'\n', &mut self.buffer)? == 0 {
+        self.inner.read_until(b'\n', &mut self.buffer)?;
+        if self.buffer.is_empty() {
             return Ok(None);
         }
         let mut line = self.buffer.as_slice();
-        if line.last() == Some(&b'\n') {
-            line = &line[..line.len() - 1];
+        if let Some(body) = line.strip_suffix(b"\n") {
+            line = body;
         }
-        if line.last() == Some(&b'\r') {
-            line = &line[..line.len() - 1];
+        if let Some(body) = line.strip_suffix(b"\r") {
+            line = body;
         }
         Ok(Some(String::from_utf8_lossy(line).into_owned()))
     }

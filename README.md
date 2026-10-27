@@ -63,7 +63,8 @@ Its value is one live parsing and masking boundary: every downstream consumer re
 - DuckDB CLI `1.5.x` is required only for SQL queries and Parquet compaction.
 - Oko and Tama are optional integrations. Core streaming remains usable without them.
 - Data remains local under `LAKE_DATA`, defaulting to `~/.transcript-lake`.
-- `TRANSCRIPT_LAKE_SECRET_FORMATS` must name the operator's JSON declaration of the secret formats the masker recognises (assignment, token and entropy patterns, and the entropy diversity floor); without it the writer refuses to start and names the setting.
+- `TRANSCRIPT_LAKE_SECRET_FORMATS` names a JSON declaration of the secret formats the masker recognises (assignment, token and entropy patterns, and the entropy diversity floor). Without the setting the masker reads the declaration that ships with the product (`src/record/secret-formats.json`): the credential prefixes providers document (GitHub `ghp_`/`gho_`/`ghu_`/`ghs_`/`ghr_`/`github_pat_`, Anthropic `sk-ant-`, OpenAI `sk-proj-`/`sk-svcacct-`/`sk-admin-`, Slack `xox?-`, AWS `AKIA`, Google `AIza`, GitLab `glpat-`) and no assignment or entropy class, whose lengths and floors nobody stated; a named file that cannot be read or does not declare every key refuses the writer naming the file.
+- `transcript-lake doctor --json` validates that same declaration in its read-only `masking-policy` check. Missing or invalid policy makes the report unhealthy and retains the underlying cause; a valid declaration is not proof that ingestion ran.
 - Historical reconstruction into a separate empty Lake is explicit through `rebuild`; ordinary source replacements are recovered automatically in the current Lake.
 
 ## Core use cases
@@ -173,10 +174,10 @@ The CLI is the canonical human and automation interface.
 | Conversation restore | `show <session-id> [--include <types>] [--limit <n>] [--out <path>] [--json]` | One conversation reconstructed oldest turn first, full masked text, with a rendered/matched footer; `--out` saves that record to a file itself, so nobody needs a shell redirection that truncates the target before the read even runs |
 | Session labels | `label add`, `label remove`, `label list`, `label aspects` | Operator-owned aspect/value annotations over sessions; `remove` withdraws one by appending a record with no value, so the history stays whole. `--source` names who labeled: `manual` (the default), `human`, `model` or `brama`, optionally `:detail` of letters, digits, `.`, `_`, `/` or `-` (`brama:claude-opus-4.6`); anything else is refused with the value given |
 | Statistics and signals | `stats [--days <n>]`, `hooks [--limit <n>]`, `signals [--limit <n>]` | Usage aggregates over the whole Lake (or the last n days), every adaptive-hook decision, and Oko/Lake correlations |
-| Advanced SQL | `query [--json] \"<sql>\"` | DuckDB result or actionable dependency error |
+| Advanced SQL | `query [--json] "<sql>"` | DuckDB result, or a named dependency/partition parse error; malformed event lines are never omitted from a successful result |
 | Compact | `compact [--source <runtime>] [--json]` | Per-runtime NDJSON-to-Parquet report |
 | Projection recovery | `projection rebuild --target <consumer> [--reindex]`, `projection refresh --target <consumer>` | Reconstruct the projection one consumer imports, or hand it to that consumer's own CLI; `oko` is the one target today, and another is refused with the ones that exist |
-| Derived cleanup | `clean [--target <parquet|oko|all>] [--apply]` | Dry-run by default; removes rebuildable data only with `--apply` |
+| Derived cleanup | `clean [--target <parquet|oko|all>] [--apply]` | Dry-run by default; removes rebuildable data only with `--apply`; without `--target` every derived artifact (`all`) is selected |
 
 The Lake keeps each event's text and `extra` whole: no adapter cuts text to a
 length, masking reaches every depth of `extra`, and records read before a
@@ -237,6 +238,15 @@ independently observed masked `user_text`, exact `tool_text`, `authored_text`,
 inspects persisted canonical events and retains adoption and refusal evidence
 under the ignored build directory.
 
+`cargo test --test harness-omp-usage` adopts a read-only copy of the newest
+native session under `OMP_SESSIONS` (or the documented OMP home store) into
+an isolated Lake. It compares persisted input, output, cache-read and
+cache-write counters with that session's billed message, requiring exactly
+one event with its timestamp and credential identity. Accounting belongs
+to the first emitted block, including thinking or a tool call; canonical
+partition rows do not carry the projection's `role` field. A session without
+a billed message refuses qualification rather than passing without assertions.
+
 An unknown command, a repeated global `--data-dir`, or a `--data-dir` without a path prints the error and the usage and exits 2; any other failure exits 1.
 The real-binary journey `cargo test --test cli-usage` reads that status from the sentence above and refuses each of those three invocations unless it exits with it, names its error, and prints the usage on stderr with nothing on stdout.
 
@@ -251,7 +261,7 @@ Canonical event and adapter interfaces are machine contracts documented in [the 
 - **Credentials:** core streaming needs none. Transcript contents may contain credentials, so masking occurs before durable Lake writes. Do not share a Lake directory as though it were anonymized data.
 - **Upgrades:** use an immutable release once available. State layout compatibility, rollback, and release channels are defined in [release policy](https://transcript-lake.wisent.com/docs/releases/).
 - **Observability:** `paths`, `sources`, `doctor`, `status --json`, and stream logs expose configuration, availability, freshness, counts, and failures.
-- **Recovery:** the supervised stream verifies source prefixes, recovers rewrites and legacy cursors, and retains archived history. Invalid cursor state or corrupt canonical partitions are explicit refusals naming the failed state; `rebuild --to <empty-path>` reconstructs a separate Lake without mutating the current one. Recovery diagnostics name the source, reason, previous offset, and observed bytes; JSON summaries include replay counts.
+- **Recovery:** the supervised stream verifies source prefixes, recovers rewrites and legacy cursors, and retains archived history. A filesystem watcher error (an overflowed event queue, a root it stopped following) is logged as `watch-failed` with the watcher's errors and answered with a catch-up of every root from its cursors, so changes the watcher lost are still archived; a stop that cannot release a root's watch records it under `unwatchFailures` in the stopped stream state. Invalid cursor state or corrupt canonical partitions are explicit refusals naming the failed state; `rebuild --to <empty-path>` reconstructs a separate Lake without mutating the current one. Recovery diagnostics name the source, reason, previous offset, and observed bytes; JSON summaries include replay counts.
 - **Retention:** no automatic authoritative deletion is performed. `clean` handles only rebuildable Parquet and Oko artifacts, previews by default, and requires `--apply`.
 - **Integrations:** capability, dependency, failure, and removal contracts are in [integration contracts](https://transcript-lake.wisent.com/docs/integrations/).
 

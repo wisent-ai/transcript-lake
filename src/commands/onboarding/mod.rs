@@ -61,14 +61,14 @@ pub fn onboarding(rest: &[String]) -> Result<i32> {
     let definition = canonical_definition()?;
     let revision = format!("transcript-lake-{}", crate::VERSION);
     let mut state = load_or_start_state(&definition, &revision, parsed.flag("reset"))?;
-    let mut report = Report::new(&definition, parsed.flag("reset"), json_output);
+    let mut report = Report::new(&definition, parsed.flag("reset"), json_output)?;
 
     if state.get("status").and_then(Value::as_str) == Some("completed") {
         report.finish(
             "completed",
             &state,
             "The Lake already answered a query on this machine. Continue with: transcript-lake help query",
-        );
+        )?;
         return report.emit();
     }
 
@@ -76,7 +76,7 @@ pub fn onboarding(rest: &[String]) -> Result<i32> {
         let screen_id = string_field(&state, "current_screen_id")
             .ok_or_else(|| Error("onboarding state has no current screen".into()))?;
         let screen = screen_by_id(&definition, &screen_id)?.clone();
-        report.render(&screen);
+        report.render(&screen)?;
 
         match screen.get("screen_kind").and_then(Value::as_str) {
             Some("first_action") => {
@@ -90,7 +90,7 @@ pub fn onboarding(rest: &[String]) -> Result<i32> {
                         "skipped_source",
                         &state,
                         "Run transcript-lake sources, then transcript-lake adopt --source <runtime> --root <path> whenever you want to seed or change this Lake.",
-                    );
+                    )?;
                     return report.emit();
                 }
                 if let (Some(runtime), Some(root)) = (source.as_deref(), root.as_deref()) {
@@ -101,10 +101,10 @@ pub fn onboarding(rest: &[String]) -> Result<i32> {
                     )?;
                     report.note(&format!(
                         "Selected {}: {} file(s) imported, {} unchanged, {} canonical event(s) imported.",
-                        adoption.get("sourceId").and_then(Value::as_str).unwrap_or_default(),
-                        adoption.get("imported").and_then(Value::as_u64).unwrap_or(0),
-                        adoption.get("unchanged").and_then(Value::as_u64).unwrap_or(0),
-                        adoption.get("eventsImported").and_then(Value::as_u64).unwrap_or(0),
+                        adoption.selected.id,
+                        adoption.imported,
+                        adoption.unchanged,
+                        adoption.events_imported,
                     ));
                     selected = crate::sources::selected_source(&data_dir)?;
                 } else if selected.is_none() {
@@ -128,7 +128,7 @@ pub fn onboarding(rest: &[String]) -> Result<i32> {
                             "awaiting_source",
                             &state,
                             "Create work with Claude Code, Codex, omp, Factory Droid, or Kimi, then run: transcript-lake onboarding",
-                        );
+                        )?;
                     } else {
                         for candidate in &candidates {
                             report.note(&format!("Discovered {candidate}"));
@@ -137,7 +137,7 @@ pub fn onboarding(rest: &[String]) -> Result<i32> {
                             "awaiting_source_selection",
                             &state,
                             "Choose one discovered root, then run: transcript-lake onboarding --source <runtime> --root <path>",
-                        );
+                        )?;
                     }
                     return report.emit();
                 }
@@ -165,7 +165,7 @@ pub fn onboarding(rest: &[String]) -> Result<i32> {
                             "awaiting_duckdb",
                             &state,
                             "Install DuckDB 1.5.x on PATH, then run: transcript-lake onboarding",
-                        );
+                        )?;
                         return report.emit();
                     }
                 };
@@ -174,7 +174,7 @@ pub fn onboarding(rest: &[String]) -> Result<i32> {
                         "awaiting_events",
                         &state,
                         "The query returned no rows yet; leave the stream running, then run: transcript-lake onboarding",
-                    );
+                    )?;
                     return report.emit();
                 }
                 report.rows(&rows);
@@ -189,7 +189,7 @@ pub fn onboarding(rest: &[String]) -> Result<i32> {
                     "completed",
                     &state,
                     "Ask your own question with: transcript-lake query \"<sql>\"",
-                );
+                )?;
                 return report.emit();
             }
             Some(_) => {

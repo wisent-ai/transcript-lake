@@ -55,6 +55,7 @@ pub fn status(rest: &[String]) -> Result<i32> {
     let status = i32::from(
         report.cursors.state == "invalid"
             || report.stream.state == "invalid"
+            || report.stream.state == "failed"
             || unreadable_partitions,
     );
     if parsed.flag("json") {
@@ -130,7 +131,11 @@ pub fn status(rest: &[String]) -> Result<i32> {
         None => writeln!(out, "stream: {}", report.stream.state)?,
     }
     if let Some(error) = &report.stream.error {
-        writeln!(out, "  stream state error: {error}")?;
+        let said = match report.stream.state {
+            "failed" => "stream FAILED",
+            _ => "stream state error",
+        };
+        writeln!(out, "  {said}: {error}")?;
     }
     match &report.oko {
         Value::String(text) => writeln!(out, "oko: {text}")?,

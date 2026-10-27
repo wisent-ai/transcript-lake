@@ -1,8 +1,9 @@
-//! Real native-store expectations: runtime, root, session_id, masked user_text.
-//! Vendor stores remain read-only; writes stay in the retained build directory.
+//! Real native-store expectations; vendor stores stay read-only and evidence stays in the build directory.
 mod devin;
 mod droid;
 mod evidence;
+#[path = "../tracking/journey.rs"]
+mod jeden;
 mod kimi;
 mod qwen;
 use serde::Deserialize;

@@ -17,8 +17,8 @@ const PARTITION_DATE: &str = "%Y-%m-%d";
 /// not dropped.
 fn date_of(ts: Option<&str>) -> String {
     match ts.map(|ts| chrono::NaiveDate::parse_and_remainder(ts, PARTITION_DATE)) {
-        Some(Ok((date, _))) => date.format(PARTITION_DATE).to_string(),
-        Some(Err(_)) | None => "unknown".to_string(),
+        Some(Ok((date, _remainder))) => date.format(PARTITION_DATE).to_string(),
+        Some(Err(_unparsed)) | None => "unknown".to_string(),
     }
 }
 
@@ -201,7 +201,7 @@ impl EventSink for Writer {
                 .join(format!("runtime={HOOKS}"))
                 .join(format!("date={date}"))
                 .join(&part_name);
-            if path.exists() {
+            if crate::lake::paths::present(&path)? {
                 if hex_digest(&fs::read(&path)?) != sha256 {
                     return Err(Error(format!(
                         "hook segment output conflict: {}",

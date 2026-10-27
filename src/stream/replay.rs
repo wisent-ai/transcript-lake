@@ -39,7 +39,7 @@ fn replay_locked(opts: &ReplayOptions) -> Result<Value> {
         let mut adapter: Option<Box<dyn Adapter>> = None;
         if name == HOOKS {
             let ready = crate::lake::paths::hook_segments_ready();
-            if ready.exists() {
+            if crate::lake::paths::present(&ready)? {
                 // An integrity failure inside a segment commit (an output or
                 // acknowledgement that disagrees with what is already on
                 // disk) aborts the run rather than counting a failure and

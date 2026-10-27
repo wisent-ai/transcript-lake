@@ -156,7 +156,11 @@ impl JedenParser {
                 ts,
                 data.get("tool").and_then(Value::as_str),
                 as_text(data.get("input")),
-                record.get("eventId").and_then(Value::as_str),
+                match record.get("eventId") {
+                    Some(id) => id.as_str(),
+                    None => record.get("id").and_then(Value::as_str),
+                }
+                .filter(|id| !id.trim().is_empty()),
             )],
             "tool_result" => {
                 let result = data.get("result");
@@ -165,7 +169,13 @@ impl JedenParser {
                     ts,
                     data.get("tool").and_then(Value::as_str),
                     as_text(result),
-                    record.get("parentId").and_then(Value::as_str),
+                    match data.get("requestEvent") {
+                        Some(id) => id.as_str().filter(|id| !id.trim().is_empty()),
+                        None => record
+                            .get("parentId")
+                            .and_then(Value::as_str)
+                            .filter(|id| !id.trim().is_empty()),
+                    },
                     result
                         .and_then(|result| result.get("ok"))
                         .and_then(Value::as_bool)
@@ -185,7 +195,39 @@ impl JedenParser {
                 fields.insert("purpose".into(), data["purpose"].clone());
                 vec![meta(ctx, ts, "delegated_session", None, fields)]
             }
-            other => vec![meta(ctx, ts, other, None, Map::new())],
+            other => {
+                let mut fields = Map::new();
+                if let Some(id) = record.get("eventId").or_else(|| record.get("id")) {
+                    fields.insert("eventId".into(), id.clone());
+                }
+                if let Some(parent) = record.get("parentId") {
+                    fields.insert("parentId".into(), parent.clone());
+                }
+                if let Some(sequence) = record.get("sequence") {
+                    fields.insert("sequence".into(), sequence.clone());
+                }
+                if let Some(record_type) = data.get("type") {
+                    fields.insert("recordType".into(), record_type.clone());
+                }
+                if let Some(operation) = data.get("operation") {
+                    fields.insert("operation".into(), operation.clone());
+                }
+                if let Some(kind) = data.get("operationKind") {
+                    fields.insert("operationKind".into(), kind.clone());
+                }
+                if let Some(request) = data.get("requestEvent") {
+                    fields.insert("requestEvent".into(), request.clone());
+                }
+                if let Some(status) = data.get("outcome").and_then(|value| value.get("status")) {
+                    fields.insert("status".into(), status.clone());
+                }
+                let text = if data.is_null() {
+                    None
+                } else {
+                    Some(as_text(Some(data)))
+                };
+                vec![meta(ctx, ts, other, text, fields)]
+            }
         }
     }
 }

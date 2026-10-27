@@ -21,6 +21,9 @@ pub(super) fn canonical_definition() -> Result<Value> {
             "canonical onboarding journey identity mismatch".into(),
         ));
     }
+    if string_field(&definition, "journey_version").is_none() {
+        return Err(Error("canonical onboarding journey has no journey_version".into()));
+    }
     let entry = string_field(&definition, "entry_screen_id")
         .ok_or_else(|| Error("canonical onboarding journey has no entry screen".into()))?;
     let screens = definition
@@ -38,11 +41,11 @@ pub(super) fn canonical_definition() -> Result<Value> {
                 "duplicate canonical onboarding screen id: {id}"
             )));
         }
+        let presentation = screen.get("presentation");
+        let shown = |key: &str| presentation.and_then(|shown| shown.get(key)).and_then(Value::as_str);
         if screen.get("screen_kind").and_then(Value::as_str).is_none()
-            || screen
-                .get("presentation")
-                .and_then(Value::as_object)
-                .is_none()
+            || shown("title").is_none()
+            || shown("body").is_none()
         {
             return Err(Error(format!(
                 "canonical onboarding screen is incomplete: {id}"

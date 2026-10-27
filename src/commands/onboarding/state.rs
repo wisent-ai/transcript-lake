@@ -23,7 +23,7 @@ pub(super) fn load_or_start_state(
     reset: bool,
 ) -> Result<Value> {
     let path = state_path();
-    if !reset && path.exists() {
+    if !reset && crate::lake::paths::present(&path)? {
         let existing: Value = serde_json::from_str(&fs::read_to_string(&path)?)?;
         if existing.get("schema").and_then(Value::as_str) != Some(STATE_SCHEMA)
             || existing.get("product_id").and_then(Value::as_str) != Some(PRODUCT_ID)

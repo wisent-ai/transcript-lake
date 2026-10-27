@@ -40,11 +40,7 @@ impl Adapter for Kimi {
     }
 
     fn roots(&self, home: &Path) -> Vec<PathBuf> {
-        let dir = home.join(".kimi-code").join("sessions");
-        if dir.exists() {
-            return vec![dir];
-        }
-        Vec::new()
+        crate::adapters::common::existing_root(home.join(".kimi-code").join("sessions"))
     }
 
     fn list_sessions(&self, root: &Path) -> Vec<SessionEntry> {

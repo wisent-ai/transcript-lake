@@ -35,7 +35,7 @@ impl Adapter for CursorAgent {
             .iter()
             .flat_map(|base| subdirectories(base))
             .map(|project| project.join(TRANSCRIPTS))
-            .filter(|transcripts| transcripts.is_dir())
+            .flat_map(existing_root)
             .collect()
     }
 

@@ -32,13 +32,15 @@ pub(super) fn resolve_runtime() -> Result<PathBuf> {
         .map(PathBuf::from)
         .filter(|path| !path.as_os_str().is_empty())
     {
-        if path.is_file() {
-            return Ok(path);
+        match std::fs::metadata(&path) {
+            Ok(metadata) if metadata.is_file() => return Ok(path),
+            Ok(_not_file) => {
+                return Err(Error(format!("{key} does not name a file: {}", path.display())))
+            }
+            Err(error) => {
+                return Err(Error(format!("{key} names {}, which cannot be examined: {error}", path.display())))
+            }
         }
-        return Err(Error(format!(
-            "{key} does not name a file: {}",
-            path.display()
-        )));
     }
     find_on_path("ster").ok_or_else(|| {
         Error("local goal model runs on Ster: install ster on PATH or name it with TRANSCRIPT_LAKE_STER".into())
@@ -74,7 +76,7 @@ pub(super) fn resolve_prompt(data_dir: &Path) -> Result<PathBuf> {
 /// into it and checked. A copy that fails its check is said on stderr before
 /// it is fetched again, so a replaced artifact is never silent.
 fn owned_copy(cached: &Path, name: &str, check: impl Fn(&Path) -> Result<()>) -> Result<PathBuf> {
-    if cached.exists() {
+    if crate::lake::paths::present(cached)? {
         match check(cached) {
             Ok(()) => return Ok(cached.to_path_buf()),
             Err(Error(why)) => eprintln!("{why}; fetching {name} again"),

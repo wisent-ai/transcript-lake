@@ -183,6 +183,7 @@ pub(crate) fn under_any(path: &Path, roots: &[PathBuf]) -> bool {
 /// The user data directory of every VS Code-family editor present: VS Code's
 /// documented per-platform location (`~/Library/Application
 /// Support/<Editor>/User` on macOS, `~/.config/<Editor>/User` elsewhere).
+/// One that cannot be examined is said as `existing_root` says it.
 pub(crate) fn editor_user_dirs(home: &Path) -> Vec<PathBuf> {
     let bases = [
         home.join("Library").join("Application Support"),
@@ -191,10 +192,7 @@ pub(crate) fn editor_user_dirs(home: &Path) -> Vec<PathBuf> {
     let mut dirs = Vec::new();
     for base in bases {
         for editor in VS_CODE_EDITORS {
-            let user = base.join(editor).join("User");
-            if user.is_dir() {
-                dirs.push(user);
-            }
+            dirs.extend(existing_root(base.join(editor).join("User")));
         }
     }
     dirs

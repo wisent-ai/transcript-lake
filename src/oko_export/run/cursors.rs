@@ -4,6 +4,7 @@
 use std::collections::HashMap;
 use std::path::Path;
 
+use serde::Deserialize;
 use serde_json::{json, Map, Value};
 
 use crate::oko_export::partitions::{LineReader, Partition};
@@ -39,46 +40,15 @@ pub(super) fn partition_snapshot(partitions: &[Partition]) -> Value {
     Value::Object(snapshot)
 }
 
-/// The cursor state kept for one partition. An absent key stays absent, which
-/// the truncation test distinguishes from a recorded value.
+/// The cursor kept for one partition, read in the shape `partition_snapshot`
+/// writes it: integer sizes and the modification time as a number, or null
+/// when the clock gave none.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct ExportCursor {
-    size: Option<f64>,
+    size: u64,
     mtime_ms: Option<f64>,
-    physical_size: Option<f64>,
-}
-
-fn js_number(value: &Value) -> f64 {
-    match value {
-        Value::Null => 0.0,
-        Value::Bool(flag) => {
-            if *flag {
-                1.0
-            } else {
-                0.0
-            }
-        }
-        Value::Number(number) => number.as_f64().unwrap_or(f64::NAN),
-        Value::String(text) => {
-            let text = text.trim();
-            if text.is_empty() {
-                0.0
-            } else {
-                text.parse::<f64>().unwrap_or(f64::NAN)
-            }
-        }
-        _ => f64::NAN,
-    }
-}
-
-impl ExportCursor {
-    fn read(record: &Value) -> Option<Self> {
-        let field = |key: &str| record.get(key).map(js_number);
-        record.is_object().then(|| Self {
-            size: field("size"),
-            mtime_ms: field("mtimeMs"),
-            physical_size: field("physicalSize"),
-        })
-    }
+    physical_size: u64,
 }
 
 /// Rows appended since the recorded cursor, or `None` when a partition was
@@ -91,20 +61,20 @@ pub(super) fn incremental_sessions(
     let mut sessions: Vec<IncrementalSession> = Vec::new();
     let mut index: HashMap<String, usize> = HashMap::new();
     for partition in partitions {
-        let cursor = cursors
-            .get(&partition.path.to_string_lossy().into_owned())
-            .and_then(ExportCursor::read);
-        let size = partition.size as f64;
+        let cursor = match cursors.get(&partition.path.to_string_lossy().into_owned()) {
+            None => None,
+            // A cursor not in the shape this export writes cannot say where
+            // the partition was read to: only a full rebuild is sound.
+            Some(record) => match serde_json::from_value::<ExportCursor>(record.clone()) {
+                Ok(cursor) => Some(cursor),
+                Err(_unreadable) => return Ok(None),
+            },
+        };
         if let Some(cursor) = &cursor {
-            let shrank = cursor.size.is_some_and(|recorded| size < recorded);
-            let same_size = cursor.size.is_some_and(|recorded| size == recorded);
-            let mtime_changed = cursor
-                .mtime_ms
-                .is_none_or(|recorded| partition.mtime_ms != recorded);
-            let rewritten_in_place = match cursor.physical_size {
-                None => partition.physical_size == partition.size,
-                Some(recorded) => (partition.physical_size as f64) <= recorded,
-            };
+            let shrank = partition.size < cursor.size;
+            let same_size = partition.size == cursor.size;
+            let mtime_changed = cursor.mtime_ms != Some(partition.mtime_ms);
+            let rewritten_in_place = partition.physical_size <= cursor.physical_size;
             if shrank || (same_size && mtime_changed && rewritten_in_place) {
                 return Ok(None);
             }
@@ -112,15 +82,7 @@ pub(super) fn incremental_sessions(
                 continue;
             }
         }
-        if partition.size == 0 {
-            continue;
-        }
-        let start = cursor
-            .as_ref()
-            .and_then(|cursor| cursor.size)
-            .filter(|recorded| recorded.is_finite() && *recorded >= 0.0)
-            .map(|recorded| recorded as u64)
-            .unwrap_or(0);
+        let start = cursor.as_ref().map(|cursor| cursor.size);
         let mut reader = LineReader::open(&partition.path, start, partition.size)?;
         while let Some(line) = reader.next_line()? {
             if line.trim().is_empty() {
@@ -129,8 +91,7 @@ pub(super) fn incremental_sessions(
             let event: Value = match serde_json::from_str(&line) {
                 Ok(event) => event,
                 Err(error) => {
-                    tally.malformed += 1;
-                    tally.last_error = Some(error.to_string());
+                    tally.malformed.push(error.to_string());
                     continue;
                 }
             };
@@ -138,19 +99,23 @@ pub(super) fn incremental_sessions(
                 continue;
             }
             let runtime = row_runtime(&event, &partition.runtime);
-            let session_id = event["session_id"].as_str().unwrap_or_default().to_string();
+            // `accepted` holds every row it lets through to a text session id.
+            let Some(session_id) = event["session_id"].as_str() else {
+                continue;
+            };
             let key = session_key(&runtime, &session_id);
             let slot = match index.get(&key) {
                 Some(slot) => *slot,
                 None => {
-                    let session_hash = hash_text(&key);
+                    // The new session's slot is the length before it is pushed.
+                    let slot = sessions.len();
                     sessions.push(IncrementalSession {
                         runtime: runtime.clone(),
-                        session_hash,
+                        session_hash: hash_text(&key),
                         rows: Vec::new(),
                     });
-                    index.insert(key, sessions.len() - 1);
-                    sessions.len() - 1
+                    index.insert(key, slot);
+                    slot
                 }
             };
             let fingerprint = fingerprint(&event, &runtime);

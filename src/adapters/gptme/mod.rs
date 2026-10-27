@@ -39,7 +39,7 @@ impl Adapter for Gptme {
         ]
         .into_iter()
         .map(|data| data.join("logs"))
-        .filter(|logs| logs.is_dir())
+        .flat_map(crate::adapters::common::existing_root)
         .collect()
     }
 

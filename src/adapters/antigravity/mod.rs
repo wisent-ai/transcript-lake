@@ -39,7 +39,7 @@ impl Adapter for Antigravity {
             .into_iter()
             .filter(|(name, kind)| kind.is_dir() && name.starts_with("antigravity"))
             .map(|(name, _)| gemini.join(name).join("brain"))
-            .filter(|brain| brain.is_dir())
+            .flat_map(crate::adapters::common::existing_root)
             .collect()
     }
 

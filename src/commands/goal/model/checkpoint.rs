@@ -13,7 +13,7 @@ use super::{artifact_dir, download};
 /// at the pinned revision declares it (`cardData.base_model`).
 fn base_model(data_dir: &Path) -> Result<String> {
     let card = artifact_dir(data_dir).join("model-card.json");
-    if !card.is_file() {
+    if !crate::lake::paths::present(&card)? {
         download(
             &format!("https://huggingface.co/api/models/{REPOSITORY}/revision/{MODEL_REVISION}"),
             &card,
@@ -108,7 +108,7 @@ pub(crate) fn resolve_checkpoint(data_dir: &Path, model: &Path) -> Result<PathBu
     };
     for file in ["config.json", "tokenizer.json", "tokenizer_config.json"] {
         let path = directory.join(file);
-        if !path.is_file() {
+        if !crate::lake::paths::present(&path)? {
             download(
                 &format!("https://huggingface.co/{base}/resolve/{revision}/{file}"),
                 &path,

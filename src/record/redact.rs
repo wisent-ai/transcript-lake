@@ -1,14 +1,20 @@
 //! Secret masker (frozen interface, see the build contract). Every hit is
 //! replaced ENTIRELY by a `[masked:<class>:<len>:<fp>]` marker where class is
-//! token | entropy | assignment, len is the original hit length, and fp is a
-//! short prefix of a sha digest of the hit — nothing reversible and no
+//! token | entropy | assignment, len is the original hit length, and fp is the
+//! leading 32-bit word of the hit's SHA-256 in hex — nothing reversible and no
 //! plaintext prefix survives.
 //!
-//! What counts as a secret is the operator's declaration, not this file's: the
-//! JSON file named by `TRANSCRIPT_LAKE_SECRET_FORMATS` gives each class its
-//! pattern (or `null` to recognise none of that class) and the entropy class
-//! its diversity floor. Without the file, or with a key missing, the writer is
-//! refused by name, so no text reaches the Lake under an unstated rule.
+//! What counts as a secret is declared, not compiled into this file: a JSON
+//! file gives each class its pattern (or `null` to recognise none of that
+//! class) and the entropy class its diversity floor. The file
+//! `TRANSCRIPT_LAKE_SECRET_FORMATS` names is read when that setting is set;
+//! otherwise the declaration that ships with the product
+//! (`secret-formats.json` beside this module): the token formats the
+//! providers document for their credentials, each recognised by its
+//! documented prefix, and no assignment or entropy class, whose lengths and
+//! floors nobody stated. A named file that cannot be read, or a declaration
+//! with a key missing, refuses the writer by name, so no text reaches the
+//! Lake under an unstated rule.
 //!
 //! Pure string transform once built: no IO, deterministic, idempotent — marker
 //! bodies use separators that sit outside every hit alphabet, so a second pass
@@ -21,10 +27,11 @@ use sha2::{Digest, Sha256};
 
 use crate::util::{Error, Result};
 
-/// Hex characters of the hit's SHA-256 kept in the marker (the frozen marker
-/// interface's "short prefix").
-const FP_LEN: usize = 8;
 const FORMATS_ENV: &str = "TRANSCRIPT_LAKE_SECRET_FORMATS";
+/// The declaration the product ships, read when the setting names no file.
+const SHIPPED: &str = include_str!("secret-formats.json");
+/// How the shipped declaration is named in a refusal.
+const SHIPPED_NAME: &str = "the secret-format declaration shipped with transcript-lake";
 
 /// The entropy class: candidate runs, kept only when they draw on enough
 /// distinct characters and character groups.
@@ -81,16 +88,19 @@ pub struct Masker {
 fn compile(class: &str, pattern: &str, source: &Path) -> Result<Regex> {
     Regex::new(pattern).map_err(|error| {
         Error(format!(
-            "{FORMATS_ENV} file {} declares an invalid {class} pattern: {error}",
+            "{} declares an invalid {class} pattern: {error}",
             source.display()
         ))
     })
 }
 
+/// The hit's fingerprint: the leading 32-bit word of its SHA-256, in hex,
+/// every byte spelled with both of its digits so equal hits keep one width.
 fn fingerprint(value: &str) -> String {
     let digest = Sha256::digest(value.as_bytes());
     let hex = format!("{digest:x}");
-    hex[..FP_LEN].to_string()
+    let per_byte = hex.len() / digest.len();
+    hex[..per_byte * std::mem::size_of::<u32>()].to_string()
 }
 
 fn marker(class: &str, value: &str) -> String {
@@ -123,26 +133,26 @@ fn dense_enough(run: &str, rule: &EntropyRule) -> bool {
 }
 
 impl Masker {
-    /// The masker for the operator's declared formats, read from the file
-    /// `TRANSCRIPT_LAKE_SECRET_FORMATS` names.
+    /// The masker for the declared formats: the file
+    /// `TRANSCRIPT_LAKE_SECRET_FORMATS` names, or the declaration shipped
+    /// with the product when the setting is not set.
     pub fn declared() -> Result<Self> {
-        let source = std::env::var_os(FORMATS_ENV)
-            .filter(|value| !value.is_empty())
-            .map(PathBuf::from)
-            .ok_or_else(|| {
-                Error(format!(
-                    "{FORMATS_ENV} is required: the JSON file declaring the assignment, token and entropy secret formats"
-                ))
-            })?;
-        let text = std::fs::read_to_string(&source).map_err(|error| {
-            Error(format!(
-                "{FORMATS_ENV} file {} cannot be read: {error}",
-                source.display()
-            ))
-        })?;
+        let (source, text) = match std::env::var_os(FORMATS_ENV).filter(|value| !value.is_empty()) {
+            Some(named) => {
+                let source = PathBuf::from(named);
+                let text = std::fs::read_to_string(&source).map_err(|error| {
+                    Error(format!(
+                        "{FORMATS_ENV} file {} cannot be read: {error}",
+                        source.display()
+                    ))
+                })?;
+                (source, text)
+            }
+            None => (PathBuf::from(SHIPPED_NAME), SHIPPED.to_owned()),
+        };
         let declared: DeclaredFormats = serde_json::from_str(&text).map_err(|error| {
             Error(format!(
-                "{FORMATS_ENV} file {} is not a secret-format declaration: {error}",
+                "{} is not a secret-format declaration: {error}",
                 source.display()
             ))
         })?;
@@ -178,15 +188,19 @@ impl Masker {
         guard: Option<&EntropyRule>,
         hits: &mut u64,
     ) -> String {
-        re.replace_all(text, |caps: &Captures<'_>| {
-            let hit = &caps[0];
-            if guard.is_some_and(|rule| !dense_enough(hit, rule)) {
-                return hit.to_string();
-            }
-            *hits += 1;
-            marker(class, hit)
-        })
-        .into_owned()
+        let mut masked = Vec::new();
+        let out = re
+            .replace_all(text, |caps: &Captures<'_>| {
+                let hit = caps.get_match().as_str();
+                if guard.is_some_and(|rule| !dense_enough(hit, rule)) {
+                    return hit.to_string();
+                }
+                masked.push(hit.len());
+                marker(class, hit)
+            })
+            .into_owned();
+        *hits += masked.len() as u64;
+        out
     }
 
     /// Order matters: whole assignments first, then provider-shaped tokens,

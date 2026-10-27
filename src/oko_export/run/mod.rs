@@ -22,10 +22,6 @@ use super::{atomic_write, hash_text, remove_tree, session_key, Tally};
 use crate::cursors::open_writer_lease;
 use crate::util::{Error, Result};
 
-/// An incremental merge touches only the sessions whose rows it read, so it
-/// removes no session file; a full rebuild is the pass that can prune one.
-const INCREMENTAL_PRUNED: u64 = 0;
-
 /// Apply already-masked canonical rows directly to Oko's per-session view.
 ///
 /// The real-time stream calls this before advancing a source cursor, so Oko
@@ -43,18 +39,23 @@ pub(crate) fn project_events(data_dir: &Path, events: Vec<Value>) -> Result<()> 
         if runtime.is_empty() || runtime == crate::types::HOOKS {
             continue;
         }
-        let session_id = event["session_id"].as_str().unwrap_or_default();
+        // accepted() already requires a session id; an event without one
+        // never reaches here.
+        let Some(session_id) = event["session_id"].as_str() else {
+            continue;
+        };
         let key = session_key(&runtime, session_id);
         let slot = match index.get(&key) {
             Some(slot) => *slot,
             None => {
+                let slot = sessions.len();
                 sessions.push(IncrementalSession {
                     runtime: runtime.clone(),
                     session_hash: hash_text(&key),
                     rows: Vec::new(),
                 });
-                index.insert(key, sessions.len() - 1);
-                sessions.len() - 1
+                index.insert(key, slot);
+                slot
             }
         };
         let event_id = fingerprint(&event, &runtime);
@@ -73,8 +74,18 @@ struct ExportResult {
     records: u64,
     written: u64,
     unchanged: u64,
-    pruned: u64,
+    /// Session files the pass removed; `None` for an incremental merge,
+    /// which touches only the sessions whose rows it read and prunes none.
+    pruned: Option<u64>,
     mode: &'static str,
+}
+
+/// Records, rewritten files and unchanged files of the sessions one pass
+/// materialized or merged, counted from what each answered.
+fn counted(results: &[(u64, bool)]) -> (u64, u64, u64) {
+    let records = results.iter().map(|(records, _)| records).sum();
+    let written = results.iter().filter(|(_, changed)| *changed).count() as u64;
+    (records, written, results.len() as u64 - written)
 }
 
 fn full_export(
@@ -86,27 +97,22 @@ fn full_export(
     remove_tree(staging_root)?;
     fs::create_dir_all(staging_root)?;
     let sessions = stage_events(partitions, staging_root, tally)?;
-    if tally.malformed > 0 {
+    if !tally.malformed.is_empty() {
         remove_tree(staging_root)?;
-        return Err(Error(
-            "full Oko export refused malformed Lake rows; authoritative partitions were not modified"
-                .to_string(),
-        ));
+        return Err(Error(format!(
+            "full Oko export refused {} malformed Lake row(s); authoritative partitions were not modified: {}",
+            tally.malformed.len(),
+            tally.malformed.join("; ")
+        )));
     }
     let mut expected: HashSet<PathBuf> = HashSet::new();
-    let mut written = 0;
-    let mut unchanged = 0;
-    let mut records = 0;
+    let mut results = Vec::new();
     for entry in &sessions {
         let result = materialize_session(entry, output_root)?;
+        results.push((result.records, result.changed));
         expected.insert(result.file);
-        records += result.records;
-        if result.changed {
-            written += 1;
-        } else {
-            unchanged += 1;
-        }
     }
+    let (records, written, unchanged) = counted(&results);
     let pruned = prune_outputs(output_root, &expected)?;
     remove_tree(staging_root)?;
     Ok(ExportResult {
@@ -114,7 +120,7 @@ fn full_export(
         records,
         written,
         unchanged,
-        pruned,
+        pruned: Some(pruned),
         mode: "full",
     })
 }
@@ -136,30 +142,25 @@ fn export_oko_locked(full: bool, reindex: bool, data_dir: &Path) -> Result<Value
         Some(cursors) => match incremental_sessions(&partitions, cursors, &mut tally)? {
             None => full_export(&partitions, &output_root, &staging_root, &mut tally)?,
             Some(sessions) => {
-                if tally.malformed > 0 {
-                    return Err(Error(
-                            "incremental Oko export refused malformed Lake rows; export cursor was not advanced"
-                                .to_string(),
-                        ));
+                if !tally.malformed.is_empty() {
+                    return Err(Error(format!(
+                        "incremental Oko export refused {} malformed Lake row(s); export cursor was not advanced: {}",
+                        tally.malformed.len(),
+                        tally.malformed.join("; ")
+                    )));
                 }
-                let mut records = 0;
-                let mut written = 0;
-                let mut unchanged = 0;
+                let mut results = Vec::new();
                 for entry in &sessions {
                     let merged = merge_incremental_session(entry, &output_root)?;
-                    records += merged.records;
-                    if merged.changed {
-                        written += 1;
-                    } else {
-                        unchanged += 1;
-                    }
+                    results.push((merged.records, merged.changed));
                 }
+                let (records, written, unchanged) = counted(&results);
                 ExportResult {
                     sessions: sessions.len(),
                     records,
                     written,
                     unchanged,
-                    pruned: INCREMENTAL_PRUNED,
+                    pruned: None,
                     mode: "incremental",
                 }
             }
@@ -180,12 +181,12 @@ fn export_oko_locked(full: bool, reindex: bool, data_dir: &Path) -> Result<Value
     summary.insert("unchanged".to_string(), json!(result.unchanged));
     summary.insert("pruned".to_string(), json!(result.pruned));
     summary.insert("mode".to_string(), json!(result.mode));
-    summary.insert("malformed".to_string(), json!(tally.malformed));
+    summary.insert("malformed".to_string(), json!(tally.malformed.len()));
     summary.insert(
         "durationMs".to_string(),
         json!(started_at.elapsed().as_millis() as u64),
     );
-    if let Some(last_error) = tally.last_error {
+    if let Some(last_error) = tally.malformed.last() {
         summary.insert("lastError".to_string(), json!(last_error));
     }
     if reindex {
@@ -212,17 +213,23 @@ pub fn export_oko_with_reindex(full: bool, reindex: bool, data_dir: &Path) -> Re
 }
 
 // A flagless reindex discovers the Lake export root and remains incremental:
-// unchanged per-session files keep their mtimes, so Oko skips them.
+// unchanged per-session files keep their mtimes, so Oko skips them. The Oko
+// CLI is the one paths::oko_cli() names, as for every other hand-off, and the
+// wait for it says on stderr what it waits on.
 fn run_reindex() -> Value {
-    let command = std::env::var("OKO_CLI")
-        .ok()
-        .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| "oko-cli".to_string());
     let args = ["transcripts", "reindex", "--json"];
-    match Command::new(&command).args(args).output() {
+    let Some(command) = crate::paths::oko_cli() else {
+        return json!({
+            "ran": false,
+            "command": format!("oko-cli {}", args.join(" ")),
+            "error": "oko-cli is not on PATH and OKO_CLI names none",
+        });
+    };
+    let shown = format!("{} {}", command.display(), args.join(" "));
+    match stado_wait::output(Command::new(&command).args(args)) {
         Err(error) => json!({
             "ran": false,
-            "command": format!("{command} {}", args.join(" ")),
+            "command": shown,
             "error": error.to_string(),
         }),
         Ok(output) => json!({

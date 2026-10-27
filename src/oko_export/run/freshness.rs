@@ -44,9 +44,13 @@ fn column_time(column: &str) -> Result<Option<DateTime<Utc>>, String> {
 fn read_index(db: &std::path::Path) -> Result<Index, String> {
     let sql = "SELECT COUNT(*), strftime('%Y-%m-%dT%H:%M:%fZ', MAX(mtime), 'unixepoch'), \
                strftime('%Y-%m-%dT%H:%M:%fZ', MAX(COALESCE(last_activity, mtime)), 'unixepoch') FROM sessions;";
-    let output = stado_wait::output(
-        Command::new("sqlite3").args(["-readonly", "-separator", "|", &db.to_string_lossy(), sql]),
-    )
+    let output = stado_wait::output(Command::new("sqlite3").args([
+        "-readonly",
+        "-separator",
+        "|",
+        &db.to_string_lossy(),
+        sql,
+    ]))
     .map_err(|error| format!("sqlite3 cannot be run: {error}"))?;
     if !output.status.success() {
         return Err(format!(
@@ -58,13 +62,14 @@ fn read_index(db: &std::path::Path) -> Result<Index, String> {
     let stdout = String::from_utf8_lossy(&output.stdout);
     let columns: Vec<&str> = stdout.trim().split('|').collect();
     let [count, mtime, activity] = columns.as_slice() else {
-        return Err(format!("sqlite3 answered {stdout:?}, not a count and two times"));
+        return Err(format!(
+            "sqlite3 answered {stdout:?}, not a count and two times"
+        ));
     };
     Ok(Index {
-        sessions: count
-            .trim()
-            .parse()
-            .map_err(|error| format!("sqlite3 answered {count:?} for the session count: {error}"))?,
+        sessions: count.trim().parse().map_err(|error| {
+            format!("sqlite3 answered {count:?} for the session count: {error}")
+        })?,
         mtime: column_time(mtime)?,
         activity: column_time(activity)?,
     })
@@ -82,8 +87,12 @@ fn cursor_times(node: &Value, times: &mut Vec<DateTime<Utc>>) -> Result<(), Stri
         return Ok(());
     }
     match node {
-        Value::Object(map) => map.values().try_for_each(|value| cursor_times(value, times)),
-        Value::Array(items) => items.iter().try_for_each(|value| cursor_times(value, times)),
+        Value::Object(map) => map
+            .values()
+            .try_for_each(|value| cursor_times(value, times)),
+        Value::Array(items) => items
+            .iter()
+            .try_for_each(|value| cursor_times(value, times)),
         _ => Ok(()),
     }
 }
@@ -107,24 +116,26 @@ fn written(at: Option<DateTime<Utc>>, now: DateTime<Utc>) -> String {
 pub fn freshness() -> Value {
     let now = Utc::now();
     let db_path = oko_support_dir().join("transcript-index.sqlite");
-    let db_exists = db_path.exists();
-    let (index, oko_error) = match db_exists {
-        true => match read_index(&db_path) {
+    // Each source is read where it is; only one that is not there is
+    // absent. One that cannot be examined is its error, where Path::exists
+    // made it absent and the table called the other source fresher.
+    let (index, oko_error) = match fs::metadata(&db_path) {
+        Ok(_metadata) => match read_index(&db_path) {
             Ok(index) => (Some(index), None),
             Err(error) => (None, Some(error)),
         },
-        false => (None, None),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => (None, None),
+        Err(error) => (None, Some(format!("{} cannot be examined: {error}", db_path.display()))),
     };
     let cursors_path = resolve_data_dir(None).join("cursors.json");
-    let cursors_exist = cursors_path.exists();
     let mut lake_times = Vec::new();
-    let lake_error = match cursors_exist {
-        true => fs::read_to_string(&cursors_path)
-            .map_err(|error| error.to_string())
-            .and_then(|raw| serde_json::from_str::<Value>(&raw).map_err(|error| error.to_string()))
+    let lake_error = match fs::read_to_string(&cursors_path) {
+        Ok(raw) => serde_json::from_str::<Value>(&raw)
+            .map_err(|error| format!("{} is not JSON: {error}", cursors_path.display()))
             .and_then(|store| cursor_times(&store, &mut lake_times))
             .err(),
-        false => None,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) => Some(format!("{} cannot be read: {error}", cursors_path.display())),
     };
     let lake_mtime = lake_times.iter().max().copied();
     let oko_mtime = index.as_ref().and_then(|index| index.mtime);

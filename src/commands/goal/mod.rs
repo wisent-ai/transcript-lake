@@ -84,24 +84,24 @@ fn title(rest: &[String]) -> Result<i32> {
     } else {
         println!("<goal/>");
     }
-    Ok(0)
+    Ok(libc::EXIT_SUCCESS)
 }
 
 fn label(rest: &[String]) -> Result<i32> {
     let parsed = parse_options("goal label", rest, &["runtime"], &["json"])?;
-    if parsed.positionals.len() != 1 {
+    let [session_id] = parsed.positionals.as_slice() else {
         return Err(Error(
             "usage: transcript-lake goal label <session-id> [--runtime <r>] [--json]".into(),
         ));
-    }
-    let session_id = parsed.positionals[0].trim();
+    };
+    let session_id = session_id.trim();
     if session_id.is_empty() {
         return Err(Error("goal label requires a session id".into()));
     }
-    let runtime_filter = parsed
-        .value("runtime")
-        .map(|runtime| format!(" AND runtime = {}", quote_sql(runtime)))
-        .unwrap_or_default();
+    let runtime_filter = match parsed.value("runtime") {
+        Some(runtime) => format!(" AND runtime = {}", quote_sql(runtime)),
+        None => String::new(),
+    };
     let rows = query_duck_json(&format!(
         "SELECT runtime, text FROM events WHERE session_id = {}{runtime_filter} \
          AND event_type = 'user' AND text IS NOT NULL AND length(trim(text)) > 0 \
@@ -113,10 +113,11 @@ fn label(rest: &[String]) -> Result<i32> {
             "session {session_id} has no masked user prompt in this Lake"
         )));
     };
-    let runtime = first
-        .get("runtime")
-        .and_then(Value::as_str)
-        .unwrap_or_default();
+    let Some(runtime) = first.get("runtime").and_then(Value::as_str) else {
+        return Err(Error(format!(
+            "session {session_id}'s first prompt row names no runtime, so the goal cannot be filed under one: {first}"
+        )));
+    };
     if rows
         .iter()
         .any(|row| row.get("runtime").and_then(Value::as_str) != Some(runtime))
@@ -125,10 +126,11 @@ fn label(rest: &[String]) -> Result<i32> {
             "session {session_id} exists in multiple runtimes; pass --runtime"
         )));
     }
-    let text = first
-        .get("text")
-        .and_then(Value::as_str)
-        .unwrap_or_default();
+    let Some(text) = first.get("text").and_then(Value::as_str) else {
+        return Err(Error(format!(
+            "session {session_id}'s first prompt row carries no text, so no goal can be read from it: {first}"
+        )));
+    };
     let goal = infer_goal(text)?;
     let applied = if let Some(goal) = goal.as_deref() {
         let record = label_record(
@@ -158,21 +160,23 @@ fn label(rest: &[String]) -> Result<i32> {
     } else {
         println!("<goal/>");
     }
-    Ok(0)
+    Ok(libc::EXIT_SUCCESS)
 }
 
 fn input_text(value: Option<&str>, stdin: bool) -> Result<String> {
-    if value.is_some() == stdin {
-        return Err(Error(
-            "goal title requires exactly one of --text <text> or --stdin".into(),
-        ));
-    }
-    let text = if stdin {
-        let mut text = String::new();
-        io::stdin().read_to_string(&mut text)?;
-        text
-    } else {
-        value.unwrap_or_default().to_string()
+    let text = match (value, stdin) {
+        (Some(value), false) => value.to_string(),
+        (None, true) => {
+            let mut text = String::new();
+            io::stdin().read_to_string(&mut text)?;
+            text
+        }
+        (Some(_text), true) => {
+            return Err(Error("goal title takes --text <text> or --stdin, not both".into()))
+        }
+        (None, false) => {
+            return Err(Error("goal title requires one of --text <text> or --stdin".into()))
+        }
     };
     let text = text.trim();
     if text.is_empty() {
@@ -195,38 +199,34 @@ fn infer_goal(text: &str) -> Result<Option<String>> {
     // token; it is the request's digest read as a number, so the same text
     // runs the same way.
     let digest = Sha256::digest(request.as_bytes());
-    let seed = digest
-        .chunks_exact(std::mem::size_of::<u64>())
-        .next()
-        .and_then(|bytes| bytes.try_into().ok())
-        .map(u64::from_le_bytes)
-        .ok_or_else(|| Error("a SHA-256 digest is shorter than one u64".into()))?;
-    let output = Command::new(&runtime)
-        .arg("generate")
-        .arg("--model")
-        .arg(&checkpoint)
-        .arg("--system")
-        .arg(&prompt)
-        .arg("--prompt")
-        .arg(&request)
-        .args([
-            "--chat-template",
-            "auto",
-            "--temperature",
-            "0",
-            "--max-new-tokens",
-        ])
-        .arg(context.to_string())
-        .arg("--seed")
-        .arg(seed.to_string())
-        .stdin(Stdio::null())
-        .output()
-        .map_err(|error| {
-            Error(format!(
-                "failed to start Ster {}: {error}",
-                runtime.display()
-            ))
-        })?;
+    let Some((seed, _rest)) = digest.split_first_chunk::<{ std::mem::size_of::<u64>() }>() else {
+        return Err(Error("a SHA-256 digest is shorter than one u64".into()));
+    };
+    let seed = u64::from_le_bytes(*seed);
+    // Generation runs as long as the model takes; stado_wait says on stderr
+    // what it waits on, where and since when.
+    let output = stado_wait::output(
+        Command::new(&runtime)
+            .arg("generate")
+            .arg("--model")
+            .arg(&checkpoint)
+            .arg("--system")
+            .arg(&prompt)
+            .arg("--prompt")
+            .arg(&request)
+            .args([
+                "--chat-template",
+                "auto",
+                "--temperature",
+                "0",
+                "--max-new-tokens",
+            ])
+            .arg(context.to_string())
+            .arg("--seed")
+            .arg(seed.to_string())
+            .stdin(Stdio::null()),
+    )
+    .map_err(|error| Error(format!("failed to start Ster {}: {error}", runtime.display())))?;
     if !output.status.success() {
         return Err(Error(format!(
             "Ster could not run the goal model ({} generate exited {}): {}",
@@ -239,16 +239,19 @@ fn infer_goal(text: &str) -> Result<Option<String>> {
 }
 
 fn parse_goal(output: &str) -> Result<Option<String>> {
-    let empty = output.rfind("<goal/>");
     let closing = output.rfind("</goal>");
-    if empty.is_some() && closing.is_none_or(|closing| empty.unwrap_or_default() > closing) {
-        return Ok(None);
+    // An empty `<goal/>` after the last closing tag (or with none) is the
+    // model's answer that the prompt states no goal.
+    match (output.rfind("<goal/>"), closing) {
+        (Some(_empty), None) => return Ok(None),
+        (Some(empty), Some(closing)) if empty > closing => return Ok(None),
+        _ => {}
     }
     let closing = closing.ok_or_else(|| Error("local goal model returned no goal tag".into()))?;
-    let opening = output[..closing]
-        .rfind("<goal>")
-        .ok_or_else(|| Error("local goal model returned no opening goal tag".into()))?;
-    let goal = output[opening + "<goal>".len()..closing].trim();
+    let Some((_before, goal)) = output[..closing].rsplit_once("<goal>") else {
+        return Err(Error("local goal model returned no opening goal tag".into()));
+    };
+    let goal = goal.trim();
     if goal.is_empty() {
         return Ok(None);
     }

@@ -118,7 +118,9 @@ fn referenced(sql: &str) -> Result<std::result::Result<BTreeSet<String>, String>
 
 /// DuckDB could not be started to parse the statement.
 fn unstarted(error: impl std::fmt::Display) -> Error {
-    Error(format!("duckdb failed to start to parse the statement: {error}"))
+    Error(format!(
+        "duckdb failed to start to parse the statement: {error}"
+    ))
 }
 
 /// The `table_name` of every base-table reference in the parse tree.

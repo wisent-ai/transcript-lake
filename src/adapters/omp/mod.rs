@@ -95,11 +95,7 @@ impl Adapter for OmpStore {
         let base = parts
             .iter()
             .fold(home.to_path_buf(), |path, part| path.join(part));
-        if base.is_dir() {
-            vec![base]
-        } else {
-            Vec::new()
-        }
+        crate::adapters::common::existing_root(base)
     }
 
     fn roots(&self, home: &Path) -> Vec<PathBuf> {
@@ -120,7 +116,7 @@ impl Adapter for OmpStore {
                     base.join(name)
                 }
             })
-            .filter(|root| root.is_dir())
+            .flat_map(crate::adapters::common::existing_root)
             .collect()
     }
 

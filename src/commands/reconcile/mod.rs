@@ -11,7 +11,7 @@ mod partitions;
 
 use std::fs;
 use std::io;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::Command;
 
 use serde_json::{json, Value};
@@ -19,10 +19,10 @@ use serde_json::{json, Value};
 use crate::args::{parse_options, require_flags_only, require_runtime};
 use crate::cursors::{open_writer_lease, CursorRecord, Cursors};
 use crate::oko_export::{export_oko_with_reindex, remove_tree};
-use crate::paths::resolve_data_dir;
+use crate::paths::{oko_cli, resolve_data_dir};
 use crate::stream::{replay, ReplayOptions};
 use crate::types::HOOKS;
-use crate::util::{find_on_path, home_dir, machine_name, write_json, Error, Result};
+use crate::util::{home_dir, machine_name, write_json, Error, Result};
 
 use partitions::{compare, Partition, Verdict};
 
@@ -182,10 +182,7 @@ fn reconcile_locked(
 /// Hand the rebuilt projection to Oko through its own CLI. Its output goes
 /// to stderr so this command's stdout stays one JSON document.
 fn reindex_oko() -> Result<()> {
-    let binary = std::env::var_os("OKO_CLI")
-        .map(PathBuf::from)
-        .filter(|path| !path.as_os_str().is_empty())
-        .or_else(|| find_on_path("oko-cli"))
+    let binary = oko_cli()
         .ok_or_else(|| {
             Error("oko-cli is not on PATH and OKO_CLI names none; the corrected projection is written, and `transcript-lake projection refresh --target oko` hands it to Oko".into())
         })?;
