@@ -118,30 +118,38 @@ pub fn freshness() -> Value {
     let db_path = oko_support_dir().join("transcript-index.sqlite");
     // Each source is read where it is; only one that is not there is
     // absent. One that cannot be examined is its error, where Path::exists
-    // made it absent and the table called the other source fresher.
-    let (index, oko_error) = match fs::metadata(&db_path) {
+    // made it absent and the table called the other source fresher, and its
+    // `exists` is null: whether it is there was not learned.
+    let (db_exists, index, oko_error) = match fs::metadata(&db_path) {
         Ok(_metadata) => match read_index(&db_path) {
-            Ok(index) => (Some(index), None),
-            Err(error) => (None, Some(error)),
+            Ok(index) => (Some(true), Some(index), None),
+            Err(error) => (Some(true), None, Some(error)),
         },
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => (None, None),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => (Some(false), None, None),
         Err(error) => (
+            None,
             None,
             Some(format!("{} cannot be examined: {error}", db_path.display())),
         ),
     };
     let cursors_path = resolve_data_dir(None).join("cursors.json");
     let mut lake_times = Vec::new();
-    let lake_error = match fs::read_to_string(&cursors_path) {
-        Ok(raw) => serde_json::from_str::<Value>(&raw)
-            .map_err(|error| format!("{} is not JSON: {error}", cursors_path.display()))
-            .and_then(|store| cursor_times(&store, &mut lake_times))
-            .err(),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
-        Err(error) => Some(format!(
-            "{} cannot be read: {error}",
-            cursors_path.display()
-        )),
+    let (cursors_exist, lake_error) = match fs::read_to_string(&cursors_path) {
+        Ok(raw) => (
+            Some(true),
+            serde_json::from_str::<Value>(&raw)
+                .map_err(|error| format!("{} is not JSON: {error}", cursors_path.display()))
+                .and_then(|store| cursor_times(&store, &mut lake_times))
+                .err(),
+        ),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => (Some(false), None),
+        Err(error) => (
+            None,
+            Some(format!(
+                "{} cannot be read: {error}",
+                cursors_path.display()
+            )),
+        ),
     };
     let lake_mtime = lake_times.iter().max().copied();
     let oko_mtime = index.as_ref().and_then(|index| index.mtime);

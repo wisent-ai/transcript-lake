@@ -18,7 +18,7 @@ const PARTITION_DATE: &str = "%Y-%m-%d";
 fn date_of(ts: Option<&str>) -> String {
     match ts.map(|ts| chrono::NaiveDate::parse_and_remainder(ts, PARTITION_DATE)) {
         Some(Ok((date, _remainder))) => date.format(PARTITION_DATE).to_string(),
-        Some(Err(_unparsed)) | None => "unknown".to_string(),
+        Some(Err(_)) | None => "unknown".to_string(),
     }
 }
 
