@@ -156,9 +156,16 @@ fn masking_classes_require_explicit_declarations_before_adoption() {
 #[test]
 fn doctor_reads_the_shipped_declaration_when_no_file_is_named() {
     let work = evidence::directory();
-    let (_, _, policy) =
-        doctor::masking(&work, &work.join("lake-shipped"), Path::new(""), "doctor-shipped-declaration");
-    assert_eq!(policy["status"], "ok", "the shipped declaration is not read as a valid policy: {policy}");
+    let (_, _, policy) = doctor::masking(
+        &work,
+        &work.join("lake-shipped"),
+        Path::new(""),
+        "doctor-shipped-declaration",
+    );
+    assert_eq!(
+        policy["status"], "ok",
+        "the shipped declaration is not read as a valid policy: {policy}"
+    );
 }
 
 #[test]

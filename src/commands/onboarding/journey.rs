@@ -22,7 +22,9 @@ pub(super) fn canonical_definition() -> Result<Value> {
         ));
     }
     if string_field(&definition, "journey_version").is_none() {
-        return Err(Error("canonical onboarding journey has no journey_version".into()));
+        return Err(Error(
+            "canonical onboarding journey has no journey_version".into(),
+        ));
     }
     let entry = string_field(&definition, "entry_screen_id")
         .ok_or_else(|| Error("canonical onboarding journey has no entry screen".into()))?;
@@ -42,7 +44,11 @@ pub(super) fn canonical_definition() -> Result<Value> {
             )));
         }
         let presentation = screen.get("presentation");
-        let shown = |key: &str| presentation.and_then(|shown| shown.get(key)).and_then(Value::as_str);
+        let shown = |key: &str| {
+            presentation
+                .and_then(|shown| shown.get(key))
+                .and_then(Value::as_str)
+        };
         if screen.get("screen_kind").and_then(Value::as_str).is_none()
             || shown("title").is_none()
             || shown("body").is_none()

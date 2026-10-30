@@ -45,7 +45,9 @@ impl Adapter for CopilotChat {
     fn watch_roots(&self, home: &Path) -> Vec<PathBuf> {
         let mut roots = Vec::new();
         for user in editor_user_dirs(home) {
-            roots.extend(crate::adapters::common::existing_root(user.join("workspaceStorage")));
+            roots.extend(crate::adapters::common::existing_root(
+                user.join("workspaceStorage"),
+            ));
             roots.extend(crate::adapters::common::existing_root(
                 user.join("globalStorage").join(EMPTY_WINDOW),
             ));
@@ -57,7 +59,9 @@ impl Adapter for CopilotChat {
         let mut roots = Vec::new();
         for user in editor_user_dirs(home) {
             for workspace in subdirectories(&user.join("workspaceStorage")) {
-                roots.extend(crate::adapters::common::existing_root(workspace.join(SESSIONS)));
+                roots.extend(crate::adapters::common::existing_root(
+                    workspace.join(SESSIONS),
+                ));
             }
             roots.extend(crate::adapters::common::existing_root(
                 user.join("globalStorage").join(EMPTY_WINDOW),

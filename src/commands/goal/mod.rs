@@ -172,10 +172,14 @@ fn input_text(value: Option<&str>, stdin: bool) -> Result<String> {
             text
         }
         (Some(_text), true) => {
-            return Err(Error("goal title takes --text <text> or --stdin, not both".into()))
+            return Err(Error(
+                "goal title takes --text <text> or --stdin, not both".into(),
+            ))
         }
         (None, false) => {
-            return Err(Error("goal title requires one of --text <text> or --stdin".into()))
+            return Err(Error(
+                "goal title requires one of --text <text> or --stdin".into(),
+            ))
         }
     };
     let text = text.trim();
@@ -226,7 +230,12 @@ fn infer_goal(text: &str) -> Result<Option<String>> {
             .arg(seed.to_string())
             .stdin(Stdio::null()),
     )
-    .map_err(|error| Error(format!("failed to start Ster {}: {error}", runtime.display())))?;
+    .map_err(|error| {
+        Error(format!(
+            "failed to start Ster {}: {error}",
+            runtime.display()
+        ))
+    })?;
     if !output.status.success() {
         return Err(Error(format!(
             "Ster could not run the goal model ({} generate exited {}): {}",
@@ -249,7 +258,9 @@ fn parse_goal(output: &str) -> Result<Option<String>> {
     }
     let closing = closing.ok_or_else(|| Error("local goal model returned no goal tag".into()))?;
     let Some((_before, goal)) = output[..closing].rsplit_once("<goal>") else {
-        return Err(Error("local goal model returned no opening goal tag".into()));
+        return Err(Error(
+            "local goal model returned no opening goal tag".into(),
+        ));
     };
     let goal = goal.trim();
     if goal.is_empty() {

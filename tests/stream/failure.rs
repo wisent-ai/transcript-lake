@@ -106,7 +106,12 @@ fn a_stream_that_cannot_catch_up_is_failed_until_one_does() {
     let restarted = fails(&work, &lake, &environment, "restarted-undeclared");
     failed.push(restarted);
     // Every start since the last completed catch-up failed, and is counted.
-    assert_eq!(state(&lake)["failedStarts"], failed.len(), "{}", state(&lake));
+    assert_eq!(
+        state(&lake)["failedStarts"],
+        failed.len(),
+        "{}",
+        state(&lake)
+    );
     let printed = match failed.last() {
         Some(last) => String::from_utf8_lossy(&last.stdout).into_owned(),
         None => panic!("no failed start was retained"),

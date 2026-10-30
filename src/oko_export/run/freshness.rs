@@ -125,7 +125,10 @@ pub fn freshness() -> Value {
             Err(error) => (None, Some(error)),
         },
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => (None, None),
-        Err(error) => (None, Some(format!("{} cannot be examined: {error}", db_path.display()))),
+        Err(error) => (
+            None,
+            Some(format!("{} cannot be examined: {error}", db_path.display())),
+        ),
     };
     let cursors_path = resolve_data_dir(None).join("cursors.json");
     let mut lake_times = Vec::new();
@@ -135,7 +138,10 @@ pub fn freshness() -> Value {
             .and_then(|store| cursor_times(&store, &mut lake_times))
             .err(),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
-        Err(error) => Some(format!("{} cannot be read: {error}", cursors_path.display())),
+        Err(error) => Some(format!(
+            "{} cannot be read: {error}",
+            cursors_path.display()
+        )),
     };
     let lake_mtime = lake_times.iter().max().copied();
     let oko_mtime = index.as_ref().and_then(|index| index.mtime);

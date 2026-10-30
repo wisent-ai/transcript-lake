@@ -6,8 +6,8 @@ use std::path::{Path, PathBuf};
 use serde_json::{json, Value};
 
 use crate::args::{parse_options, require_flags_only, require_runtime};
-use crate::sources::AdoptedSource;
 use crate::paths::resolve_data_dir;
+use crate::sources::AdoptedSource;
 use crate::util::{write_json, Error, Result};
 
 #[derive(Debug)]

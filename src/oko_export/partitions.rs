@@ -86,7 +86,10 @@ pub(crate) fn event_partition_files(data_dir: &Path) -> Result<Vec<Partition>> {
     let mut files = Vec::new();
     let events_root = data_dir.join("events");
     for runtime_name in read_dir_names(&events_root)? {
-        let Some(runtime) = runtime_name.strip_prefix("runtime=").filter(|runtime| *runtime != "hooks") else {
+        let Some(runtime) = runtime_name
+            .strip_prefix("runtime=")
+            .filter(|runtime| *runtime != "hooks")
+        else {
             continue;
         };
         let runtime_dir = events_root.join(&runtime_name);

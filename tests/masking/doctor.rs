@@ -39,19 +39,19 @@ pub(super) fn masking(
     (output, report, policy)
 }
 
-pub(super) fn refused(
-    work: &Path,
-    lake: &Path,
-    declaration: &Path,
-    name: &str,
-    expected: &str,
-) {
+pub(super) fn refused(work: &Path, lake: &Path, declaration: &Path, name: &str, expected: &str) {
     let (output, report, policy) = masking(work, lake, declaration, name);
-    assert!(!output.status.success(), "invalid masking policy reported healthy");
+    assert!(
+        !output.status.success(),
+        "invalid masking policy reported healthy"
+    );
     assert_eq!(report["healthy"], false);
     assert_eq!(policy["status"], "error");
     let detail = policy["detail"].as_str().expect("masking cause");
-    assert!(detail.contains(expected), "doctor lost cause {expected}: {detail}");
+    assert!(
+        detail.contains(expected),
+        "doctor lost cause {expected}: {detail}"
+    );
     if !declaration.as_os_str().is_empty() {
         assert!(
             detail.contains(&declaration.display().to_string()),

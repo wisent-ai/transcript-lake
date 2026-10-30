@@ -274,7 +274,10 @@ fn following(json_output: bool, data_dir: &Path, started_at: &str) -> Result<i32
             log(
                 json_output,
                 "event",
-                &[("paths", Value::from(paths.len())), ("first", Value::String(first))],
+                &[
+                    ("paths", Value::from(paths.len())),
+                    ("first", Value::String(first)),
+                ],
             );
             process_paths(json_output, &data_dir, &paths);
         }

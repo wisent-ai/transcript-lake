@@ -35,10 +35,16 @@ pub(super) fn resolve_runtime() -> Result<PathBuf> {
         match std::fs::metadata(&path) {
             Ok(metadata) if metadata.is_file() => return Ok(path),
             Ok(_not_file) => {
-                return Err(Error(format!("{key} does not name a file: {}", path.display())))
+                return Err(Error(format!(
+                    "{key} does not name a file: {}",
+                    path.display()
+                )))
             }
             Err(error) => {
-                return Err(Error(format!("{key} names {}, which cannot be examined: {error}", path.display())))
+                return Err(Error(format!(
+                    "{key} names {}, which cannot be examined: {error}",
+                    path.display()
+                )))
             }
         }
     }

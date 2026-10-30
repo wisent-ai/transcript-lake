@@ -94,7 +94,8 @@ pub fn read_stream_status(path: &Path) -> StreamStatus {
         Err(error) => Err(format!("{} cannot be read: {error}", path.display())),
     };
     match raw.and_then(|raw| {
-        serde_json::from_str::<Value>(&raw).map_err(|error| format!("{} is not JSON: {error}", path.display()))
+        serde_json::from_str::<Value>(&raw)
+            .map_err(|error| format!("{} is not JSON: {error}", path.display()))
     }) {
         Ok(summary) => {
             let failure = match summary["state"].as_str() {
@@ -141,14 +142,18 @@ pub fn failed_starts(carried: &Value) -> u64 {
 /// them ended that way.
 fn carried(summary: &Value) -> Option<String> {
     let last = &summary["lastFailure"];
-    last["error"].as_str().map(|error| repeated(error, &last["starts"]))
+    last["error"]
+        .as_str()
+        .map(|error| repeated(error, &last["starts"]))
 }
 
 /// `error`, saying how many starts in a row ended with it when that was
 /// counted: a supervisor restarting the stream makes each start fail alike.
 fn repeated(error: &str, starts: &Value) -> String {
     match starts.as_u64() {
-        Some(starts) => format!("{error} ({starts} starts in a row ended failed since the last completed catch-up)"),
+        Some(starts) => format!(
+            "{error} ({starts} starts in a row ended failed since the last completed catch-up)"
+        ),
         None => error.to_string(),
     }
 }
@@ -159,16 +164,22 @@ fn repeated(error: &str, starts: &Value) -> String {
 fn abandoned(summary: &Value) -> Option<String> {
     let since = &summary["startedAt"];
     let process = &summary["process"];
-    let (Some(host), Some(pid), Some(started)) =
-        (process["host"].as_str(), process["pid"].as_u64(), process["started"].as_str())
-    else {
+    let (Some(host), Some(pid), Some(started)) = (
+        process["host"].as_str(),
+        process["pid"].as_u64(),
+        process["started"].as_str(),
+    ) else {
         return Some(format!(
             "the stream records a catch-up started at {since} with no process (host, pid and start time) behind it, so whether it still runs cannot be told; restart the stream"
         ));
     };
     let pid = match u32::try_from(pid) {
         Ok(pid) => pid,
-        Err(error) => return Some(format!("the stream's catch-up names process {pid}, which is no process id: {error}")),
+        Err(error) => {
+            return Some(format!(
+                "the stream's catch-up names process {pid}, which is no process id: {error}"
+            ))
+        }
     };
     match crate::lake::owner::alive(host, pid, started) {
         Ok(true) => None,

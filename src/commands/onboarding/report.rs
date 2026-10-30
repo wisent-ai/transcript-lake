@@ -25,7 +25,11 @@ pub(super) struct Report {
 impl Report {
     pub(super) fn new(definition: &Value, reset: bool, json: bool) -> Result<Self> {
         Ok(Self {
-            journey_version: required(definition, "journey_version", "the canonical onboarding journey")?,
+            journey_version: required(
+                definition,
+                "journey_version",
+                "the canonical onboarding journey",
+            )?,
             reset,
             json,
             steps: Vec::new(),
@@ -41,7 +45,9 @@ impl Report {
     pub(super) fn render(&mut self, screen: &Value) -> Result<()> {
         let id = screen.get("screen_id").and_then(Value::as_str);
         let Some(presentation) = screen.get("presentation") else {
-            return Err(Error(format!("onboarding screen {id:?} has no presentation")));
+            return Err(Error(format!(
+                "onboarding screen {id:?} has no presentation"
+            )));
         };
         let shown = format!("the presentation of onboarding screen {id:?}");
         let title = required(presentation, "title", &shown)?;

@@ -11,7 +11,9 @@ use crate::util::{absolute, find_on_path, home_dir, Result};
 
 mod status;
 
-pub use status::{failed_starts, read_cursor_status, read_stream_status, CursorStatus, StreamStatus};
+pub use status::{
+    failed_starts, read_cursor_status, read_stream_status, CursorStatus, StreamStatus,
+};
 
 pub const STREAM_STATUS_FILE: &str = "stream-status.json";
 
