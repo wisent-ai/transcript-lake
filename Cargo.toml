@@ -88,6 +88,10 @@ name = "cli-usage"
 path = "tests/cli/usage.rs"
 
 [[test]]
+name = "cli-without-oko"
+path = "tests/cli/without_oko.rs"
+
+[[test]]
 name = "query-views"
 path = "tests/query/views.rs"
 
