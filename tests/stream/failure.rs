@@ -4,13 +4,19 @@
 //! The real `transcript-lake stream` runs in a HOME of its own with a Lake of
 //! its own (`LAKE_DATA`). With no session root in that HOME it exits
 //! non-zero before any catch-up, its state says `failed`, and `status` exits
-//! non-zero printing `stream FAILED`. With one empty OMP session root and no
-//! masking declaration, it exits non-zero naming the setting, its state says
-//! `failed` with that error, and `status` names it; started again the same
-//! way, as a supervisor restarting it would, `status` still names the
-//! failure. Started with a declaration, it catches up, says so on its log
-//! and its state carries no failure; stopped with SIGTERM it exits zero, and
-//! `status` exits zero.
+//! non-zero printing `stream FAILED`. With one empty OMP session root and a
+//! masking declaration `TRANSCRIPT_LAKE_SECRET_FORMATS` names that cannot be
+//! read, it exits non-zero naming the setting, its state says `failed` with
+//! that error, and `status` names it; started again the same way, as a
+//! supervisor restarting it would, `status` still names the failure. (With
+//! the setting unset the stream reads the declaration shipped with the
+//! product and runs; a journey that started it so waited forever for a
+//! refusal that no longer comes.) Started with a readable declaration, it
+//! catches up, says so on its log and its state carries no failure; stopped
+//! with SIGTERM it exits zero, and `status` exits zero. Each step is bounded
+//! by the harness's step deadline:
+//! one that does not end is stopped and named with its command, how long it
+//! ran and the tail of its stderr.
 
 #[path = "../harnesses/evidence.rs"]
 mod evidence;
@@ -19,6 +25,8 @@ use std::fs;
 use std::io::{BufRead, BufReader};
 use std::path::Path;
 use std::process::{Command, Output, Stdio};
+use std::sync::mpsc;
+use std::time::Instant;
 
 use serde_json::Value;
 
@@ -29,8 +37,9 @@ fn state(lake: &Path) -> Value {
     serde_json::from_str(&text).expect("the stream state is JSON")
 }
 
-/// A start with no declaration fails naming the setting, keeps `failed`, and
-/// `status` names it; `name` labels the retained evidence.
+/// A start whose named declaration cannot be read fails naming the setting,
+/// keeps `failed`, and `status` names it; `name` labels the retained
+/// evidence.
 fn fails(work: &Path, lake: &Path, environment: &[(&str, &Path)], name: &str) -> Output {
     let stream = evidence::run(
         work,
@@ -41,7 +50,7 @@ fn fails(work: &Path, lake: &Path, environment: &[(&str, &Path)], name: &str) ->
     let said = String::from_utf8_lossy(&stream.stderr);
     assert!(
         !stream.status.success(),
-        "a stream with no declaration caught up: {said}"
+        "a stream with an unreadable declaration caught up: {said}"
     );
     assert!(
         said.contains(FORMATS),
@@ -102,8 +111,16 @@ fn a_stream_that_cannot_catch_up_is_failed_until_one_does() {
     );
 
     fs::create_dir_all(home.join(".omp/agent/sessions")).expect("lay out an OMP session root");
-    failed.push(fails(&work, &lake, &environment, "undeclared"));
-    let restarted = fails(&work, &lake, &environment, "restarted-undeclared");
+    // A declaration the setting names and nobody wrote: the masker refuses
+    // the writer naming the setting and the file.
+    let unreadable = work.join("no-such-formats.json");
+    let undeclared = [
+        ("HOME", home.as_path()),
+        ("LAKE_DATA", lake.as_path()),
+        (FORMATS, unreadable.as_path()),
+    ];
+    failed.push(fails(&work, &lake, &undeclared, "undeclared"));
+    let restarted = fails(&work, &lake, &undeclared, "restarted-undeclared");
     failed.push(restarted);
     // Every start since the last completed catch-up failed, and is counted.
     assert_eq!(
@@ -123,6 +140,11 @@ fn a_stream_that_cannot_catch_up_is_failed_until_one_does() {
     );
 
     let declaration = evidence::no_secret_classes(&work);
+    // The stream's stderr goes to a retained file, never to a pipe nobody
+    // reads: a pipe the stream filled would stop it before it caught up.
+    let stderr_path = work.join("stream-declared.stderr");
+    let shown = "transcript-lake stream --json";
+    let started = Instant::now();
     let mut child = Command::new(env!("CARGO_BIN_EXE_transcript-lake"))
         .args(["stream", "--json"])
         .env("HOME", &home)
@@ -130,16 +152,34 @@ fn a_stream_that_cannot_catch_up_is_failed_until_one_does() {
         .env(FORMATS, &declaration)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
+        .stderr(fs::File::create(&stderr_path).expect("create the stream's stderr evidence"))
         .spawn()
         .expect("start the real stream");
     let stdout = child.stdout.take().expect("the stream's log");
-    let mut log = BufReader::new(stdout).lines();
+    let (lines, log) = mpsc::channel();
+    std::thread::spawn(move || {
+        for line in BufReader::new(stdout).lines() {
+            if lines.send(line).is_err() {
+                return;
+            }
+        }
+    });
     let caught_up = loop {
-        let line = log
-            .next()
-            .expect("the stream ended before catching up")
-            .expect("read the log");
+        let left = evidence::STEP_DEADLINE.saturating_sub(started.elapsed());
+        let line = match log.recv_timeout(left) {
+            Ok(line) => line.expect("read the log"),
+            Err(mpsc::RecvTimeoutError::Timeout) => evidence::stuck(
+                "stream-declared (catch-up)",
+                shown,
+                started,
+                child.id(),
+                &stderr_path,
+            ),
+            Err(mpsc::RecvTimeoutError::Disconnected) => panic!(
+                "the stream ended before catching up; the tail of its stderr:\n{}",
+                evidence::tail(&stderr_path)
+            ),
+        };
         let entry: Value = serde_json::from_str(&line).expect("each log line is JSON");
         if entry["kind"] == "catch-up" {
             break entry;
@@ -153,7 +193,8 @@ fn a_stream_that_cannot_catch_up_is_failed_until_one_does() {
         .status()
         .expect("send SIGTERM");
     assert!(stopped.success(), "kill failed: {stopped}");
-    let ended = child.wait().expect("the stream ends after SIGTERM");
+    let ended = evidence::wait_step("stream-declared (stop)", shown, child, &stderr_path)
+        .expect("the stream ends after SIGTERM");
     assert!(
         ended.success(),
         "a requested stop did not exit cleanly: {ended}; {caught_up}"

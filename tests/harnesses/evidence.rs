@@ -2,8 +2,67 @@ use serde_json::{json, Value};
 use std::{
     fs,
     path::Path,
-    process::{Command, Output, Stdio},
+    process::{Child, Command, ExitStatus, Output, Stdio},
+    sync::mpsc,
+    time::{Duration, Instant},
 };
+
+/// How long one step of a journey may run before the journey stops it and
+/// names it. Every step runs the Lake over a HOME the journey wrote, a few
+/// transcript lines at most, and answers within seconds on any host this
+/// repository builds on; a step still running after two minutes is stuck,
+/// not slow. Without a bound a stuck step held the whole `cargo test` until
+/// the run's own deadline, which named no step.
+pub const STEP_DEADLINE: Duration = Duration::from_secs(120);
+
+/// The last bytes of a step's stderr a stuck step's refusal quotes.
+const STDERR_TAIL: usize = 4096;
+
+/// The end of the file at `path`, for a stuck step's refusal; a file that
+/// cannot be read is said instead.
+pub fn tail(path: &Path) -> String {
+    match fs::read(path) {
+        Ok(bytes) => {
+            let start = bytes.len().saturating_sub(STDERR_TAIL);
+            String::from_utf8_lossy(&bytes[start..]).into_owned()
+        }
+        Err(error) => format!("<{} cannot be read: {error}>", path.display()),
+    }
+}
+
+/// Stop the stuck `child` with SIGKILL and fail the journey naming the step,
+/// the command, how long it ran and the tail of its stderr at `stderr_path`.
+pub fn stuck(name: &str, command: &str, started: Instant, child_id: u32, stderr_path: &Path) -> ! {
+    // SAFETY: kill(2) on a pid this journey spawned and has not reaped.
+    unsafe { libc::kill(child_id as libc::pid_t, libc::SIGKILL) };
+    panic!(
+        "step {name} did not end within {}s: `{command}` ran {:.1}s; the tail of its stderr ({}):\n{}",
+        STEP_DEADLINE.as_secs(),
+        started.elapsed().as_secs_f64(),
+        stderr_path.display(),
+        tail(stderr_path)
+    );
+}
+
+/// Wait for `child`, a step of the journey, for at most [`STEP_DEADLINE`];
+/// a step that runs past it is stopped and named ([`stuck`]).
+pub fn wait_step(
+    name: &str,
+    command: &str,
+    mut child: Child,
+    stderr_path: &Path,
+) -> std::io::Result<ExitStatus> {
+    let started = Instant::now();
+    let child_id = child.id();
+    let (sender, receiver) = mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = sender.send(child.wait());
+    });
+    match receiver.recv_timeout(STEP_DEADLINE) {
+        Ok(waited) => waited,
+        Err(_) => stuck(name, command, started, child_id, stderr_path),
+    }
+}
 
 pub fn run(root: &Path, name: &str, args: &[&str], environment: &[(&str, &Path)]) -> Output {
     let stdout_path = root.join(format!("{name}.stdout"));
@@ -37,7 +96,7 @@ pub fn run(root: &Path, name: &str, args: &[&str], environment: &[(&str, &Path)]
         .stderr(fs::File::create(&stderr_path).expect("create live stderr evidence"));
     bound_by_file_permissions(&mut command);
     let spawned = command.spawn();
-    let mut child = match spawned {
+    let child = match spawned {
         Ok(child) => child,
         Err(error) => {
             record["state"] = json!("failed");
@@ -50,7 +109,8 @@ pub fn run(root: &Path, name: &str, args: &[&str], environment: &[(&str, &Path)]
     record["state"] = json!("running");
     record["pid"] = json!(child.id());
     retain(&record);
-    let status = match child.wait() {
+    let shown = format!("transcript-lake {}", args.join(" "));
+    let status = match wait_step(name, &shown, child, &stderr_path) {
         Ok(status) => status,
         Err(error) => {
             record["state"] = json!("failed");
