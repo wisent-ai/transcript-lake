@@ -27,14 +27,16 @@ pub fn run(root: &Path, name: &str, args: &[&str], environment: &[(&str, &Path)]
         stdout_path.display(),
         stderr_path.display()
     );
-    let spawned = Command::new(env!("CARGO_BIN_EXE_transcript-lake"))
+    let mut command = Command::new(env!("CARGO_BIN_EXE_transcript-lake"));
+    command
         .args(args)
         .envs(environment.iter().copied())
         .current_dir(root)
         .stdin(Stdio::null())
         .stdout(fs::File::create(&stdout_path).expect("create live stdout evidence"))
-        .stderr(fs::File::create(&stderr_path).expect("create live stderr evidence"))
-        .spawn();
+        .stderr(fs::File::create(&stderr_path).expect("create live stderr evidence"));
+    bound_by_file_permissions(&mut command);
+    let spawned = command.spawn();
     let mut child = match spawned {
         Ok(child) => child,
         Err(error) => {
@@ -73,6 +75,43 @@ pub fn run(root: &Path, name: &str, args: &[&str], environment: &[(&str, &Path)]
     retain(&record);
     output
 }
+
+/// A journey run by root on Linux (a Stado run on a build host is) gives the
+/// Lake root's override of file permissions, so a directory or file the
+/// journey made unreadable is read anyway and the refusal it checks for never
+/// happens. The child loses CAP_DAC_OVERRIDE and CAP_DAC_READ_SEARCH from its
+/// bounding set before it executes, so it reads the journey's files as their
+/// owner would: the permission bits decide. Any other user has neither
+/// capability and is left as it is.
+#[cfg(target_os = "linux")]
+fn bound_by_file_permissions(command: &mut Command) {
+    use std::os::unix::process::CommandExt;
+    // linux/capability.h; the libc crate does not declare capability numbers.
+    const CAP_DAC_OVERRIDE: libc::c_ulong = 1;
+    const CAP_DAC_READ_SEARCH: libc::c_ulong = 2;
+    // geteuid has no preconditions and cannot fail.
+    if unsafe { libc::geteuid() } != 0 {
+        return;
+    }
+    // The closure runs in the forked child before exec and calls only
+    // prctl, which is async-signal-safe; a capability it cannot drop fails
+    // the spawn with prctl's error instead of running the journey as root.
+    unsafe {
+        command.pre_exec(|| {
+            for capability in [CAP_DAC_OVERRIDE, CAP_DAC_READ_SEARCH] {
+                if libc::prctl(libc::PR_CAPBSET_DROP, capability, 0, 0, 0) != 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+            }
+            Ok(())
+        });
+    }
+}
+
+/// Outside Linux a journey does not run as root, and a process's file access
+/// is the permission bits'.
+#[cfg(not(target_os = "linux"))]
+fn bound_by_file_permissions(_command: &mut Command) {}
 
 /// One command a journey ran and that succeeded, as a criterion report lists
 /// it.
