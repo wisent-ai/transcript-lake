@@ -104,6 +104,10 @@ impl OmpParser {
             prune(&mut event.extra, "attribution", msg.get("attribution"));
             prune(&mut event.extra, "steering", msg.get("steering"));
             prune(&mut event.extra, "synthetic", msg.get("synthetic"));
+            // The entry id OMP gave the record: a continued session copies
+            // its parent's messages under the parent's ids, which is how a
+            // reader tells a copy from a message said in this session.
+            prune(&mut event.extra, "eventId", rec.get("id"));
         }
         if role == "assistant" {
             let model = match msg.get("model") {

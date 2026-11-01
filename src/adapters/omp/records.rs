@@ -16,6 +16,11 @@ pub(super) struct OmpParser {
     file: PathBuf,
     project: Option<String>,
     session_id: Option<String>,
+    /// The session this one was forked or continued from, as the `session`
+    /// record names it in `parentSession`. A message the parent recorded is
+    /// copied into this file under the parent's entry id (`eventId`), so a
+    /// reader tells a copy from what was said here by the parent's ids.
+    parent_session: Option<String>,
     last_ts: Option<String>,
     model: Option<String>,
     pending: Vec<RawEvent>,
@@ -30,6 +35,7 @@ impl OmpParser {
             file: ctx.file,
             project: ctx.project,
             session_id: ctx.session_id,
+            parent_session: None,
             last_ts: None,
             model: None,
             pending: Vec::new(),
@@ -68,14 +74,18 @@ impl Parser for OmpParser {
 
 impl OmpParser {
     fn make(&self, ts: Option<&String>, event_type: &str, text: Option<&str>) -> RawEvent {
-        RawEvent {
+        let mut event = RawEvent {
             ts: ts.cloned(),
             session_id: self.session_id.clone(),
             project: self.project.clone(),
             event_type: event_type.to_string(),
             text: text.map(str::to_string),
             ..RawEvent::default()
+        };
+        if let Some(parent) = &self.parent_session {
+            event.extra.insert("parent_session".into(), Value::String(parent.clone()));
         }
+        event
     }
 
     /// A metadata event of record type `kind` with the record's `text`.
@@ -119,6 +129,13 @@ impl OmpParser {
                         self.session_id = Some(id.clone());
                     }
                 }
+                // A session never names itself as its parent; an empty or
+                // absent field is a session of its own.
+                self.parent_session = rec
+                    .get("parentSession")
+                    .and_then(Value::as_str)
+                    .filter(|parent| !parent.is_empty() && self.session_id.as_deref() != Some(*parent))
+                    .map(String::from);
                 let mut event = self.noted(at, "session", None);
                 prune(&mut event.extra, "version", rec.get("version"));
                 Some(vec![event])
@@ -205,6 +222,9 @@ impl OmpParser {
                     event.project = self.project.clone();
                 }
                 event.session_id = self.session_id.clone();
+                if let Some(parent) = &self.parent_session {
+                    event.extra.insert("parent_session".into(), Value::String(parent.clone()));
+                }
                 if event.ts.is_none() {
                     event.ts = self.last_ts.clone();
                 }

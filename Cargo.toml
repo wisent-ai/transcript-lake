@@ -28,6 +28,10 @@ name = "omp-authorship"
 path = "tests/omp/authorship.rs"
 
 [[test]]
+name = "omp-continuation"
+path = "tests/omp/continuation.rs"
+
+[[test]]
 name = "devin-chains"
 path = "tests/devin/chains.rs"
 
