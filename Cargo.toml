@@ -99,6 +99,10 @@ path = "tests/cli/without_oko.rs"
 name = "query-views"
 path = "tests/query/views.rs"
 
+[[test]]
+name = "query-memory"
+path = "tests/query/memory.rs"
+
 [dependencies]
 # preserve_order keeps `extra` in adapter insertion order, so a ported
 # partition line is byte-identical to the one the previous implementation wrote.

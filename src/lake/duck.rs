@@ -11,6 +11,8 @@ use serde_json::Value;
 use crate::paths::resolve_data_dir;
 use crate::util::{quote_sql, run_binary, Error, Result};
 
+mod memory;
+
 /// The canonical views, embedded at build time from `sql/`.
 const VIEWS_SQL: &str = include_str!("../../sql/views.sql");
 const SIGNALS_SQL: &str = include_str!("../../sql/signals.sql");
@@ -35,9 +37,11 @@ fn script(name: &str, embedded: &'static str) -> Result<String> {
     Ok(std::fs::read_to_string(&path)?)
 }
 
-/// The full script for one query: data-dir variable, the canonical views the
-/// statement needs (every one when the signal views are included, since they
-/// are written over them), optionally the signal views, then the caller's SQL.
+/// The full script for one query: the memory limit measured now and the
+/// spill directory under the Lake root, the data-dir variable, the canonical
+/// views the statement needs (every one when the signal views are included,
+/// since they are written over them), optionally the signal views, then the
+/// caller's SQL.
 pub fn views_script(sql: &str, include_signals: bool) -> Result<String> {
     let mut setup = super::views::needed(&script("views.sql", VIEWS_SQL)?, sql, include_signals)?;
     if include_signals {
@@ -53,7 +57,8 @@ pub fn views_script(sql: &str, include_signals: bool) -> Result<String> {
     }
     let data_dir = resolve_data_dir(None);
     Ok(format!(
-        "SET VARIABLE lake_data = {};\n{setup}\n{sql}",
+        "{}SET VARIABLE lake_data = {};\n{setup}\n{sql}",
+        memory::settings(&data_dir)?,
         quote_sql(data_dir.to_string_lossy())
     ))
 }
