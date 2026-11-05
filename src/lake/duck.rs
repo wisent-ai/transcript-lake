@@ -9,7 +9,7 @@ use std::process::Command;
 use serde_json::Value;
 
 use crate::paths::resolve_data_dir;
-use crate::util::{quote_sql, run_binary, Error, Result};
+use crate::util::{quote_sql, Error, Result};
 
 pub(crate) mod memory;
 
@@ -65,26 +65,58 @@ pub(crate) fn views_script(sql: &str, include_signals: bool) -> Result<(String, 
     Ok((script, slot))
 }
 
-/// Run a statement with inherited stdio, so DuckDB renders its own table or
+/// `duckdb` with `script` on its standard input instead of in its arguments:
+/// a statement that names many sessions does not fit the argument list the
+/// system allows (`Argument list too long`). `-bail` keeps the meaning of
+/// `-c`: the first failing statement ends the script with status 1 and no
+/// later statement runs.
+pub(crate) fn duckdb(json: bool) -> Command {
+    let mut command = Command::new("duckdb");
+    if json {
+        command.arg("-json");
+    }
+    command.arg("-bail").stdin(std::process::Stdio::piped());
+    command
+}
+
+/// Start `command` (from [`duckdb`]) and write `script` to its standard
+/// input, then close it so DuckDB runs the script and ends.
+pub(crate) fn fed(command: &mut Command, script: &str) -> Result<std::process::Child> {
+    let mut child = command.spawn().map_err(|error| Error(format!("duckdb failed to start: {error}")))?;
+    let mut stdin = child
+        .stdin
+        .take()
+        .ok_or_else(|| Error("duckdb started with no standard input to read its script from".into()))?;
+    std::io::Write::write_all(&mut stdin, script.as_bytes())
+        .map_err(|error| Error(format!("the script could not be written to duckdb's standard input: {error}")))?;
+    drop(stdin);
+    Ok(child)
+}
+
+/// Run a statement with inherited output, so DuckDB renders its own table or
 /// JSON output. Returns the exit status the CLI should adopt.
 pub fn run_duck_query(sql: &str, json: bool, include_signals: bool) -> Result<i32> {
     let (script, _slot) = views_script(sql, include_signals)?;
-    let mut args: Vec<String> = Vec::new();
-    if json {
-        args.push("-json".to_string());
-    }
-    args.push("-c".to_string());
-    args.push(script);
-    run_binary("duckdb", &args)
+    run_fed(&script, json)
+}
+
+/// [`run_duck_query`] for a whole script already built.
+pub(crate) fn run_fed(script: &str, json: bool) -> Result<i32> {
+    let child = fed(&mut duckdb(json), script)?;
+    let status = stado_wait::child_output(child, "duckdb statement")
+        .map_err(|error| Error(format!("duckdb failed to finish: {error}")))?
+        .status;
+    status.code().ok_or_else(|| Error(format!("duckdb terminated: {status}")))
 }
 
 /// Run a statement and parse its JSON rows for programmatic use.
 pub fn query_duck_json(sql: &str) -> Result<Vec<Value>> {
     let (script, _slot) = views_script(sql, false)?;
-    let mut command = Command::new("duckdb");
-    command.args(["-json", "-c", &script]);
-    let output = stado_wait::output(&mut command)
-        .map_err(|error| Error(format!("duckdb failed to start: {error}")))?;
+    let mut command = duckdb(true);
+    command.stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::piped());
+    let child = fed(&mut command, &script)?;
+    let output = stado_wait::child_output(child, "duckdb JSON statement")
+        .map_err(|error| Error(format!("duckdb failed to finish: {error}")))?;
     if output.status.code().is_none() {
         return Err(Error("duckdb terminated by signal".into()));
     }

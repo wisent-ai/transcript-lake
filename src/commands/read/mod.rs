@@ -232,12 +232,31 @@ pub fn signals(rest: &[String]) -> Result<i32> {
     )
 }
 
+/// `transcript-lake query [--json] "<sql>"`, or `query [--json] --stdin` with
+/// the SQL read whole from standard input: a statement that names many
+/// sessions (Oko's catalogue sync names every changed one) does not fit the
+/// argument list the system allows a program (`Argument list too long`), and
+/// standard input has no such limit.
 pub fn query(rest: &[String]) -> Result<i32> {
-    let parsed = parse_options("query", rest, &[], &["json"])?;
-    let sql = parsed.positionals.join(" ").trim().to_string();
+    let parsed = parse_options("query", rest, &[], &["json", "stdin"])?;
+    let given = parsed.positionals.join(" ");
+    let sql = if parsed.flag("stdin") {
+        if !given.trim().is_empty() {
+            return Err(Error(
+                "query --stdin reads its SQL from standard input and takes none in its arguments; usage: transcript-lake query [--json] --stdin < statement.sql".into(),
+            ));
+        }
+        let mut read = String::new();
+        std::io::Read::read_to_string(&mut std::io::stdin().lock(), &mut read)
+            .map_err(|error| Error(format!("query --stdin could not read its SQL from standard input: {error}")))?;
+        read
+    } else {
+        given
+    };
+    let sql = sql.trim().to_string();
     if sql.is_empty() {
         return Err(Error(
-            "usage: transcript-lake query [--json] \"<sql>\"".into(),
+            "usage: transcript-lake query [--json] \"<sql>\", or query [--json] --stdin with the SQL on standard input".into(),
         ));
     }
     run_duck_query(&sql, parsed.flag("json"), false)

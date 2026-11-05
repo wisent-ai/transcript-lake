@@ -107,6 +107,10 @@ path = "tests/query/memory.rs"
 name = "query-one-at-a-time"
 path = "tests/query/one_at_a_time.rs"
 
+[[test]]
+name = "query-stdin"
+path = "tests/query/stdin.rs"
+
 [dependencies]
 # preserve_order keeps `extra` in adapter insertion order, so a ported
 # partition line is byte-identical to the one the previous implementation wrote.

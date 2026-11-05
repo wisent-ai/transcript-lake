@@ -17,7 +17,6 @@
 //! and says so on standard error.
 
 use std::collections::BTreeSet;
-use std::process::Command;
 
 use serde_json::Value;
 
@@ -84,10 +83,13 @@ fn sections(script: &str) -> Result<(String, Vec<Section<'_>>)> {
 /// Every table name the statement references, as DuckDB's parser reads it,
 /// or the parser's reason when it does not serialize the statement.
 fn referenced(sql: &str) -> Result<std::result::Result<BTreeSet<String>, String>> {
-    let parse = format!("SELECT json_serialize_sql({}) AS ast", quote_sql(sql));
-    let mut command = Command::new("duckdb");
-    command.args(["-json", "-c", &parse]);
-    let output = stado_wait::output(&mut command).map_err(unstarted)?;
+    let parse = format!("SELECT json_serialize_sql({}) AS ast;", quote_sql(sql));
+    // On standard input, like every statement: the statement may be longer
+    // than the argument list the system allows (`super::duck::duckdb`).
+    let mut command = super::duck::duckdb(true);
+    command.stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::piped());
+    let child = super::duck::fed(&mut command, &parse)?;
+    let output = stado_wait::child_output(child, "duckdb parsing the statement").map_err(unstarted)?;
     if !output.status.success() {
         return Err(Error(format!(
             "duckdb parsing the statement ended with {}: {}",
