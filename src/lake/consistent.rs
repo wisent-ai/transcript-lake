@@ -12,7 +12,7 @@ pub fn run_query(sql: &str, json: bool) -> Result<i32> {
     let data_dir = resolve_data_dir(None);
     let _lease = open_writer_lease(&data_dir)
         .map_err(|error| Error(format!("cannot read a consistent Transcript Lake snapshot: {error}")))?;
-    let script = views_script(sql, false)?;
+    let (script, _slot) = views_script(sql, false)?;
     let mut args = Vec::new();
     if json {
         args.push("-json".to_string());

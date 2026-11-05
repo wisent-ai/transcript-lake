@@ -11,7 +11,7 @@ use serde_json::Value;
 use crate::paths::resolve_data_dir;
 use crate::util::{quote_sql, run_binary, Error, Result};
 
-mod memory;
+pub(crate) mod memory;
 
 /// The canonical views, embedded at build time from `sql/`.
 const VIEWS_SQL: &str = include_str!("../../sql/views.sql");
@@ -41,8 +41,9 @@ fn script(name: &str, embedded: &'static str) -> Result<String> {
 /// spill directory under the Lake root, the data-dir variable, the canonical
 /// views the statement needs (every one when the signal views are included,
 /// since they are written over them), optionally the signal views, then the
-/// caller's SQL.
-pub fn views_script(sql: &str, include_signals: bool) -> Result<String> {
+/// caller's SQL; with the Lake root's statement lock, which the caller holds
+/// until DuckDB ends (`memory::settings`).
+pub(crate) fn views_script(sql: &str, include_signals: bool) -> Result<(String, memory::Slot)> {
     let mut setup = super::views::needed(&script("views.sql", VIEWS_SQL)?, sql, include_signals)?;
     if include_signals {
         // ATTACH takes a literal path and DuckDB does not expand a tilde, so
@@ -56,17 +57,18 @@ pub fn views_script(sql: &str, include_signals: bool) -> Result<String> {
         );
     }
     let data_dir = resolve_data_dir(None);
-    Ok(format!(
-        "{}SET VARIABLE lake_data = {};\n{setup}\n{sql}",
-        memory::settings(&data_dir)?,
+    let (settings, slot) = memory::settings(&data_dir)?;
+    let script = format!(
+        "{settings}SET VARIABLE lake_data = {};\n{setup}\n{sql}",
         quote_sql(data_dir.to_string_lossy())
-    ))
+    );
+    Ok((script, slot))
 }
 
 /// Run a statement with inherited stdio, so DuckDB renders its own table or
 /// JSON output. Returns the exit status the CLI should adopt.
 pub fn run_duck_query(sql: &str, json: bool, include_signals: bool) -> Result<i32> {
-    let script = views_script(sql, include_signals)?;
+    let (script, _slot) = views_script(sql, include_signals)?;
     let mut args: Vec<String> = Vec::new();
     if json {
         args.push("-json".to_string());
@@ -78,7 +80,7 @@ pub fn run_duck_query(sql: &str, json: bool, include_signals: bool) -> Result<i3
 
 /// Run a statement and parse its JSON rows for programmatic use.
 pub fn query_duck_json(sql: &str) -> Result<Vec<Value>> {
-    let script = views_script(sql, false)?;
+    let (script, _slot) = views_script(sql, false)?;
     let mut command = Command::new("duckdb");
     command.args(["-json", "-c", &script]);
     let output = stado_wait::output(&mut command)
